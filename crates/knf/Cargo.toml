@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 knf-merge.workspace = true
-knf-set.workspace = true
+knf-dotted.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 clap.workspace = true

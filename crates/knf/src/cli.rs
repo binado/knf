@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use knf_set::PathLeaf;
+use knf_dotted::PathLeaf;
 
 use crate::format::Format;
 

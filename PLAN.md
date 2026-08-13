@@ -273,12 +273,12 @@ knf/
     │   └── tests/
     │       ├── cases.rs        table tests
     │       └── props.rs        proptest
-    ├── knf-set/                publish = false
+    ├── knf-dotted/                publish = false
     │   ├── Cargo.toml          deps: serde_json, thiserror, serde
     │   └── src/
     │       └── lib.rs          PathLeaf, ParseError
     └── knf/
-        ├── Cargo.toml          deps: knf-merge, knf-set, toml, clap, anyhow
+        ├── Cargo.toml          deps: knf-merge, knf-dotted, toml, clap, anyhow
         ├── src/
         │   ├── main.rs         thin: parse args, call lib, map errors to exit codes
         │   ├── lib.rs          pipeline + error type
@@ -289,7 +289,7 @@ knf/
             └── cli.rs
 ```
 
-Rough sizes: `knf-merge` ~150 lines, `knf-set` one type, `value.rs` holds the
+Rough sizes: `knf-merge` ~150 lines, `knf-dotted` one type, `value.rs` holds the
 conversion, everything else small.
 
 ### 5.1 Why a separate crate, and why unpublished
@@ -333,9 +333,9 @@ These are what make the separation real rather than cosmetic. Enforced by
   `Toml` newtype — pulling `toml` into this crate would break the two-dep rule.
 
 Everything format-specific stays in `knf` — parse/emit in `format.rs`, JSON↔TOML
-conversion in `value.rs`. `--set` is clap in `knf` over `knf_set::PathLeaf`.
+conversion in `value.rs`. `--set` is clap in `knf` over `knf_dotted::PathLeaf`.
 
-### 5.3 Boundary rules for `knf-set`
+### 5.3 Boundary rules for `knf-dotted`
 
 Same idea as §5.2: compiler-enforced separation, not distribution.
 
@@ -354,9 +354,9 @@ Same idea as §5.2: compiler-enforced separation, not distribution.
 
 | Crate | Where | Why |
 | --- | --- | --- |
-| `serde_json` (`preserve_order`) | knf-merge, knf-set, knf | JSON value type; indexmap-backed maps |
-| `thiserror` | knf-merge, knf-set | typed errors |
-| `serde` | knf-set | string (de)serialize for `PathLeaf` |
+| `serde_json` (`preserve_order`) | knf-merge, knf-dotted, knf | JSON value type; indexmap-backed maps |
+| `thiserror` | knf-merge, knf-dotted | typed errors |
+| `serde` | knf-dotted | string (de)serialize for `PathLeaf` |
 | `toml` | knf | TOML in/out |
 | `clap` (`derive`) | knf | CLI |
 | `anyhow` | knf | error plumbing in `main` |
@@ -372,8 +372,8 @@ Dev: `insta`, `proptest` (knf-merge), `assert_cmd`, `tempfile` (knf).
 ### 5.5 Testing shape
 
 The crate split makes the test split fall out on its own: `knf-merge` and
-`knf-set` tests are pure values with no filesystem and no process, so
-`cargo test -p knf-merge` / `cargo test -p knf-set` is the fast inner loop.
+`knf-dotted` tests are pure values with no filesystem and no process, so
+`cargo test -p knf-merge` / `cargo test -p knf-dotted` is the fast inner loop.
 
 In `knf-merge`:
 
@@ -382,7 +382,7 @@ In `knf-merge`:
 - **`proptest`** for two cheap properties that catch real bugs:
   `merge(a, a) == a` and `merge(merge(a, b), b) == merge(a, b)`.
 
-In `knf-set`:
+In `knf-dotted`:
 
 - The §4.2 typing table, canonical `Display`, and the serde-as-string vs
   nested-object split.
