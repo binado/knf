@@ -188,6 +188,19 @@ fn usage_errors_exit_two() {
 }
 
 #[test]
+fn malformed_set_exits_two() {
+    let dir = tree(&[]);
+    let out = knf(&dir)
+        .args(["--set", "noequals"])
+        .output()
+        .expect("spawn");
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("invalid value"), "{err}");
+    assert!(err.contains("expected KEY.PATH=VALUE"), "{err}");
+}
+
+#[test]
 fn a_missing_file_exits_one() {
     let dir = tree(&[]);
     let err = run_err(&dir, &["nope.json"]);

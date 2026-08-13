@@ -2,7 +2,6 @@
 
 pub mod cli;
 pub mod format;
-pub mod set;
 pub mod value;
 
 use std::io::{Read, Write};
@@ -10,6 +9,7 @@ use std::path::Path;
 
 use anyhow::{Context, bail};
 use knf_merge::{MergeOptions, merge, merge_all};
+use serde_json::Value;
 
 use cli::Cli;
 use format::{Format, SourceName};
@@ -34,8 +34,11 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
     // themselves first so `--set a=null --set a=1` can convert to TOML as one
     // document (the null does not survive).
     let mut set_layers: Vec<(SourceName, Json)> = Vec::new();
-    for expr in &cli.set {
-        set_layers.push((SourceName::Set(expr.clone()), Json(set::parse(expr)?)));
+    for path_leaf in &cli.set {
+        set_layers.push((
+            SourceName::Set(path_leaf.to_string()),
+            Json(Value::from(path_leaf.clone())),
+        ));
     }
 
     let out_format = resolve_output_format(cli.format, &input_formats)?;

@@ -23,8 +23,10 @@ clap = { version = "4", features = ["derive"] }
 # serializer buffers into its own map type, which is a BTreeMap by default and
 # alphabetises the output regardless of what the IR preserved.
 toml = { version = "1", features = ["preserve_order"] }
+serde = "1"
 
 knf-merge = { path = "crates/knf-merge" }
+knf-set = { path = "crates/knf-set" }
 
 [profile.release]
 lto = "thin"

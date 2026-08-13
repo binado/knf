@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use knf_set::PathLeaf;
 
 use crate::format::Format;
 
@@ -65,7 +66,7 @@ by quoting into JSON: --set version='\"1.0\"'.
 Dotted paths nest, so keys containing a literal dot are not addressable from
 --set; use a file."
     )]
-    pub set: Vec<String>,
+    pub set: Vec<PathLeaf>,
 
     /// Output format; required when inputs are mixed
     #[arg(short = 'f', long, value_name = "FORMAT")]

@@ -1,0 +1,17 @@
+[package]
+name = "knf-set"
+description = "A leaf value addressed by a dotted path, parsed from key.path=value"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+# Unpublished until something other than knf depends on it via crates.io.
+# A git/path dependency is enough for other projects in the meantime.
+publish = false
+
+# Dependencies are serde_json, thiserror, and serde. Nothing else — no anyhow,
+# no clap, no I/O. `cargo tree -p knf-set --depth 1` is the enforcement.
+[dependencies]
+serde_json.workspace = true
+thiserror.workspace = true
+serde.workspace = true

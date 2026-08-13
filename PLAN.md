@@ -257,7 +257,8 @@ file.
 
 ## 5. Package structure
 
-A **workspace with the merge core in its own crate, `publish = false`.**
+A **workspace with the merge core and the dotted-path parser in their own
+crates, `publish = false`.**
 
 ```
 knf/
@@ -272,21 +273,24 @@ knf/
     │   └── tests/
     │       ├── cases.rs        table tests
     │       └── props.rs        proptest
+    ├── knf-set/                publish = false
+    │   ├── Cargo.toml          deps: serde_json, thiserror, serde
+    │   └── src/
+    │       └── lib.rs          PathLeaf, ParseError
     └── knf/
-        ├── Cargo.toml          deps: knf-merge (path), toml, clap, anyhow
+        ├── Cargo.toml          deps: knf-merge, knf-set, toml, clap, anyhow
         ├── src/
         │   ├── main.rs         thin: parse args, call lib, map errors to exit codes
         │   ├── lib.rs          pipeline + error type
         │   ├── cli.rs          clap derive structs
         │   ├── format.rs       Format enum, parse, emit
-        │   ├── value.rs        Json/Toml newtypes, From/TryFrom
-        │   └── set.rs          --set pair → Json
+        │   └── value.rs        Json/Toml newtypes, From/TryFrom
         └── tests/
             └── cli.rs
 ```
 
-Rough sizes: `knf-merge` ~150 lines, `value.rs` holds the conversion, everything
-else small.
+Rough sizes: `knf-merge` ~150 lines, `knf-set` one type, `value.rs` holds the
+conversion, everything else small.
 
 ### 5.1 Why a separate crate, and why unpublished
 
@@ -329,14 +333,30 @@ These are what make the separation real rather than cosmetic. Enforced by
   `Toml` newtype — pulling `toml` into this crate would break the two-dep rule.
 
 Everything format-specific stays in `knf` — parse/emit in `format.rs`, JSON↔TOML
-conversion in `value.rs`.
+conversion in `value.rs`. `--set` is clap in `knf` over `knf_set::PathLeaf`.
 
-### 5.3 Dependencies
+### 5.3 Boundary rules for `knf-set`
+
+Same idea as §5.2: compiler-enforced separation, not distribution.
+
+- **Dependencies are `serde_json`, `thiserror`, and `serde`. Nothing else.** No
+  `anyhow`, no `clap`, no I/O. Serde is required because `PathLeaf` (de)serializes
+  as a string.
+- **Errors are a local `ParseError` enum**, never `anyhow::Error`, and never
+  mention `--set`. Provenance is the caller's job.
+- **Two conversions, not one.** `From<PathLeaf> for serde_json::Value` expands
+  to a nested object. Serde (de)serializes the expression string. Mixing those
+  would make `serde_json::to_value` surprise every caller.
+- **`Display` is canonical** (dotted path, `=`, compact JSON of the leaf). It
+  does not store or echo the original spelling.
+
+### 5.4 Dependencies
 
 | Crate | Where | Why |
 | --- | --- | --- |
-| `serde_json` (`preserve_order`) | knf-merge, knf | JSON value type; indexmap-backed maps |
-| `thiserror` | knf-merge | typed errors |
+| `serde_json` (`preserve_order`) | knf-merge, knf-set, knf | JSON value type; indexmap-backed maps |
+| `thiserror` | knf-merge, knf-set | typed errors |
+| `serde` | knf-set | string (de)serialize for `PathLeaf` |
 | `toml` | knf | TOML in/out |
 | `clap` (`derive`) | knf | CLI |
 | `anyhow` | knf | error plumbing in `main` |
@@ -349,11 +369,11 @@ than to discover it via a key-ordering test failing only under `cargo test
 
 Dev: `insta`, `proptest` (knf-merge), `assert_cmd`, `tempfile` (knf).
 
-### 5.4 Testing shape
+### 5.5 Testing shape
 
-The crate split makes the test split fall out on its own: `knf-merge` tests are
-pure `Value → Value` with no filesystem and no process, so `cargo test -p
-knf-merge` is the fast inner loop.
+The crate split makes the test split fall out on its own: `knf-merge` and
+`knf-set` tests are pure values with no filesystem and no process, so
+`cargo test -p knf-merge` / `cargo test -p knf-set` is the fast inner loop.
 
 In `knf-merge`:
 
@@ -361,6 +381,11 @@ In `knf-merge`:
   expected`. Adding a case should be a one-liner.
 - **`proptest`** for two cheap properties that catch real bugs:
   `merge(a, a) == a` and `merge(merge(a, b), b) == merge(a, b)`.
+
+In `knf-set`:
+
+- The §4.2 typing table, canonical `Display`, and the serde-as-string vs
+  nested-object split.
 
 In `knf`:
 

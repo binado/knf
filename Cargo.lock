@@ -292,6 +292,7 @@ dependencies = [
  "clap",
  "insta",
  "knf-merge",
+ "knf-set",
  "serde_json",
  "tempfile",
  "toml",
@@ -302,6 +303,15 @@ name = "knf-merge"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "knf-set"
+version = "0.1.0"
+dependencies = [
+ "serde",
  "serde_json",
  "thiserror",
 ]
