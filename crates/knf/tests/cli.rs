@@ -164,7 +164,7 @@ fn stdin_is_a_layer() {
 }
 
 #[test]
-fn set_layers_apply_last() {
+fn inline_configs_apply_last() {
     let dir = tree(&[("a.json", r#"{"server":{"port":80}}"#)]);
     assert_eq!(
         run(&dir, &["a.json", "--set", "server.port=8080", "--compact"]),

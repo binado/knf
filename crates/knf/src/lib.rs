@@ -33,7 +33,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 
     // --set layers are terminal: appended after every file. The RHS is still
     // raw; it is parsed as JSON or TOML once the output type is known.
-    let set_layers: Vec<(SourceName, PathLeaf<String>)> = cli
+    let inline_configs: Vec<(SourceName, PathLeaf<String>)> = cli
         .set
         .iter()
         .map(|path_leaf| (SourceName::Set(path_leaf.to_string()), path_leaf.clone()))
@@ -41,7 +41,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 
     let out_format = resolve_output_format(cli.format, &input_formats)?;
     let opts = merge_options(&cli);
-    let merged = merge_layers(files, set_layers, out_format, &opts)?;
+    let merged = merge_layers(files, inline_configs, out_format, &opts)?;
     let text = format::emit(merged, !cli.compact)?;
     write_stdout(&text)
 }
@@ -50,7 +50,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 /// Otherwise convert foreign layers into JSON, merge, and convert once at the end.
 fn merge_layers(
     files: Vec<(SourceName, Document)>,
-    set_layers: Vec<(SourceName, PathLeaf<String>)>,
+    inline_configs: Vec<(SourceName, PathLeaf<String>)>,
     out: Format,
     opts: &MergeOptions,
 ) -> anyhow::Result<Document> {
@@ -60,15 +60,15 @@ fn merge_layers(
             .all(|(_, doc)| matches!(doc, Document::Toml(_)));
 
     if all_files_toml {
-        return merge_native_toml(files, set_layers, out, opts);
+        return merge_native_toml(files, inline_configs, out, opts);
     }
 
-    merge_via_json(files, set_layers, out, opts)
+    merge_via_json(files, inline_configs, out, opts)
 }
 
 fn merge_native_toml(
     files: Vec<(SourceName, Document)>,
-    set_layers: Vec<(SourceName, PathLeaf<String>)>,
+    inline_configs: Vec<(SourceName, PathLeaf<String>)>,
     out: Format,
     opts: &MergeOptions,
 ) -> anyhow::Result<Document> {
@@ -80,18 +80,18 @@ fn merge_native_toml(
     match out {
         Format::Toml => {
             let mut acc = acc;
-            if !set_layers.is_empty() {
-                let toml_layers = set_layers.into_iter().map(|(_, path_leaf)| {
+            if !inline_configs.is_empty() {
+                let toml_layers = inline_configs.into_iter().map(|(_, path_leaf)| {
                     toml::Value::from(PathLeaf::<toml::Value>::from(path_leaf))
                 });
-                let set_toml = merge_all_toml(toml_layers, opts)?;
-                merge_toml(&mut acc, set_toml, opts)?;
+                let inline_toml = merge_all_toml(toml_layers, opts)?;
+                merge_toml(&mut acc, inline_toml, opts)?;
             }
             Ok(Document::Toml(Toml(acc)))
         }
         Format::Json => {
             let mut json = Json::from(Toml(acc)).0;
-            for (_, path_leaf) in set_layers {
+            for (_, path_leaf) in inline_configs {
                 merge_json(
                     &mut json,
                     Value::from(PathLeaf::<Value>::from(path_leaf)),
@@ -105,7 +105,7 @@ fn merge_native_toml(
 
 fn merge_via_json(
     files: Vec<(SourceName, Document)>,
-    set_layers: Vec<(SourceName, PathLeaf<String>)>,
+    inline_configs: Vec<(SourceName, PathLeaf<String>)>,
     out: Format,
     opts: &MergeOptions,
 ) -> anyhow::Result<Document> {
@@ -120,7 +120,7 @@ fn merge_via_json(
             Document::Toml(t) => json_layers.push(Json::from(t).0),
         }
     }
-    for (name, path_leaf) in set_layers {
+    for (name, path_leaf) in inline_configs {
         let json = Json(Value::from(PathLeaf::<Value>::from(path_leaf)));
         json_sources.push((name, json.clone()));
         json_layers.push(json.0);
