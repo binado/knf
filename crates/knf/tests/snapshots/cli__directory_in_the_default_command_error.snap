@@ -1,0 +1,6 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"config\"])"
+---
+error: `config` is a directory; knf takes files as layers
+help: `knf config/*.toml` merges its files as layers

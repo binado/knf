@@ -1,0 +1,24 @@
+[package]
+name = "knf-dotted"
+description = "A leaf value addressed by a dotted path, parsed from key.path=value"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+# Unpublished until something other than knf depends on it via crates.io.
+# A git/path dependency is enough for other projects in the meantime.
+publish = false
+
+# thiserror is always on. serde_json and serde are optional behind `json`.
+# No anyhow, no clap, no I/O. `cargo tree -p knf-dotted --depth 1` is the enforcement.
+[features]
+default = ["json"]
+json = ["dep:serde_json", "dep:serde"]
+
+[dependencies]
+serde_json = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json = { workspace = true }
