@@ -1,0 +1,5 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"a.json\", \"b.json\", \"--strict\"])"
+---
+error: type conflict at `server`: object would be replaced by number

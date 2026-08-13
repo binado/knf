@@ -1,0 +1,20 @@
+[package]
+name = "knf-merge"
+description = "Layered merge over serde_json::Value"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+# The merge semantics are the part of the design still in flux (--null-delete,
+# --array-strategy would both change MergeOptions), and a crate boundary on
+# crates.io is a semver promise. Unpublished until that stops moving.
+publish = false
+
+# Dependencies are serde_json and thiserror. Nothing else — no anyhow, no clap,
+# no walkdir, no I/O. `cargo tree -p knf-merge --depth 1` is the enforcement.
+[dependencies]
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest = "1"

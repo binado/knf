@@ -1,0 +1,32 @@
+[workspace]
+members = ["crates/*"]
+# Edition 2024 implies resolver 3, but a *virtual* manifest has no edition of its
+# own and does not inherit one from its members, so it must be stated explicitly.
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/binado/knf"
+
+[workspace.dependencies]
+# `preserve_order` is declared here rather than in a member so that the
+# indexmap-backed Map is the workspace-wide behaviour. Cargo unifies features
+# across the graph anyway; making it explicit avoids the failure mode where key
+# ordering depends on which members happen to be in the build.
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+# `preserve_order` is needed here as well as on serde_json: `toml`'s document
+# serializer buffers into its own map type, which is a BTreeMap by default and
+# alphabetises the output regardless of what the IR preserved.
+toml = { version = "1", features = ["preserve_order"] }
+walkdir = "2"
+
+knf-merge = { path = "crates/knf-merge" }
+
+[profile.release]
+lto = "thin"
+strip = true

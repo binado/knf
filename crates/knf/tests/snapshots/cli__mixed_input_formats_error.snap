@@ -1,0 +1,6 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"a.toml\", \"b.json\"])"
+---
+error: inputs mix toml and json formats; -f is required to choose the output format
+help: pass -f json or -f toml
