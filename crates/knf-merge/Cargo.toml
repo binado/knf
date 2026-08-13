@@ -11,7 +11,7 @@ repository.workspace = true
 publish = false
 
 # Dependencies are serde_json and thiserror. Nothing else — no anyhow, no clap,
-# no walkdir, no I/O. `cargo tree -p knf-merge --depth 1` is the enforcement.
+# no I/O. `cargo tree -p knf-merge --depth 1` is the enforcement.
 [dependencies]
 serde_json.workspace = true
 thiserror.workspace = true

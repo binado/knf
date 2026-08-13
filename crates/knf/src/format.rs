@@ -34,7 +34,7 @@ impl Format {
         }
     }
 
-    /// The extension `matrix` gives files it writes.
+    /// The canonical file extension for this format.
     pub fn extension(self) -> &'static str {
         match self {
             Self::Json => "json",

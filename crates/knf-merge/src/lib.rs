@@ -81,9 +81,8 @@ pub fn merge(base: &mut Value, over: Value, opts: &MergeOptions) -> Result<(), M
 ///   right-assoc -> {a:{b:1,c:2}}
 /// ```
 ///
-/// So callers must never merge subgroups and then combine the results, however
-/// tempting that looks when implementing something like `matrix`. Flatten
-/// first, fold second.
+/// So callers must never merge subgroups and then combine the results.
+/// Flatten first, fold second.
 pub fn merge_all(
     layers: impl IntoIterator<Item = Value>,
     opts: &MergeOptions,

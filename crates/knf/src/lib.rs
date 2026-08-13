@@ -2,7 +2,6 @@
 
 pub mod cli;
 pub mod format;
-pub mod matrix;
 pub mod set;
 
 use std::io::{Read, Write};
@@ -11,26 +10,19 @@ use std::path::Path;
 use anyhow::{Context, bail};
 use knf_merge::{MergeOptions, merge_all};
 
-use cli::{Cli, Command, CommonArgs, MergeArgs};
+use cli::Cli;
 use format::{Format, Source, SourceName};
 
 /// The positional that means "read stdin".
 const STDIN: &str = "-";
 
-pub fn run(cli: Cli) -> anyhow::Result<()> {
-    match cli.command {
-        Some(Command::Matrix(args)) => matrix::run(&args),
-        None => merge_command(&cli.merge),
-    }
-}
-
 /// `knf <files...>` — merge layers left to right, print one document.
-fn merge_command(args: &MergeArgs) -> anyhow::Result<()> {
+pub fn run(cli: Cli) -> anyhow::Result<()> {
     let mut sources: Vec<Source> = Vec::new();
     let mut input_formats: Vec<Format> = Vec::new();
 
-    for path in &args.files {
-        let (name, format, text) = read_input(path, args.input_format)?;
+    for path in &cli.files {
+        let (name, format, text) = read_input(path, cli.input_format)?;
         let value = format::parse(format, &text, &name)?;
         input_formats.push(format);
         sources.push((name, value));
@@ -38,16 +30,13 @@ fn merge_command(args: &MergeArgs) -> anyhow::Result<()> {
 
     // --set layers are terminal: appended after every file, folded through the
     // same merge, so --strict applies to them too.
-    for expr in &args.set {
+    for expr in &cli.set {
         sources.push((SourceName::Set(expr.clone()), set::parse(expr)?));
     }
 
-    let out_format = resolve_output_format(args.common.format, &input_formats)?;
-    let merged = merge_all(
-        sources.iter().map(|(_, v)| v.clone()),
-        &merge_options(&args.common),
-    )?;
-    let text = format::emit(out_format, merged, !args.common.compact, &sources)?;
+    let out_format = resolve_output_format(cli.format, &input_formats)?;
+    let merged = merge_all(sources.iter().map(|(_, v)| v.clone()), &merge_options(&cli))?;
+    let text = format::emit(out_format, merged, !cli.compact, &sources)?;
     write_stdout(&text)
 }
 
@@ -67,15 +56,10 @@ fn read_input(
         return Ok((SourceName::Stdin, format, text));
     }
 
-    // A directory must not mean two things. Under `matrix` it is groups of
-    // mutually exclusive alternatives; if the default command also flattened it
-    // into layers, a single-file `db/` would work until someone added a second
-    // file and the config quietly became a union of two exclusive variants.
     if path.is_dir() {
         bail!(
-            "`{}` is a directory; the default command takes files as layers\n\
-             help: `knf matrix {}` reads it as config groups, or `knf {}/*.toml` merges its files as layers",
-            path.display(),
+            "`{}` is a directory; knf takes files as layers\n\
+             help: `knf {}/*.toml` merges its files as layers",
             path.display(),
             path.display(),
         );
@@ -127,10 +111,8 @@ pub fn resolve_output_format(
     }
 }
 
-pub fn merge_options(common: &CommonArgs) -> MergeOptions {
-    MergeOptions {
-        strict: common.strict,
-    }
+pub fn merge_options(cli: &Cli) -> MergeOptions {
+    MergeOptions { strict: cli.strict }
 }
 
 /// Writes to stdout, treating a closed pipe as success so `knf big.json | head`

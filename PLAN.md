@@ -10,20 +10,14 @@ query language, no templating.
 ```bash
 knf base.toml prod.toml > merged.toml
 knf defaults.json overrides.json --set server.port=8080
-knf matrix config/ --out-dir out/
 ```
 
 It exists because the alternatives (`yq ea '. as $i ireduce ({}; . * $i)'`,
 `jq -s 'reduce ...'`) require non-obvious incantations for what is a common,
 simple operation. `knf <files>` should need no explanation.
 
-Two capabilities beyond plain merging:
-
-- **Cross-format merging.** JSON and TOML layers can be mixed freely, because
-  everything is parsed into one in-memory representation.
-- **Composable config trees** (`knf matrix`). A directory tree describes a set
-  of variants; `knf` enumerates and materialises them, so downstream consumers
-  read a single flat config instead of resolving layers themselves.
+JSON and TOML layers can be mixed freely, because everything is parsed into
+one in-memory representation.
 
 ---
 
@@ -86,8 +80,7 @@ the key) were considered and rejected:
 ```
 
 Consequence: **always strictly left-fold the final flat layer list.** Never
-merge subgroups and then combine them, however tempting that looks when
-implementing `matrix`. This warrants a comment in `merge_all`.
+merge subgroups and then combine them. This warrants a comment in `merge_all`.
 
 ### 2.2 `--strict`
 
@@ -204,9 +197,9 @@ it the IR preserves order faithfully and the writer re-sorts it anyway.
 
 ## 4. CLI
 
-Two commands. Output shape is determined by the command, never by the data.
+One command. Exactly one document to stdout, always.
 
-### 4.1 Default: `knf <files...>`
+### 4.1 `knf <files...>`
 
 ```bash
 knf base.toml prod.toml
@@ -217,24 +210,21 @@ knf base.toml --set server.port=8080 -f json
 Files are **layers**, merged left to right in argument order. Exactly one
 document to stdout, always.
 
-**Directories are not accepted here.** Under `matrix`, a directory means
-"saturating paths of alternatives"; if the default command flattened the same directory
-into layers, one path would mean two incompatible things. The failure would be
+**Directories are not accepted.** Flattening a directory into layers would be
 silent and delayed — a single-file `db/` works, then someone adds a second file
-six months later and the config quietly becomes a union of two mutually
-exclusive variants. `knf config/*.toml` covers the flat case and lets the shell
-do the sorting.
+six months later and the config quietly becomes a union of two files that were
+never meant to stack. `knf config/*.toml` covers the flat case and lets the
+shell do the sorting.
 
-This leaves the default command with **no argument parsing rules at all**:
-every positional is a path, `-` is stdin.
+This leaves the command with **no argument parsing rules at all**: every
+positional is a path, `-` is stdin.
 
 ### 4.2 `--set key.path=value`
 
 A terminal layer built from the command line, appended after all files. Applies
 last, always; multiple `--set` apply left to right. No new merge semantics.
 
-A flag rather than a positional, to keep the default command free of parsing
-rules.
+A flag rather than a positional, to keep the command free of parsing rules.
 
 RHS is parsed as JSON with a string fallback:
 
@@ -256,108 +246,15 @@ file.
 
 `knf --set a.b=1` with no files is legal and emits `{"a":{"b":1}}`.
 
-### 4.3 `knf matrix <dir>`
+### 4.3 Flag summary
 
-**Files in a directory are mutually exclusive layers for that node.
-Subdirectories are alternative branches:** a path picks one child and continues,
-and files on the way down always apply (saturation). Sibling directories are
-OR, not independent axes.
-
-```
-config/
-  base.toml            → prefix on every path through config/
-  db/
-    mysql.toml         → leaves under db/
-    postgres.toml
-  server/
-    apache.toml        → leaves under server/
-    nginx.toml
-```
-
-→ 4 documents: `base` + one db, **or** `base` + one server. Never both a db and
-a server in the same document. Nested children along one lineage still apply
-together: `db/{mysql,postgres}` plus `db/tuning/{small,large}` is four paths,
-each with a db file and a tuning file.
-
-Accepted cost: files in one directory are alternatives, so "apply both `a.toml`
-and `b.toml` from this directory" is inexpressible. Workaround is one file per
-directory. Not worth new syntax.
-
-**Resolution.** One matching path goes to stdout. Several paths need `--out-dir`
-or `--list`. `--glob` (repeatable, union) keeps only matching leaves; ancestor
-files still apply. `--max-depth` (root is 0) treats a directory as a leaf even
-if it has children.
-
-```bash
-knf matrix config/ --glob 'db/postgres.toml'     # → one document, stdout
-knf matrix config/ --glob 'db/**' --out-dir out/ # → 2 documents (the db branch)
-knf matrix config/ --out-dir out/                # → 4 documents
-knf matrix config/ --list                        # → the paths, no writes
-knf matrix config/                               # → error, see below
-```
-
-```
-error: 4 matching paths
-  db/mysql.toml
-  db/postgres.toml
-  server/apache.toml
-  server/nginx.toml
-help: knf matrix config/ --glob 'db/mysql.toml'
-help: or write every path — knf matrix config/ --out-dir out/
-```
-
-Because a one-file-per-directory tree is a single path, it resolves with no
-flags and behaves exactly like a plain layered merge.
-
-No `default.toml` convention marking a fallback choice — same objection as any
-in-band sentinel, and the error message already tells the user what to type.
-
-**Output naming.** Each file is named after the leaf's path relative to the
-walked directory, with the output-format extension:
-
-```
-out/db/postgres.toml
-out/server/nginx.toml
-```
-
-`--separator` flattens slashes (`out/db,postgres.toml`). `--max` (default 256)
-caps the number of paths before anything is written, mainly to catch `matrix`
-pointed at the wrong directory. `--list` prints the resolved paths and exits
-without writing.
-
-A file named exactly `matrix` in the current directory still parses as the
-subcommand — write `./matrix`.
-
-### 4.4 Walker rules
-
-- Extension allowlist (`.json`, `.toml`); everything else skipped silently — a
-  `README.md` in a config dir is not an error.
-- Skip dotfiles and dot-directories, so `knf matrix .` doesn't walk `.git`.
-- Do not follow symlinks.
-- Empty directory → error, not an empty object. A directory skipped by `--glob`
-  or cut by `--max-depth` is not empty; it was never entered.
-- `walkdir`, not `ignore`. Gitignore semantics would mean "my config was
-  skipped because of a `.gitignore` three levels up" — surprising in a merge
-  tool.
-- Byte-wise lexicographic sort within a directory. **No natural/numeric sort** —
-  it looks friendly and then generates a support question the first time
-  someone has both `2-x` and `10-x`.
-
-### 4.5 Flag summary
-
-| Flag | Command | Meaning |
-| --- | --- | --- |
-| `-f, --format` | both | output format; required when inputs are mixed |
-| `--input-format` | default | input format override; required for `-` |
-| `--set k.p=v` | default | inline terminal layer, repeatable |
-| `--strict` | both | error on type changes across layers |
-| `--compact` | both | disable pretty-printing |
-| `--out-dir` | matrix | write M documents here (no short flag) |
-| `--glob` | matrix | keep matching leaves only; repeatable union |
-| `--max-depth` | matrix | cap walk depth; root is 0 |
-| `--separator` | matrix | flatten `/` in output names |
-| `--list` | matrix | print resolved paths, write nothing |
-| `--max` | matrix | cap on number of paths |
+| Flag | Meaning |
+| --- | --- |
+| `-f, --format` | output format; required when inputs are mixed |
+| `--input-format` | input format override; required for `-` |
+| `--set k.p=v` | inline terminal layer, repeatable |
+| `--strict` | error on type changes across layers |
+| `--compact` | disable pretty-printing |
 
 ---
 
@@ -378,28 +275,20 @@ knf/
     │   └── tests/
     │       ├── cases.rs        table tests + insta snapshots
     │       └── props.rs        proptest
-    ├── knf-fs/                publish = false
-    │   ├── Cargo.toml          deps: thiserror, walkdir   ← and nothing else
-    │   ├── src/
-    │   │   └── lib.rs          Dir/File tree, discovery, saturating DFS paths
-    │   └── tests/
-    │       └── matrix.rs       enumeration table tests + walker fixtures
     └── knf/
-        ├── Cargo.toml          deps: knf-merge (path), knf-fs (path), toml, clap, anyhow, globset
+        ├── Cargo.toml          deps: knf-merge (path), toml, clap, anyhow
         ├── src/
         │   ├── main.rs         thin: parse args, call lib, map errors to exit codes
         │   ├── lib.rs          pipeline + error type
         │   ├── cli.rs          clap derive structs
         │   ├── format.rs       Format enum, parse, serialize, TOML normalize
-        │   ├── set.rs          --set pair → Value
-        │   └── matrix.rs       command layer: parse → merge → format → write
+        │   └── set.rs          --set pair → Value
         └── tests/
             └── cli.rs
 ```
 
-Rough sizes: `knf-merge` ~100 lines, `knf-fs` ~200, `format.rs` ~150 (most of it
-TOML normalization), `matrix.rs` ~120 (command layer only), everything else
-small.
+Rough sizes: `knf-merge` ~100 lines, `format.rs` ~150 (most of it TOML
+normalization), everything else small.
 
 ### 5.1 Why a separate crate, and why unpublished
 
@@ -426,7 +315,7 @@ These are what make the separation real rather than cosmetic. Enforced by
 `cargo tree` staying at two dependencies.
 
 - **Dependencies are `serde_json` and `thiserror`. Nothing else.** No `anyhow`,
-  no `clap`, no `walkdir`, no `std::path`, no I/O of any kind.
+  no `clap`, no `std::path`, no I/O of any kind.
 - **Errors are a local `MergeError` enum**, never `anyhow::Error`. This is the
   rule that actually holds the line — the moment merge returns
   `anyhow::Result`, it is welded to the binary.
@@ -447,12 +336,10 @@ it down would drag `toml` into the core.
 | Crate | Where | Why |
 | --- | --- | --- |
 | `serde_json` (`preserve_order`) | knf-merge, knf | the IR; indexmap-backed maps |
-| `thiserror` | knf-merge, knf-fs | typed errors |
+| `thiserror` | knf-merge | typed errors |
 | `toml` | knf | TOML in/out |
 | `clap` (`derive`) | knf | CLI |
 | `anyhow` | knf | error plumbing in `main` |
-| `walkdir` | knf-fs | `discover` directory traversal |
-| `globset` | knf | `--glob` matching for `matrix` |
 
 `preserve_order` must be enabled in the **workspace**, not just one member.
 Cargo unifies features across the graph, so a member enabling it silently
@@ -460,7 +347,7 @@ changes map behaviour for every other member — better to make that explicit
 than to discover it via a key-ordering test failing only under `cargo test
 --workspace`.
 
-Dev: `insta`, `proptest` (knf-merge), `assert_cmd`, `tempfile` (knf, knf-fs).
+Dev: `insta`, `proptest` (knf-merge), `assert_cmd`, `tempfile` (knf).
 
 ### 5.4 Testing shape
 
@@ -475,19 +362,12 @@ In `knf-merge`:
 - **`proptest`** for two cheap properties that catch real bugs:
   `merge(a, a) == a` and `merge(merge(a, b), b) == merge(a, b)`.
 
-In `knf-fs`:
-
-- **Path enumeration is pure** — `Dir` tree → expected path list, plain table
-  test, no filesystem.
-- **Filesystem fixtures only for the walker**: dotfile skipping, extension
-  filtering, empty-dir error, symlink handling, glob prune, max_depth.
-
 In `knf`:
 
 - **Round-trip tests per format**, which is where the TOML datetime and
   ordering artefacts of §3.2 get caught. These belong here, not in the core.
 - **`assert_cmd`** reserved for genuinely CLI-level behaviour: exit codes,
-  stdin, the ambiguous-paths error text, the null-in-TOML error text.
+  stdin, the directory-rejected error text, the null-in-TOML error text.
 
 ---
 
@@ -497,8 +377,7 @@ Listed so they aren't re-litigated mid-implementation.
 
 - **`--explain <dotted.key>`** — which file last wrote a given path. Obvious
   next feature, but its shape depends on whether real confusion turns out to be
-  about layer ordering or about path selection. Wait for the first issue.
-  `--list` covers most of the need meanwhile.
+  about layer ordering. Wait for the first issue.
 - **YAML** — one match arm, once a fork proves itself.
 - **`--null-delete`** — opt-in RFC 7386 semantics, if anyone asks.
 - **`--array-strategy concat`** — same.
@@ -511,10 +390,5 @@ Listed so they aren't re-litigated mid-implementation.
 - **Publishing `knf-merge`** — once the options struct stops moving (i.e. once
   `--null-delete` and `--array-strategy` are decided one way or the other) and
   something other than `knf` wants it. See §5.1.
-- **Publishing `knf-fs`** — extracted from `matrix.rs` into its own crate (same
-  rationale as `knf-merge`: compiler-enforced separation). Unpublished because
-  the path model is the least settled design in the document. Flip to
-  `publish = true` once the shape stops moving and something other than `knf`
-  wants it.
 - **Comment preservation** — impossible with a `Value` IR in any language.
   Would be a different tool built on `toml_edit`, single-format only.

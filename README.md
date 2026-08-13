@@ -6,20 +6,14 @@ language, no templating.
 ```bash
 knf base.toml prod.toml > merged.toml
 knf defaults.json overrides.json --set server.port=8080
-knf matrix config/ --out-dir out/
 ```
 
 It exists because the alternatives (`yq ea '. as $i ireduce ({}; . * $i)'`,
 `jq -s 'reduce ...'`) require non-obvious incantations for what is a common,
 simple operation. `knf <files>` should need no explanation.
 
-Two capabilities beyond plain merging:
-
-- **Cross-format merging.** JSON and TOML layers mix freely, because everything
-  is parsed into one in-memory representation.
-- **Composable config trees** (`knf matrix`). A directory tree describes a set
-  of variants; `knf` enumerates and materialises them, so downstream consumers
-  read a single flat config instead of resolving layers themselves.
+JSON and TOML layers mix freely, because everything is parsed into one
+in-memory representation.
 
 ## Install
 
@@ -94,84 +88,18 @@ JSON: `--set version='"1.0"'`.
 Dotted paths nest, so keys containing a literal dot are not addressable from
 `--set` — use a file.
 
-## `knf matrix`
-
-**Files in a directory are mutually exclusive layers for that node.
-Subdirectories are alternative branches:** a path picks one child and continues,
-and files on the way down always apply.
-
-```
-config/
-  base.toml            → prefix on every path
-  db/
-    mysql.toml
-    postgres.toml
-  server/
-    apache.toml
-    nginx.toml
-```
-
-→ 4 documents: `base` + one db, **or** `base` + one server. Nested children
-along one lineage still apply together.
-
-One matching path goes to stdout. Several paths need `--out-dir` or `--list`.
-`--glob` keeps matching leaves (ancestors still apply); `--max-depth` (root is
-0) stops the walk early.
+Directories are not accepted as layers. Expand them in the shell:
 
 ```bash
-knf matrix config/ --glob 'db/postgres.toml'     # → one document, stdout
-knf matrix config/ --glob 'db/**' --out-dir out/ # → 2 documents
-knf matrix config/ --out-dir out/                # → 4 documents
-knf matrix config/ --list                        # → the paths, no writes
-knf matrix config/                               # → error:
+knf config/*.toml
 ```
-
-```
-error: 4 matching paths
-  db/mysql.toml
-  db/postgres.toml
-  server/apache.toml
-  server/nginx.toml
-help: knf matrix config/ --glob 'db/mysql.toml'
-help: or write every path — knf matrix config/ --out-dir out/
-```
-
-A one-file-per-directory tree is a single path and behaves like a plain layered
-merge.
-
-Output files are named after the leaf path:
-
-```
-out/db/postgres.toml
-out/server/nginx.toml
-out/db,postgres.toml          # --separator ,
-```
-
-`--max` (default 256) caps the number of paths before anything is written,
-mainly to catch `matrix` pointed at the wrong directory.
-
-A file named exactly `matrix` in the current directory parses as the
-subcommand — write `./matrix`.
-
-### Walker rules
-
-- Extension allowlist (`.json`, `.toml`); everything else is skipped silently, so
-  a `README.md` in a config directory is not an error.
-- Dotfiles and dot-directories are skipped, so `knf matrix .` does not walk
-  `.git`.
-- Symlinks are not followed.
-- A directory contributing neither files nor a contributing subdirectory is an
-  error naming that directory.
-- Byte-wise lexicographic sort within a directory — **no natural/numeric sort**,
-  so `10-x` precedes `2-x`.
 
 ## Layout
 
 ```
 crates/
   knf-merge/    the merge core: serde_json + thiserror, and nothing else
-  knf-fs/       directory walk and saturating DFS paths
-  knf/          CLI, formats, matrix
+  knf/          CLI and formats
 ```
 
 The core is a separate crate for compiler-enforced separation, not for
