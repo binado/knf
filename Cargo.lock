@@ -314,6 +314,7 @@ dependencies = [
  "proptest",
  "serde_json",
  "thiserror",
+ "toml",
 ]
 
 [[package]]

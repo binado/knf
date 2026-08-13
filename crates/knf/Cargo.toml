@@ -11,7 +11,7 @@ name = "knf"
 path = "src/main.rs"
 
 [dependencies]
-knf-merge.workspace = true
+knf-merge = { workspace = true, features = ["json", "toml"] }
 knf-dotted.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

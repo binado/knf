@@ -4,11 +4,14 @@
 //! subtree. Pleasant side effect: it rejects exactly the type changes that break
 //! associativity, so under strict mode the merge *is* associative.
 
-use crate::{MergeError, MergeValue};
+use crate::MergeError;
 
 /// Errors if `over` would change the kind of the existing value `base`.
-pub fn check<V: MergeValue>(base: &V, over: &V, path: &[String]) -> Result<(), MergeError> {
-    let (expected, found) = (base.kind(), over.kind());
+pub(crate) fn check(
+    expected: &'static str,
+    found: &'static str,
+    path: &[String],
+) -> Result<(), MergeError> {
     if expected == found {
         return Ok(());
     }

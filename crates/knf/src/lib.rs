@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use anyhow::{Context, bail};
-use knf_merge::{MergeOptions, merge, merge_all};
+use knf_merge::{MergeOptions, merge_all_json, merge_all_toml, merge_json, merge_toml};
 use serde_json::Value;
 
 use cli::Cli;
@@ -75,26 +75,27 @@ fn merge_native_toml(
     opts: &MergeOptions,
 ) -> anyhow::Result<Document> {
     let file_layers = files.into_iter().map(|(_, doc)| match doc {
-        Document::Toml(t) => t,
+        Document::Toml(Toml(v)) => v,
         Document::Json(_) => unreachable!("filtered to TOML files"),
     });
-    let acc = merge_all(file_layers, opts)?;
+    let acc = merge_all_toml(file_layers, opts)?;
     match out {
         Format::Toml => {
             let mut acc = acc;
             if !set_layers.is_empty() {
-                let folded = merge_all(set_layers.iter().map(|(_, v)| v.clone()), opts)?;
-                let set_toml = Toml::try_from(folded).map_err(|e| e.with_origins(&set_layers))?;
-                merge(&mut acc, set_toml, opts)?;
+                let folded = merge_all_json(set_layers.iter().map(|(_, Json(v))| v.clone()), opts)?;
+                let Toml(set_toml) =
+                    Toml::try_from(Json(folded)).map_err(|e| e.with_origins(&set_layers))?;
+                merge_toml(&mut acc, set_toml, opts)?;
             }
-            Ok(Document::Toml(acc))
+            Ok(Document::Toml(Toml(acc)))
         }
         Format::Json => {
-            let mut json = Json::from(acc);
-            for (_, set) in set_layers {
-                merge(&mut json, set, opts)?;
+            let mut json = Json::from(Toml(acc)).0;
+            for (_, Json(set)) in set_layers {
+                merge_json(&mut json, set, opts)?;
             }
-            Ok(Document::Json(json))
+            Ok(Document::Json(Json(json)))
         }
     }
 }
@@ -111,21 +112,21 @@ fn merge_via_json(
         match doc {
             Document::Json(j) => {
                 json_sources.push((name, j.clone()));
-                json_layers.push(j);
+                json_layers.push(j.0);
             }
-            Document::Toml(t) => json_layers.push(Json::from(t)),
+            Document::Toml(t) => json_layers.push(Json::from(t).0),
         }
     }
     for (name, j) in set_layers {
         json_sources.push((name, j.clone()));
-        json_layers.push(j);
+        json_layers.push(j.0);
     }
 
-    let merged = merge_all(json_layers, opts)?;
+    let merged = merge_all_json(json_layers, opts)?;
     match out {
-        Format::Json => Ok(Document::Json(merged)),
+        Format::Json => Ok(Document::Json(Json(merged))),
         Format::Toml => {
-            let toml = Toml::try_from(merged).map_err(|e| e.with_origins(&json_sources))?;
+            let toml = Toml::try_from(Json(merged)).map_err(|e| e.with_origins(&json_sources))?;
             Ok(Document::Toml(toml))
         }
     }

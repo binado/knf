@@ -7,7 +7,6 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use knf_merge::MergeValue;
 
 use crate::value::{Document, Json, Toml};
 

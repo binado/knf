@@ -1,6 +1,6 @@
 //! Two cheap properties that catch real bugs in the recursion.
 
-use knf_merge::{MergeOptions, merge};
+use knf_merge::{MergeOptions, merge_json};
 use proptest::prelude::*;
 use serde_json::{Map, Value};
 
@@ -33,7 +33,7 @@ fn arb_doc() -> impl Strategy<Value = Value> {
 }
 
 fn merged(mut base: Value, over: Value) -> Value {
-    merge(&mut base, over, &MergeOptions::LAST_WINS).expect("non-strict merge cannot fail");
+    merge_json(&mut base, over, &MergeOptions::LAST_WINS).expect("non-strict merge cannot fail");
     base
 }
 
@@ -58,7 +58,7 @@ proptest! {
     #[test]
     fn strict_agrees_with_default_when_it_succeeds(a in arb_doc(), b in arb_doc()) {
         let mut strict = a.clone();
-        if merge(&mut strict, b.clone(), &MergeOptions::STRICT).is_ok() {
+        if merge_json(&mut strict, b.clone(), &MergeOptions::STRICT).is_ok() {
             prop_assert_eq!(strict, merged(a, b));
         }
     }

@@ -35,9 +35,10 @@ impl From<Toml> for Json { /* datetime → string */ }
 impl TryFrom<Json> for Toml { /* null → error */ }
 ```
 
-Merge is a left fold over the layers, seeded with an empty object, generic over
-a `MergeValue` trait. Homogeneous inputs merge natively. JSON↔TOML conversion
-fires only at the type boundary — never as a hidden IR.
+Merge is a left fold over the layers, seeded with an empty object. JSON uses
+`merge_json` / `merge_all_json`; TOML uses `merge_toml` / `merge_all_toml`.
+Homogeneous inputs merge natively. JSON↔TOML conversion fires only at the type
+boundary — never as a hidden IR.
 
 ### 2.1 Merge semantics
 
@@ -87,7 +88,8 @@ the key) were considered and rejected:
 ```
 
 Consequence: **always strictly left-fold the final flat layer list.** Never
-merge subgroups and then combine them. This warrants a comment in `merge_all`.
+merge subgroups and then combine them. This warrants a comment in
+`merge_all_json` / `merge_all_toml`.
 
 ### 2.2 `--strict`
 
@@ -266,13 +268,16 @@ knf/
 ├── PLAN.md
 └── crates/
     ├── knf-merge/              publish = false
-    │   ├── Cargo.toml          deps: serde_json, thiserror   ← and nothing else
+    │   ├── Cargo.toml          deps: thiserror; serde_json/toml optional
     │   ├── src/
-    │   │   ├── lib.rs          MergeValue, merge, merge_all, MergeError
+    │   │   ├── lib.rs          MergeOptions, MergeError
+    │   │   ├── json.rs         merge_json, merge_all_json   [feature = json]
+    │   │   ├── toml.rs         merge_toml, merge_all_toml   [feature = toml]
     │   │   └── strict.rs       type-conflict detection
     │   └── tests/
-    │       ├── cases.rs        table tests
-    │       └── props.rs        proptest
+    │       ├── cases.rs        JSON table tests
+    │       ├── props.rs        proptest
+    │       └── toml.rs         TOML smoke tests
     ├── knf-dotted/                publish = false
     │   ├── Cargo.toml          deps: serde_json, thiserror, serde
     │   └── src/
@@ -314,10 +319,11 @@ for naming.
 ### 5.2 Boundary rules for `knf-merge`
 
 These are what make the separation real rather than cosmetic. Enforced by
-`cargo tree` staying at two dependencies.
+`cargo tree` staying at `thiserror` plus optional format crates.
 
-- **Dependencies are `serde_json` and `thiserror`. Nothing else.** No `anyhow`,
-  no `clap`, no `std::path`, no I/O of any kind.
+- **`thiserror` is the only hard dependency.** `serde_json` and `toml` are
+  optional behind `json` / `toml` features. No `anyhow`, no `clap`, no
+  `std::path`, no I/O of any kind.
 - **Errors are a local `MergeError` enum**, never `anyhow::Error`. This is the
   rule that actually holds the line — the moment merge returns
   `anyhow::Result`, it is welded to the binary.
@@ -328,12 +334,13 @@ These are what make the separation real rather than cosmetic. Enforced by
 - **Strict mode is a parameter, not a build feature.** Cargo features are
   additive and unify across a dependency graph; a `strict` feature would be a
   correctness hazard the moment a second consumer exists.
-- **The algorithm is generic over `MergeValue`.** `serde_json::Value` is the
-  built-in impl so tests stay process-free. TOML's impl lives in `knf` on the
-  `Toml` newtype — pulling `toml` into this crate would break the two-dep rule.
+- **Merge is four concrete functions, not a trait.** `merge_json` /
+  `merge_all_json` behind `json`; `merge_toml` / `merge_all_toml` behind `toml`.
+  JSON table tests stay process-free; TOML smoke tests require `--features toml`.
 
-Everything format-specific stays in `knf` — parse/emit in `format.rs`, JSON↔TOML
-conversion in `value.rs`. `--set` is clap in `knf` over `knf_dotted::PathLeaf`.
+Parse/emit stay in `knf` (`format.rs`); JSON↔TOML conversion stays in
+`value.rs`. Merge walks live in `knf-merge` behind features. `--set` is clap in
+`knf` over `knf_dotted::PathLeaf`.
 
 ### 5.3 Boundary rules for `knf-dotted`
 

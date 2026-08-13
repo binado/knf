@@ -1,20 +1,18 @@
 //! Native JSON and TOML documents, and the explicit conversion between them.
 //!
-//! Merge runs on [`Json`] or [`Toml`] directly. [`From`]/[`TryFrom`] fire only
-//! when a layer's type is not the output format — never as a hidden IR.
+//! Merge runs on the inner `serde_json::Value` / `toml::Value`. [`From`]/[`TryFrom`]
+//! fire only when a layer's type is not the output format — never as a hidden IR.
 
 use std::fmt;
 
-use knf_merge::MergeValue;
+use knf_merge::{json_kind, toml_kind};
 use serde_json::{Map, Value};
 
 /// A JSON document. Newtype so [`TryFrom`]/`From` can sit on a local type.
-#[repr(transparent)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Json(pub Value);
 
 /// A TOML document. Newtype so [`TryFrom`]/`From` can sit on a local type.
-#[repr(transparent)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Toml(pub toml::Value);
 
@@ -26,85 +24,22 @@ pub enum Document {
 }
 
 impl Json {
-    /// Reinterpret a `&mut Value` as `&mut Json`.
-    ///
-    /// # Safety
-    ///
-    /// `Json` is `#[repr(transparent)]` over `serde_json::Value`.
-    fn from_mut(v: &mut Value) -> &mut Self {
-        unsafe { &mut *(v as *mut Value as *mut Self) }
+    pub fn is_object(&self) -> bool {
+        self.0.is_object()
+    }
+
+    pub fn kind(&self) -> &'static str {
+        json_kind(&self.0)
     }
 }
 
 impl Toml {
-    /// Reinterpret a `&mut toml::Value` as `&mut Toml`.
-    ///
-    /// # Safety
-    ///
-    /// `Toml` is `#[repr(transparent)]` over `toml::Value`.
-    fn from_mut(v: &mut toml::Value) -> &mut Self {
-        unsafe { &mut *(v as *mut toml::Value as *mut Self) }
-    }
-}
-
-impl MergeValue for Json {
-    fn empty_object() -> Self {
-        Json(Value::empty_object())
+    pub fn is_object(&self) -> bool {
+        self.0.is_table()
     }
 
-    fn kind(&self) -> &'static str {
-        self.0.kind()
-    }
-
-    fn into_object(self) -> Result<Vec<(String, Self)>, Self> {
-        match self.0.into_object() {
-            Ok(pairs) => Ok(pairs.into_iter().map(|(k, v)| (k, Json(v))).collect()),
-            Err(v) => Err(Json(v)),
-        }
-    }
-
-    fn get_mut(&mut self, key: &str) -> Option<&mut Self> {
-        self.0.get_mut(key).map(Self::from_mut)
-    }
-
-    fn insert(&mut self, key: String, value: Self) {
-        self.0.insert(key, value.0);
-    }
-}
-
-impl MergeValue for Toml {
-    fn empty_object() -> Self {
-        Toml(toml::Value::Table(toml::Table::new()))
-    }
-
-    fn kind(&self) -> &'static str {
-        match &self.0 {
-            toml::Value::Table(_) => "object",
-            toml::Value::Array(_) => "array",
-            toml::Value::String(_) => "string",
-            toml::Value::Integer(_) | toml::Value::Float(_) => "number",
-            toml::Value::Boolean(_) => "bool",
-            toml::Value::Datetime(_) => "datetime",
-        }
-    }
-
-    fn into_object(self) -> Result<Vec<(String, Self)>, Self> {
-        match self.0 {
-            toml::Value::Table(table) => Ok(table.into_iter().map(|(k, v)| (k, Toml(v))).collect()),
-            other => Err(Toml(other)),
-        }
-    }
-
-    fn get_mut(&mut self, key: &str) -> Option<&mut Self> {
-        self.0.as_table_mut()?.get_mut(key).map(Self::from_mut)
-    }
-
-    fn insert(&mut self, key: String, value: Self) {
-        let toml::Value::Table(table) = &mut self.0 else {
-            debug_assert!(false, "insert called on a non-object");
-            return;
-        };
-        table.insert(key, value.0);
+    pub fn kind(&self) -> &'static str {
+        toml_kind(&self.0)
     }
 }
 

@@ -10,11 +10,23 @@ repository.workspace = true
 # crates.io is a semver promise. Unpublished until that stops moving.
 publish = false
 
-# Dependencies are serde_json and thiserror. Nothing else — no anyhow, no clap,
-# no I/O. `cargo tree -p knf-merge --depth 1` is the enforcement.
+# thiserror is always on. serde_json and toml are optional behind `json` / `toml`.
+# No anyhow, no clap, no I/O. `cargo tree -p knf-merge --depth 1` is the enforcement.
+[features]
+default = ["json"]
+json = ["dep:serde_json"]
+toml = ["dep:toml"]
+
 [dependencies]
-serde_json.workspace = true
+serde_json = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
 thiserror.workspace = true
 
 [dev-dependencies]
 proptest = "1"
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+[[test]]
+name = "toml"
+required-features = ["toml"]
