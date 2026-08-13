@@ -3,10 +3,9 @@
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
-use crate::{ParseError, PathLeaf, write_canonical};
+use crate::{ParseError, PathLeaf};
 
 impl FromStr for PathLeaf<Value> {
     type Err = ParseError;
@@ -27,7 +26,10 @@ impl From<PathLeaf<String>> for PathLeaf<Value> {
 
 impl fmt::Display for PathLeaf<Value> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_canonical(&self.path, &self.leaf, f)
+        // Infallible for a `Value`: only maps with non-string keys and
+        // non-finite floats can fail, and neither survives a JSON parse.
+        let rhs = serde_json::to_string(&self.leaf).expect("a Value always serializes");
+        write!(f, "{}={rhs}", self.path.join("."))
     }
 }
 
@@ -38,19 +40,6 @@ impl From<PathLeaf<Value>> for Value {
             obj.insert(key, acc);
             Value::Object(obj)
         })
-    }
-}
-
-impl Serialize for PathLeaf<Value> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.to_string())
-    }
-}
-
-impl<'de> Deserialize<'de> for PathLeaf<Value> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        s.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -128,26 +117,6 @@ mod tests {
             assert_eq!(round.path(), parsed.path(), "{expr}");
             assert_eq!(round.leaf(), parsed.leaf(), "{expr}");
         }
-    }
-
-    #[test]
-    fn serde_is_the_expression_string_not_the_object() {
-        let path_leaf = parse("port=8080");
-        assert_eq!(
-            serde_json::to_value(&path_leaf).unwrap(),
-            json!("port=8080")
-        );
-        assert_eq!(Value::from(path_leaf.clone()), json!({"port": 8080}));
-
-        let path_leaf = parse("name=foo");
-        assert_eq!(
-            serde_json::to_value(&path_leaf).unwrap(),
-            json!(r#"name="foo""#)
-        );
-
-        let back: PathLeaf<Value> = serde_json::from_value(json!("server.port=8080")).unwrap();
-        assert_eq!(back.path(), ["server", "port"]);
-        assert_eq!(back.leaf(), &json!(8080));
     }
 
     #[test]
