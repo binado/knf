@@ -1,0 +1,11 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"matrix\", \"config/\"])"
+---
+error: 4 matching paths
+  db/mysql.toml
+  db/postgres.toml
+  server/apache.toml
+  server/nginx.toml
+help: knf matrix config/ --glob 'db/mysql.toml'
+help: or write every path — knf matrix config/ --out-dir out/

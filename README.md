@@ -96,65 +96,62 @@ Dotted paths nest, so keys containing a literal dot are not addressable from
 
 ## `knf matrix`
 
-A **directory is a group; the files within it are mutually exclusive
-alternatives.** Each subdirectory is an independent axis that also applies.
+**Files in a directory are mutually exclusive layers for that node.
+Subdirectories are alternative branches:** a path picks one child and continues,
+and files on the way down always apply.
 
 ```
 config/
-  base.toml            → singleton group, auto-selected
+  base.toml            → prefix on every path
   db/
-    mysql.toml         → group 'db', 2 alternatives
+    mysql.toml
     postgres.toml
   server/
-    apache.toml        → group 'server', 2 alternatives
+    apache.toml
     nginx.toml
 ```
 
-→ 2 × 2 = 4 documents, each merging `base` + one db + one server.
+→ 4 documents: `base` + one db, **or** `base` + one server. Nested children
+along one lineage still apply together.
 
-Grouping is keyed by parent directory, not by depth. Pooling by depth would turn
-`db/` and `server/` into one four-way axis, yielding configs with a db *or* a
-server and never both.
-
-Singleton groups auto-select; multi-file groups must be pinned, or every
-combination is produced:
+One matching path goes to stdout. Several paths need `--out-dir` or `--list`.
+`--glob` keeps matching leaves (ancestors still apply); `--max-depth` (root is
+0) stops the walk early.
 
 ```bash
-knf matrix config/ db=postgres server=nginx      # → one document, stdout
-knf matrix config/ db=postgres --out-dir out/    # → 2 documents (server axis)
+knf matrix config/ --glob 'db/postgres.toml'     # → one document, stdout
+knf matrix config/ --glob 'db/**' --out-dir out/ # → 2 documents
 knf matrix config/ --out-dir out/                # → 4 documents
-knf matrix config/ --list                        # → the combinations, no writes
+knf matrix config/ --list                        # → the paths, no writes
 knf matrix config/                               # → error:
 ```
 
 ```
-error: ambiguous group `db` — 2 alternatives
-  db=mysql, db=postgres
-ambiguous group `server` — 2 alternatives
-  server=apache, server=nginx
-help: knf matrix config/ db=mysql server=apache
-help: or write every combination — knf matrix config/ --out-dir out/
+error: 4 matching paths
+  db/mysql.toml
+  db/postgres.toml
+  server/apache.toml
+  server/nginx.toml
+help: knf matrix config/ --glob 'db/mysql.toml'
+help: or write every path — knf matrix config/ --out-dir out/
 ```
 
-Because every group in a one-file-per-directory tree is a singleton, such a tree
-resolves with no pinning and behaves exactly like a plain layered merge. Groups
-are invisible until someone creates one.
+A one-file-per-directory tree is a single path and behaves like a plain layered
+merge.
 
-Output files are named by choice, so a filename is reversible and unambiguous
-even when two groups share a choice name:
+Output files are named after the leaf path:
 
 ```
-out/db=postgres,server=nginx.toml
-out/db=postgres/server=nginx.toml     # --tree
+out/db/postgres.toml
+out/server/nginx.toml
+out/db,postgres.toml          # --separator ,
 ```
 
-`--separator` overrides the joiner between pairs (the `=` is fixed), and `--max`
-(default 256) caps the product size before anything is written, mainly to catch
-`matrix` pointed at the wrong directory.
+`--max` (default 256) caps the number of paths before anything is written,
+mainly to catch `matrix` pointed at the wrong directory.
 
-Arguments are split purely syntactically: one containing `=` is a group pin,
-anything else is the directory. Consequence: a file named exactly `matrix` in
-the current directory parses as the subcommand — write `./matrix`.
+A file named exactly `matrix` in the current directory parses as the
+subcommand — write `./matrix`.
 
 ### Walker rules
 
@@ -173,6 +170,7 @@ the current directory parses as the subcommand — write `./matrix`.
 ```
 crates/
   knf-merge/    the merge core: serde_json + thiserror, and nothing else
+  knf-fs/       directory walk and saturating DFS paths
   knf/          CLI, formats, matrix
 ```
 

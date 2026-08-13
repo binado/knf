@@ -23,8 +23,7 @@ Two capabilities beyond plain merging:
   everything is parsed into one in-memory representation.
 - **Composable config trees** (`knf matrix`). A directory tree describes a set
   of variants; `knf` enumerates and materialises them, so downstream consumers
-  read a single flat config instead of resolving layers themselves. Hydra's
-  config groups, without the Python runtime.
+  read a single flat config instead of resolving layers themselves.
 
 ---
 
@@ -219,7 +218,7 @@ Files are **layers**, merged left to right in argument order. Exactly one
 document to stdout, always.
 
 **Directories are not accepted here.** Under `matrix`, a directory means
-"groups of alternatives"; if the default command flattened the same directory
+"saturating paths of alternatives"; if the default command flattened the same directory
 into layers, one path would mean two incompatible things. The failure would be
 silent and delayed — a single-file `db/` works, then someone adds a second file
 six months later and the config quietly becomes a union of two mutually
@@ -235,7 +234,7 @@ A terminal layer built from the command line, appended after all files. Applies
 last, always; multiple `--set` apply left to right. No new merge semantics.
 
 A flag rather than a positional, to keep the default command free of parsing
-rules and to avoid colliding with `matrix`'s `group=choice` syntax.
+rules.
 
 RHS is parsed as JSON with a string fallback:
 
@@ -259,87 +258,75 @@ file.
 
 ### 4.3 `knf matrix <dir>`
 
-A **directory is a group; the files within it are mutually exclusive
-alternatives.** This is Hydra's config-group model, so the mental model
-transfers.
+**Files in a directory are mutually exclusive layers for that node.
+Subdirectories are alternative branches:** a path picks one child and continues,
+and files on the way down always apply (saturation). Sibling directories are
+OR, not independent axes.
 
 ```
 config/
-  base.toml            → singleton group, auto-selected
+  base.toml            → prefix on every path through config/
   db/
-    mysql.toml         → group 'db', 2 alternatives
+    mysql.toml         → leaves under db/
     postgres.toml
   server/
-    apache.toml        → group 'server', 2 alternatives
+    apache.toml        → leaves under server/
     nginx.toml
 ```
 
-→ 2 × 2 = 4 documents, each merging `base` + one db + one server.
+→ 4 documents: `base` + one db, **or** `base` + one server. Never both a db and
+a server in the same document. Nested children along one lineage still apply
+together: `db/{mysql,postgres}` plus `db/tuning/{small,large}` is four paths,
+each with a db file and a tuning file.
 
-Grouping is keyed by **parent directory, not by depth.** Depth-pooling breaks
-as soon as two directories sit at the same level: `db/` and `server/` would
-pool into one four-way axis, yielding configs with a db *or* a server, never
-both.
-
-Within a selected tuple, layers merge shallow → deep, so §2.1's left-fold rule
-is unchanged. Nested groups work: `db/postgres/{small,large}.toml` is a
-sub-group of `db/postgres`.
-
-Accepted cost: a group's files are alternatives, so "apply both `a.toml` and
-`b.toml` from this directory" is inexpressible. Workaround is one file per
+Accepted cost: files in one directory are alternatives, so "apply both `a.toml`
+and `b.toml` from this directory" is inexpressible. Workaround is one file per
 directory. Not worth new syntax.
 
-**Resolution.** Singleton groups auto-select. Multi-file groups must be pinned:
+**Resolution.** One matching path goes to stdout. Several paths need `--out-dir`
+or `--list`. `--glob` (repeatable, union) keeps only matching leaves; ancestor
+files still apply. `--max-depth` (root is 0) treats a directory as a leaf even
+if it has children.
 
 ```bash
-knf matrix config/ db=postgres server=nginx      # → one document, stdout
-knf matrix config/ db=postgres --out-dir out/    # → 2 documents (server axis)
+knf matrix config/ --glob 'db/postgres.toml'     # → one document, stdout
+knf matrix config/ --glob 'db/**' --out-dir out/ # → 2 documents (the db branch)
 knf matrix config/ --out-dir out/                # → 4 documents
+knf matrix config/ --list                        # → the paths, no writes
 knf matrix config/                               # → error, see below
 ```
 
 ```
-error: ambiguous group 'db' — 2 alternatives
-  db=mysql, db=postgres
-help: knf matrix config/ db=postgres
+error: 4 matching paths
+  db/mysql.toml
+  db/postgres.toml
+  server/apache.toml
+  server/nginx.toml
+help: knf matrix config/ --glob 'db/mysql.toml'
+help: or write every path — knf matrix config/ --out-dir out/
 ```
 
-Everything-pinned is just the degenerate case of the product, so there is no
-separate `pick` command and no second code path — `matrix` is a loop over the
-same merge.
-
-Because every group in a one-file-per-directory tree is a singleton, such a
-tree resolves with no pinning and behaves exactly like a plain layered merge.
-Groups are invisible until someone creates one.
+Because a one-file-per-directory tree is a single path, it resolves with no
+flags and behaves exactly like a plain layered merge.
 
 No `default.toml` convention marking a fallback choice — same objection as any
 in-band sentinel, and the error message already tells the user what to type.
-No "omit this group" variant either; an explicit empty `none.toml` expresses it.
 
-**Argument parsing.** Purely syntactic: an argument containing `=` is a group
-pin, otherwise it is the directory. Never dependent on whether a file of that
-name exists. (Leaves room for a future `--path` escape hatch; not building it.)
-
-**Output naming.** Named by choice, so filenames are reversible and unambiguous
-when two groups share a choice name (`db=small,cache=small`):
+**Output naming.** Each file is named after the leaf's path relative to the
+walked directory, with the output-format extension:
 
 ```
-out/db=postgres,server=nginx.toml
+out/db/postgres.toml
+out/server/nginx.toml
 ```
 
-- `--separator` overrides the between-pairs joiner (default `,`). The `=` is
-  fixed.
-- Pairs sorted by group path, so a tuple always yields the same filename
-  regardless of walk order.
-- `--tree` emits `out/db=postgres/server=nginx.toml` instead — greppable per
-  group, and survives large matrices without 200-character filenames.
+`--separator` flattens slashes (`out/db,postgres.toml`). `--max` (default 256)
+caps the number of paths before anything is written, mainly to catch `matrix`
+pointed at the wrong directory. `--list` prints the resolved paths and exits
+without writing.
 
-**Safety valves.** Four groups of four is 256 documents.
-
-- `--list` prints the resolved tuples and exits without writing. This is the
-  answer to "why did this value win" until `--explain` exists.
-- `--max` caps the product size (default in the low hundreds), mainly to catch
-  `matrix` pointed at the wrong directory.
+A file named exactly `matrix` in the current directory still parses as the
+subcommand — write `./matrix`.
 
 ### 4.4 Walker rules
 
@@ -347,7 +334,8 @@ out/db=postgres,server=nginx.toml
   `README.md` in a config dir is not an error.
 - Skip dotfiles and dot-directories, so `knf matrix .` doesn't walk `.git`.
 - Do not follow symlinks.
-- Empty directory → error, not an empty object.
+- Empty directory → error, not an empty object. A directory skipped by `--glob`
+  or cut by `--max-depth` is not empty; it was never entered.
 - `walkdir`, not `ignore`. Gitignore semantics would mean "my config was
   skipped because of a `.gitignore` three levels up" — surprising in a merge
   tool.
@@ -365,10 +353,11 @@ out/db=postgres,server=nginx.toml
 | `--strict` | both | error on type changes across layers |
 | `--compact` | both | disable pretty-printing |
 | `--out-dir` | matrix | write M documents here (no short flag) |
-| `--tree` | matrix | nested output dirs instead of flat filenames |
-| `--separator` | matrix | between-pairs joiner in filenames (default `,`) |
-| `--list` | matrix | print resolved tuples, write nothing |
-| `--max` | matrix | cap on product size |
+| `--glob` | matrix | keep matching leaves only; repeatable union |
+| `--max-depth` | matrix | cap walk depth; root is 0 |
+| `--separator` | matrix | flatten `/` in output names |
+| `--list` | matrix | print resolved paths, write nothing |
+| `--max` | matrix | cap on number of paths |
 
 ---
 
@@ -392,11 +381,11 @@ knf/
     ├── knf-fs/                publish = false
     │   ├── Cargo.toml          deps: thiserror, walkdir   ← and nothing else
     │   ├── src/
-    │   │   └── lib.rs          group model, discovery, tuple enumeration, naming
+    │   │   └── lib.rs          Dir/File tree, discovery, saturating DFS paths
     │   └── tests/
     │       └── matrix.rs       enumeration table tests + walker fixtures
     └── knf/
-        ├── Cargo.toml          deps: knf-merge (path), knf-fs (path), toml, clap, anyhow
+        ├── Cargo.toml          deps: knf-merge (path), knf-fs (path), toml, clap, anyhow, globset
         ├── src/
         │   ├── main.rs         thin: parse args, call lib, map errors to exit codes
         │   ├── lib.rs          pipeline + error type
@@ -463,6 +452,7 @@ it down would drag `toml` into the core.
 | `clap` (`derive`) | knf | CLI |
 | `anyhow` | knf | error plumbing in `main` |
 | `walkdir` | knf-fs | `discover` directory traversal |
+| `globset` | knf | `--glob` matching for `matrix` |
 
 `preserve_order` must be enabled in the **workspace**, not just one member.
 Cargo unifies features across the graph, so a member enabling it silently
@@ -485,16 +475,19 @@ In `knf-merge`:
 - **`proptest`** for two cheap properties that catch real bugs:
   `merge(a, a) == a` and `merge(merge(a, b), b) == merge(a, b)`.
 
+In `knf-fs`:
+
+- **Path enumeration is pure** — `Dir` tree → expected path list, plain table
+  test, no filesystem.
+- **Filesystem fixtures only for the walker**: dotfile skipping, extension
+  filtering, empty-dir error, symlink handling, glob prune, max_depth.
+
 In `knf`:
 
-- **Tuple enumeration is pure** — group structure → expected tuple list, plain
-  table test, no filesystem.
 - **Round-trip tests per format**, which is where the TOML datetime and
   ordering artefacts of §3.2 get caught. These belong here, not in the core.
-- **Filesystem fixtures only for the walker**: dotfile skipping, extension
-  filtering, empty-dir error, symlink handling.
 - **`assert_cmd`** reserved for genuinely CLI-level behaviour: exit codes,
-  stdin, the ambiguous-group error text, the null-in-TOML error text.
+  stdin, the ambiguous-paths error text, the null-in-TOML error text.
 
 ---
 
@@ -504,7 +497,7 @@ Listed so they aren't re-litigated mid-implementation.
 
 - **`--explain <dotted.key>`** — which file last wrote a given path. Obvious
   next feature, but its shape depends on whether real confusion turns out to be
-  about layer ordering or about group selection. Wait for the first issue.
+  about layer ordering or about path selection. Wait for the first issue.
   `--list` covers most of the need meanwhile.
 - **YAML** — one match arm, once a fork proves itself.
 - **`--null-delete`** — opt-in RFC 7386 semantics, if anyone asks.
@@ -515,13 +508,12 @@ Listed so they aren't re-litigated mid-implementation.
   the file. Dropping one JSON layer into the tree already solves it, which is
   half the point of being multi-format. Revisit only if someone has a genuinely
   all-TOML tree they cannot add a JSON file to.
-- **`--path` escape hatch** for paths containing `=` in `matrix`.
 - **Publishing `knf-merge`** — once the options struct stops moving (i.e. once
   `--null-delete` and `--array-strategy` are decided one way or the other) and
   something other than `knf` wants it. See §5.1.
 - **Publishing `knf-fs`** — extracted from `matrix.rs` into its own crate (same
   rationale as `knf-merge`: compiler-enforced separation). Unpublished because
-  the group/tuple model is the least settled design in the document. Flip to
+  the path model is the least settled design in the document. Flip to
   `publish = true` once the shape stops moving and something other than `knf`
   wants it.
 - **Comment preservation** — impossible with a `Value` IR in any language.

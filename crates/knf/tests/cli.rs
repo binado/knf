@@ -192,7 +192,7 @@ fn null_in_toml_error() {
 
 /// §4.3. The help line must be runnable exactly as printed.
 #[test]
-fn ambiguous_group_error() {
+fn ambiguous_paths_error() {
     let dir = tree(&[
         ("config/base.toml", "name = \"svc\"\n"),
         ("config/db/mysql.toml", "[db]\nkind = \"mysql\"\n"),
@@ -228,8 +228,31 @@ fn strict_type_conflict_error() {
 
 // --- matrix, end to end ---------------------------------------------------
 
+fn written_rels(root: &std::path::Path) -> Vec<String> {
+    fn walk(dir: &std::path::Path, prefix: &str, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("read_dir") {
+            let entry = entry.expect("entry");
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let rel = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            if entry.path().is_dir() {
+                walk(&entry.path(), &rel, out);
+            } else {
+                out.push(rel);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(root, "", &mut files);
+    files.sort();
+    files
+}
+
 #[test]
-fn matrix_writes_one_file_per_combination() {
+fn matrix_writes_one_file_per_path() {
     let dir = tree(&[
         ("config/base.toml", "name = \"svc\"\n"),
         ("config/db/mysql.toml", "[db]\nkind = \"mysql\"\n"),
@@ -239,44 +262,73 @@ fn matrix_writes_one_file_per_combination() {
     ]);
 
     run(&dir, &["matrix", "config/", "--out-dir", "out/"]);
-    let mut written: Vec<String> = std::fs::read_dir(dir.path().join("out"))
-        .expect("out dir")
-        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
-        .collect();
-    written.sort();
     assert_eq!(
-        written,
+        written_rels(&dir.path().join("out")),
         vec![
-            "db=mysql,server=apache.toml",
-            "db=mysql,server=nginx.toml",
-            "db=postgres,server=apache.toml",
-            "db=postgres,server=nginx.toml",
+            "db/mysql.toml",
+            "db/postgres.toml",
+            "server/apache.toml",
+            "server/nginx.toml",
         ]
     );
 
-    // --tree nests all but the last pair.
-    run(&dir, &["matrix", "config/", "--out-dir", "t/", "--tree"]);
-    assert!(dir.path().join("t/db=postgres/server=nginx.toml").is_file());
+    run(
+        &dir,
+        &[
+            "matrix",
+            "config/",
+            "--out-dir",
+            "flat/",
+            "--separator",
+            ",",
+        ],
+    );
+    assert_eq!(
+        written_rels(&dir.path().join("flat")),
+        vec![
+            "db,mysql.toml",
+            "db,postgres.toml",
+            "server,apache.toml",
+            "server,nginx.toml",
+        ]
+    );
 
-    // Fully pinned goes to stdout, and the layers merge shallow -> deep.
     assert_eq!(
         run(
             &dir,
             &[
                 "matrix",
                 "config/",
-                "db=postgres",
-                "server=nginx",
+                "--glob",
+                "db/postgres.toml",
                 "-f",
                 "json",
                 "--compact"
             ]
         ),
-        "{\"name\":\"svc\",\"db\":{\"kind\":\"postgres\"},\"server\":{\"kind\":\"nginx\"}}\n"
+        "{\"name\":\"svc\",\"db\":{\"kind\":\"postgres\"}}\n"
     );
 }
 
-/// `--list` writes nothing and is legal even when groups are ambiguous.
+#[test]
+fn matrix_glob_keeps_one_branch() {
+    let dir = tree(&[
+        ("config/base.toml", "name = \"svc\"\n"),
+        ("config/db/mysql.toml", "[db]\nkind = \"mysql\"\n"),
+        ("config/db/postgres.toml", "[db]\nkind = \"postgres\"\n"),
+        ("config/server/nginx.toml", "[server]\nkind = \"nginx\"\n"),
+    ]);
+    run(
+        &dir,
+        &["matrix", "config/", "--glob", "db/**", "--out-dir", "out/"],
+    );
+    assert_eq!(
+        written_rels(&dir.path().join("out")),
+        vec!["db/mysql.toml", "db/postgres.toml"]
+    );
+}
+
+/// `--list` writes nothing and is legal even when several paths match.
 #[test]
 fn matrix_list_writes_nothing() {
     let dir = tree(&[
@@ -285,12 +337,12 @@ fn matrix_list_writes_nothing() {
         ("config/db/postgres.toml", "b = 2\n"),
     ]);
     let out = run(&dir, &["matrix", "config/", "--list"]);
-    assert!(out.contains("db=mysql"), "{out}");
+    assert!(out.contains("db/mysql.toml"), "{out}");
     assert!(out.contains("config/db/postgres.toml"), "{out}");
     assert!(!dir.path().join("out").exists());
 }
 
-/// `--max` is checked against the product size before anything is written.
+/// `--max` is checked against the path count before anything is written.
 #[test]
 fn matrix_max_fails_before_writing() {
     let dir = tree(&[
@@ -310,8 +362,39 @@ fn matrix_max_fails_before_writing() {
     );
 }
 
-/// A one-file-per-directory tree resolves with no pinning and behaves exactly
-/// like a plain layered merge — groups are invisible until someone creates one.
+#[test]
+fn matrix_max_depth_zero_is_only_the_root_file() {
+    let dir = tree(&[
+        ("config/base.toml", "a = 1\n"),
+        ("config/db/mysql.toml", "b = 1\n"),
+        ("config/server/nginx.toml", "c = 1\n"),
+    ]);
+    assert_eq!(
+        run(&dir, &["matrix", "config/", "--max-depth", "0"]),
+        "a = 1\n"
+    );
+}
+
+#[test]
+fn matrix_max_depth_one_stops_before_nested_tuning() {
+    let dir = tree(&[
+        ("config/base.toml", "a = 1\n"),
+        ("config/db/mysql.toml", "b = 1\n"),
+        ("config/db/postgres.toml", "b = 2\n"),
+        ("config/db/tuning/small.toml", "t = 1\n"),
+    ]);
+    run(
+        &dir,
+        &["matrix", "config/", "--max-depth", "1", "--out-dir", "out/"],
+    );
+    assert_eq!(
+        written_rels(&dir.path().join("out")),
+        vec!["db/mysql.toml", "db/postgres.toml"]
+    );
+}
+
+/// A one-file-per-directory tree resolves to a single path and behaves exactly
+/// like a plain layered merge.
 #[test]
 fn matrix_over_singletons_is_a_plain_merge() {
     let dir = tree(&[

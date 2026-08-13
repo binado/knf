@@ -1,16 +1,16 @@
-//! `knf matrix` — enumerate a directory tree of config groups and merge each
-//! combination.
+//! `knf matrix` — enumerate saturating paths through a config directory and
+//! merge each one.
 //!
-//! Group discovery and tuple enumeration live in the `knf-fs` crate; this
-//! module is the command layer that wires them into parse → merge → format →
-//! write.
+//! Discovery and path enumeration live in the `knf-fs` crate; this module is
+//! the command layer that wires them into parse → merge → format → write.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, bail};
-use knf_fs::{self, Group};
+use anyhow::Context;
+use globset::{GlobBuilder, GlobSetBuilder};
+use knf_fs::{self, Dir, EntryKind, File};
 use knf_merge::merge_all;
 
 use crate::cli::MatrixArgs;
@@ -18,73 +18,68 @@ use crate::format::{self, Format, Source, SourceName};
 
 // --- errors ---------------------------------------------------------------
 
-/// Free multi-alternative groups with nowhere to write the resulting documents.
+/// Several matching paths with nowhere to write the resulting documents.
 #[derive(Debug)]
-pub struct AmbiguousGroups {
-    entries: Vec<(String, Vec<String>)>,
-    pin_command: String,
+pub struct AmbiguousPaths {
+    leaves: Vec<String>,
+    glob_command: String,
     out_dir_command: String,
 }
 
-impl fmt::Display for AmbiguousGroups {
+impl fmt::Display for AmbiguousPaths {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (id, choices) in &self.entries {
-            writeln!(f, "ambiguous group `{id}` — {} alternatives", choices.len())?;
-            writeln!(f, "  {}", choices.join(", "))?;
+        writeln!(f, "{} matching paths", self.leaves.len())?;
+        for leaf in &self.leaves {
+            writeln!(f, "  {leaf}")?;
         }
-        writeln!(f, "help: {}", self.pin_command)?;
+        writeln!(f, "help: {}", self.glob_command)?;
         write!(f, "help: or {}", self.out_dir_command)
     }
 }
 
-impl std::error::Error for AmbiguousGroups {}
+impl std::error::Error for AmbiguousPaths {}
 
 // --- the command ----------------------------------------------------------
 
 pub fn run(args: &MatrixArgs) -> anyhow::Result<()> {
-    let (root, pins) = split_args(&args.args)?;
-    let groups = knf_fs::discover(&root, |p| Format::from_path(p).is_some())?;
-    let axes = knf_fs::resolve_axes(&groups, &pins)?;
+    let root = &args.dir;
+    let include = compile_globs(&args.glob)?;
+    let tree = knf_fs::discover(
+        root,
+        |p| Format::from_path(p).is_some(),
+        |rel, kind| include(rel, kind),
+        args.max_depth,
+    )?;
 
     // Checked before anything is materialised, so `matrix` pointed at the wrong
     // directory fails fast instead of after writing half a tree.
-    let total = knf_fs::product_size(&axes).filter(|&n| n <= args.max);
-    let Some(total) = total else {
-        bail!(
-            "this tree describes more than {} documents\nhelp: pin a group, or raise --max",
-            args.max
-        );
-    };
+    let lineages = knf_fs::paths_capped(&tree, args.max).map_err(|err| {
+        anyhow::anyhow!("{err}\nhelp: tighten --glob, lower --max-depth, or raise --max")
+    })?;
 
-    // Writing several documents to stdout is impossible, so free axes are an
-    // error unless there is somewhere to put them (or nothing is being written).
-    if total > 1 && args.out_dir.is_none() && !args.list {
-        return Err(ambiguity_error(&groups, &pins, &root).into());
+    if lineages.len() > 1 && args.out_dir.is_none() && !args.list {
+        return Err(ambiguity_error(&lineages, root).into());
     }
 
-    let tuples = knf_fs::enumerate(&axes);
-    let root_id = knf_fs::root_group_id(&root)?;
-
     if args.list {
-        return list(&groups, &tuples, &root_id, &args.separator);
+        return list(root, &lineages);
     }
 
     // Parse every eligible file once, up front: it surfaces a syntax error
     // before any output is written, and resolves the output format over the
     // whole tree so a mixed tree consistently requires -f rather than failing
     // on only some documents.
-    let parsed = parse_all(&groups)?;
-    let formats: Vec<Format> = groups
-        .iter()
-        .flat_map(|g| &g.alternatives)
-        .filter_map(|a| Format::from_path(&a.path))
+    let parsed = parse_all(&tree)?;
+    let formats: Vec<Format> = files_in(&tree)
+        .filter_map(|f| Format::from_path(&f.path))
         .collect();
     let out_format = crate::resolve_output_format(args.common.format, &formats)?;
     let opts = crate::merge_options(&args.common);
 
-    for tuple in &tuples {
-        let sources: Vec<Source> = layers(&groups, tuple)
-            .map(|path| parsed[path].clone())
+    for lineage in &lineages {
+        let sources: Vec<Source> = lineage
+            .iter()
+            .map(|file| parsed[&file.path].clone())
             .collect();
         let merged = merge_all(sources.iter().map(|(_, v)| v.clone()), &opts)?;
         let text = format::emit(out_format, merged, !args.common.compact, &sources)?;
@@ -92,11 +87,11 @@ pub fn run(args: &MatrixArgs) -> anyhow::Result<()> {
         match &args.out_dir {
             None => crate::write_stdout(&text)?,
             Some(out_dir) => {
+                let leaf = lineage.last().expect("paths are non-empty");
                 let path = output_path(
                     out_dir,
-                    &knf_fs::name_pairs(&groups, tuple),
-                    &root_id,
-                    args,
+                    &knf_fs::rel(root, leaf),
+                    args.separator.as_deref(),
                     out_format,
                 );
                 if let Some(parent) = path.parent() {
@@ -111,144 +106,125 @@ pub fn run(args: &MatrixArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Splits positionals into the directory and the pins.
-///
-/// Purely syntactic: an argument containing `=` is a pin, anything else is the
-/// directory. Never dependent on whether a file of that name exists, which
-/// leaves room for a future `--path` escape hatch.
-fn split_args(args: &[String]) -> anyhow::Result<(PathBuf, BTreeMap<String, String>)> {
-    let mut dirs = Vec::new();
-    let mut pins = BTreeMap::new();
+type Include = Box<dyn Fn(&str, EntryKind) -> bool>;
 
-    for arg in args {
-        match arg.split_once('=') {
-            Some((group, choice)) => {
-                if pins.insert(group.to_string(), choice.to_string()).is_some() {
-                    bail!("group `{group}` is pinned twice");
-                }
-            }
-            None => dirs.push(PathBuf::from(arg)),
-        }
+fn compile_globs(patterns: &[String]) -> anyhow::Result<Include> {
+    if patterns.is_empty() {
+        return Ok(Box::new(|_: &str, _: EntryKind| true));
     }
 
-    match dirs.len() {
-        0 => bail!("expected a directory\nhelp: knf matrix config/"),
-        1 => Ok((dirs.pop().expect("just checked"), pins)),
-        _ => {
-            let names: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
-            bail!(
-                "expected one directory, got {}: {}\n\
-                 help: arguments containing `=` are group pins; everything else is the directory",
-                dirs.len(),
-                names.join(", ")
-            )
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        let glob = GlobBuilder::new(pattern)
+            .literal_separator(true)
+            .build()
+            .with_context(|| format!("invalid glob `{pattern}`"))?;
+        builder.add(glob);
+    }
+    let set = builder.build().context("building glob set")?;
+    let patterns = patterns.to_vec();
+    Ok(Box::new(move |rel: &str, kind: EntryKind| match kind {
+        EntryKind::File => set.is_match(rel),
+        EntryKind::Dir => patterns.iter().any(|p| dir_prefix_may_match(p, rel)),
+    }))
+}
+
+/// Whether walking into `dir_rel` could still produce a leaf matching `pattern`.
+fn dir_prefix_may_match(pattern: &str, dir_rel: &str) -> bool {
+    let pat: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
+    let dir: Vec<&str> = dir_rel.split('/').filter(|s| !s.is_empty()).collect();
+    prefix_match(&pat, &dir)
+}
+
+fn prefix_match(pat: &[&str], dir: &[&str]) -> bool {
+    match (pat.split_first(), dir.split_first()) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some((&"**", rest)), Some((_, drest))) => {
+            prefix_match(rest, dir) || prefix_match(pat, drest)
         }
+        (Some((p, rest)), Some((d, drest))) => component_match(p, d) && prefix_match(rest, drest),
     }
 }
 
-fn ambiguity_error(
-    groups: &[Group],
-    pins: &BTreeMap<String, String>,
-    root: &Path,
-) -> AmbiguousGroups {
-    let free: Vec<&Group> = groups
+fn component_match(pat: &str, component: &str) -> bool {
+    if pat == "**" {
+        return true;
+    }
+    GlobBuilder::new(pat)
+        .literal_separator(true)
+        .build()
+        .map(|g| g.compile_matcher().is_match(component))
+        .unwrap_or(false)
+}
+
+fn ambiguity_error(lineages: &[Vec<&File>], root: &Path) -> AmbiguousPaths {
+    let leaves: Vec<String> = lineages
         .iter()
-        .filter(|g| !g.is_singleton() && !pins.contains_key(&g.id))
+        .map(|path| knf_fs::rel(root, path.last().expect("paths are non-empty")))
         .collect();
-
-    // The help line must be runnable as printed, so it pins each free group to
-    // its first alternative and carries the pins the user already gave.
-    let mut command = format!("knf matrix {}", root.display());
-    for (group, choice) in pins {
-        command.push_str(&format!(" {group}={choice}"));
-    }
-    let pin_command = free.iter().fold(command.clone(), |mut acc, group| {
-        acc.push_str(&format!(" {}={}", group.id, group.alternatives[0].name));
-        acc
-    });
-
-    AmbiguousGroups {
-        entries: free
-            .iter()
-            .map(|g| (g.id.clone(), g.choice_names()))
-            .collect(),
-        pin_command,
-        out_dir_command: format!("write every combination — {command} --out-dir out/"),
+    let dir = root.display();
+    let first = leaves.first().map(String::as_str).unwrap_or("*");
+    AmbiguousPaths {
+        glob_command: format!("knf matrix {dir} --glob '{first}'"),
+        out_dir_command: format!("write every path — knf matrix {dir} --out-dir out/"),
+        leaves,
     }
 }
 
-/// The files a tuple merges, shallow -> deep.
-fn layers<'a>(groups: &'a [Group], tuple: &'a [usize]) -> impl Iterator<Item = &'a PathBuf> {
-    groups
-        .iter()
-        .zip(tuple)
-        .map(|(group, &choice)| &group.alternatives[choice].path)
+fn files_in(dir: &Dir) -> impl Iterator<Item = &File> {
+    fn walk<'a>(dir: &'a Dir, out: &mut Vec<&'a File>) {
+        out.extend(&dir.files);
+        for child in &dir.dirs {
+            walk(child, out);
+        }
+    }
+    let mut files = Vec::new();
+    walk(dir, &mut files);
+    files.into_iter()
 }
 
-fn parse_all(groups: &[Group]) -> anyhow::Result<HashMap<PathBuf, Source>> {
+fn parse_all(tree: &Dir) -> anyhow::Result<HashMap<PathBuf, Source>> {
     let mut parsed = HashMap::new();
-    for alternative in groups.iter().flat_map(|g| &g.alternatives) {
-        if parsed.contains_key(&alternative.path) {
+    for file in files_in(tree) {
+        if parsed.contains_key(&file.path) {
             continue;
         }
-        let format = Format::from_path(&alternative.path).expect("discovery filtered by extension");
-        let text = std::fs::read_to_string(&alternative.path)
-            .with_context(|| format!("reading `{}`", alternative.path.display()))?;
-        let name = SourceName::File(alternative.path.clone());
+        let format = Format::from_path(&file.path).expect("discovery filtered by extension");
+        let text = std::fs::read_to_string(&file.path)
+            .with_context(|| format!("reading `{}`", file.path.display()))?;
+        let name = SourceName::File(file.path.clone());
         let value = format::parse(format, &text, &name)?;
-        parsed.insert(alternative.path.clone(), (name, value));
+        parsed.insert(file.path.clone(), (name, value));
     }
     Ok(parsed)
 }
 
 /// `--list` — the answer to "why did this value win" until `--explain` exists.
-fn list(
-    groups: &[Group],
-    tuples: &[Vec<usize>],
-    root_id: &str,
-    separator: &str,
-) -> anyhow::Result<()> {
+fn list(root: &Path, lineages: &[Vec<&File>]) -> anyhow::Result<()> {
     let mut out = String::new();
-    for tuple in tuples {
-        let pairs = knf_fs::name_pairs(groups, tuple);
-        let name = if pairs.is_empty() {
-            root_id.to_string()
-        } else {
-            pairs.join(separator)
-        };
-        out.push_str(&name);
+    for lineage in lineages {
+        let leaf = lineage.last().expect("paths are non-empty");
+        out.push_str(&knf_fs::rel(root, leaf));
         out.push('\n');
-        for path in layers(groups, tuple) {
-            out.push_str(&format!("  {}\n", path.display()));
+        for file in lineage {
+            out.push_str(&format!("  {}\n", file.path.display()));
         }
     }
     crate::write_stdout(&out)
 }
 
 /// Where one document goes under `--out-dir`.
-///
-/// Note that a nested group id (`db/tuning`) keeps its slash, so even in flat
-/// mode such a tuple lands one directory down. Preserving the id verbatim is
-/// what keeps the name reversible; inventing an escape character would not.
-fn output_path(
-    out_dir: &Path,
-    pairs: &[String],
-    root_id: &str,
-    args: &MatrixArgs,
-    format: Format,
-) -> PathBuf {
-    let mut path = out_dir.to_path_buf();
-    let stem = match pairs.split_last() {
-        // Nothing to name it after: every group was a singleton.
-        None => root_id.to_string(),
-        // `--tree` nests all but the last pair as directories — greppable per
-        // group, and survives large matrices without 200-character filenames.
-        Some((last, leading)) if args.tree => {
-            path.extend(leading);
-            last.clone()
-        }
-        Some(_) => pairs.join(&args.separator),
+fn output_path(out_dir: &Path, leaf_rel: &str, separator: Option<&str>, format: Format) -> PathBuf {
+    let stem = match leaf_rel.rsplit_once('.') {
+        Some((stem, _)) => stem,
+        None => leaf_rel,
     };
+    let stem = match separator {
+        Some(sep) => stem.replace('/', sep),
+        None => stem.to_string(),
+    };
+    let mut path = out_dir.to_path_buf();
     path.push(format!("{stem}.{}", format.extension()));
     path
 }
@@ -258,21 +234,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn split_args_is_syntactic() {
-        let (dir, pins) = split_args(&[
-            "config/".to_string(),
-            "db=postgres".to_string(),
-            "server=nginx".to_string(),
-        ])
-        .unwrap();
-        assert_eq!(dir, PathBuf::from("config/"));
-        assert_eq!(pins["db"], "postgres");
-        assert_eq!(pins["server"], "nginx");
+    fn dir_prefix_prunes_sibling_branches() {
+        assert!(dir_prefix_may_match("foo/**", "foo"));
+        assert!(dir_prefix_may_match("foo/leaf.toml", "foo"));
+        assert!(!dir_prefix_may_match("foo/**", "bar"));
+        assert!(!dir_prefix_may_match("foo/leaf.toml", "bar"));
+        assert!(dir_prefix_may_match("**/*.toml", "bar"));
+        assert!(dir_prefix_may_match("db/postgres.toml", "db"));
+        assert!(!dir_prefix_may_match("db/postgres.toml", "server"));
     }
 
     #[test]
-    fn split_args_rejects_zero_or_two_directories() {
-        assert!(split_args(&["db=x".to_string()]).is_err());
-        assert!(split_args(&["a".to_string(), "b".to_string()]).is_err());
+    fn output_path_preserves_slashes_by_default() {
+        let path = output_path(Path::new("out"), "db/mysql.toml", None, Format::Toml);
+        assert_eq!(path, PathBuf::from("out/db/mysql.toml"));
+    }
+
+    #[test]
+    fn output_path_flattens_with_separator() {
+        let path = output_path(Path::new("out"), "db/mysql.toml", Some(","), Format::Json);
+        assert_eq!(path, PathBuf::from("out/db,mysql.json"));
     }
 }

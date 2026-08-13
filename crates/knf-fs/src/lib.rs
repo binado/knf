@@ -1,18 +1,15 @@
-//! Filesystem-as-config-groups: discover mutually exclusive alternatives in a
-//! directory tree and enumerate their cartesian product.
+//! Filesystem-as-config-paths: discover a directory tree and enumerate
+//! saturating DFS paths from the root to each leaf file.
 //!
-//! A directory is a group and the files within it are mutually exclusive
-//! alternatives; each subdirectory is an independent axis that also applies.
-//! Grouping is keyed by parent directory, not by depth: pooling by depth would
-//! turn sibling `db/` and `server/` into one four-way axis, yielding configs
-//! with a db *or* a server and never both.
+//! Eligible files in a directory are mutually exclusive layers for that node.
+//! Subdirectories are alternative branches, not independent axes: a path picks
+//! one child and continues. Files on the way down always apply.
 //!
 //! This crate is deliberately tiny and dependency-free beyond `thiserror` and
 //! `walkdir`. It knows nothing about config formats, merging, or the command
-//! line; which files count as eligible is the caller's decision, passed as a
-//! predicate to [`discover`].
+//! line; which files count as eligible, and which entries a glob keeps, are
+//! the caller's predicates, passed to [`discover`].
 
-use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 // --- errors ---------------------------------------------------------------
@@ -26,18 +23,8 @@ pub enum DiscoverError {
     #[error("`{path}` contains no eligible files\nhelp: add a file, or remove the directory")]
     EmptyDirectory { path: PathBuf },
 
-    #[error(
-        "group `{id}` is defined twice: the root directory's basename collides with a subdirectory\n\
-         help: rename the subdirectory, or point `knf matrix` at a differently named root"
-    )]
-    DuplicateGroup { id: String },
-
-    #[error("resolving `{path}`")]
-    Canonicalize {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
+    #[error("no paths matched\nhelp: loosen --glob, or raise --max-depth")]
+    NoMatch,
 
     #[error("reading `{path}`")]
     ReadEntry {
@@ -47,257 +34,228 @@ pub enum DiscoverError {
     },
 }
 
-/// Failures from [`resolve_axes`].
+/// Failures from [`paths_capped`].
 #[derive(Debug, thiserror::Error)]
-pub enum ResolveError {
-    #[error("no group `{group_id}`\nhelp: groups are {known}")]
-    UnknownGroup { group_id: String, known: String },
-
-    #[error(
-        "group `{group_id}` has no alternative `{choice}`\nhelp: alternatives are {alternatives}"
-    )]
-    UnknownChoice {
-        group_id: String,
-        choice: String,
-        alternatives: String,
-    },
+pub enum PathsError {
+    #[error("this tree describes more than {max} documents")]
+    TooMany { max: usize },
 }
 
-// --- the group model ------------------------------------------------------
+// --- the tree -------------------------------------------------------------
 
-/// A set of mutually exclusive alternatives.
+/// An eligible file. Naming is the path relative to the discover root, not a
+/// stem — stems existed for `GROUP=CHOICE` pins, which this crate no longer
+/// has.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Group {
-    /// Path relative to the root, `/`-separated (`db`, `db/tuning`). The root
-    /// directory's own file group is named by the root's basename.
-    pub id: String,
-    /// Never empty: a directory with no eligible files contributes no group.
-    pub alternatives: Vec<Alternative>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Alternative {
-    /// File stem — the name used in pins and in output filenames.
-    pub name: String,
+pub struct File {
     pub path: PathBuf,
 }
 
-impl Group {
-    /// Whether this group has exactly one alternative and thus auto-selects.
-    pub fn is_singleton(&self) -> bool {
-        self.alternatives.len() == 1
-    }
+/// A directory that was entered during discovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dir {
+    pub path: PathBuf,
+    /// Eligible files, byte-wise sorted. Mutually exclusive at this node.
+    pub files: Vec<File>,
+    /// Children that were entered, sorted by name.
+    pub dirs: Vec<Dir>,
+}
 
-    /// The `GROUP=CHOICE` strings for each alternative, in stored order.
-    pub fn choice_names(&self) -> Vec<String> {
-        self.alternatives
-            .iter()
-            .map(|a| format!("{}={}", self.id, a.name))
-            .collect()
-    }
+/// Whether [`discover`]'s `include` predicate is looking at a file or a
+/// directory. Directories decide descent; files decide leaf emission only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    File,
+    Dir,
+}
+
+/// Path of `file` relative to `root`, `/`-separated.
+pub fn rel(root: &Path, file: &File) -> String {
+    file.path
+        .strip_prefix(root)
+        .unwrap_or(&file.path)
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 // --- enumeration (pure: no filesystem) ------------------------------------
 
-/// Resolves pins into the list of selectable alternatives per group.
-///
-/// A pinned group offers exactly its pin, a singleton auto-selects, and any
-/// other group becomes a free axis offering all of its alternatives.
-pub fn resolve_axes(
-    groups: &[Group],
-    pins: &BTreeMap<String, String>,
-) -> Result<Vec<Vec<usize>>, ResolveError> {
-    for group_id in pins.keys() {
-        if !groups.iter().any(|g| &g.id == group_id) {
-            let known: Vec<&str> = groups.iter().map(|g| g.id.as_str()).collect();
-            return Err(ResolveError::UnknownGroup {
-                group_id: group_id.clone(),
-                known: known.join(", "),
-            });
+/// Saturating DFS: files at a node are OR; children are OR (a sum), not AND
+/// (a product). Each inner vec is shallow → deep; the last file is the leaf.
+pub fn paths(root: &Dir) -> Vec<Vec<&File>> {
+    let mut out = Vec::new();
+    walk_paths(root, Vec::new(), &mut out, None).expect("uncapped walk cannot overflow");
+    out
+}
+
+/// Like [`paths`], but errors instead of returning more than `max` paths, so a
+/// pathological tree hits `--max` rather than writing half a tree.
+pub fn paths_capped(root: &Dir, max: usize) -> Result<Vec<Vec<&File>>, PathsError> {
+    let mut out = Vec::new();
+    walk_paths(root, Vec::new(), &mut out, Some(max))?;
+    Ok(out)
+}
+
+fn walk_paths<'a>(
+    dir: &'a Dir,
+    prefix: Vec<&'a File>,
+    out: &mut Vec<Vec<&'a File>>,
+    max: Option<usize>,
+) -> Result<(), PathsError> {
+    // No files here means "pass through" — a directory that only contributes
+    // via a subdirectory still saturates to the leaf below.
+    let choices: Vec<Option<&File>> = if dir.files.is_empty() {
+        vec![None]
+    } else {
+        dir.files.iter().map(Some).collect()
+    };
+
+    if dir.dirs.is_empty() {
+        for file in choices {
+            let mut next = prefix.clone();
+            if let Some(file) = file {
+                next.push(file);
+            }
+            if next.is_empty() {
+                continue;
+            }
+            push_path(out, next, max)?;
+        }
+        return Ok(());
+    }
+
+    for file in choices {
+        let mut next = prefix.clone();
+        if let Some(file) = file {
+            next.push(file);
+        }
+        for child in &dir.dirs {
+            walk_paths(child, next.clone(), out, max)?;
         }
     }
-
-    groups
-        .iter()
-        .map(|group| match pins.get(&group.id) {
-            Some(choice) => {
-                let index = group
-                    .alternatives
-                    .iter()
-                    .position(|a| &a.name == choice)
-                    .ok_or_else(|| ResolveError::UnknownChoice {
-                        group_id: group.id.clone(),
-                        choice: choice.clone(),
-                        alternatives: group.choice_names().join(", "),
-                    })?;
-                Ok(vec![index])
-            }
-            None if group.is_singleton() => Ok(vec![0]),
-            None => Ok((0..group.alternatives.len()).collect()),
-        })
-        .collect()
+    Ok(())
 }
 
-/// Cartesian product over the axes, the last axis varying fastest.
-///
-/// Everything-pinned is the degenerate case — every axis has length one and the
-/// product is a single tuple — so there is no separate `pick` code path.
-pub fn enumerate(axes: &[Vec<usize>]) -> Vec<Vec<usize>> {
-    let mut tuples = vec![Vec::with_capacity(axes.len())];
-    for axis in axes {
-        tuples = tuples
-            .into_iter()
-            .flat_map(|prefix| {
-                axis.iter().map(move |&choice| {
-                    let mut next = prefix.clone();
-                    next.push(choice);
-                    next
-                })
-            })
-            .collect();
+fn push_path<'a>(
+    out: &mut Vec<Vec<&'a File>>,
+    path: Vec<&'a File>,
+    max: Option<usize>,
+) -> Result<(), PathsError> {
+    if let Some(max) = max
+        && out.len() >= max
+    {
+        return Err(PathsError::TooMany { max });
     }
-    tuples
-}
-
-/// How many documents the axes describe. `None` on overflow, so a pathological
-/// tree hits `--max` rather than wrapping.
-pub fn product_size(axes: &[Vec<usize>]) -> Option<usize> {
-    axes.iter()
-        .try_fold(1usize, |acc, axis| acc.checked_mul(axis.len()))
-}
-
-/// The `GROUP=CHOICE` pairs identifying a tuple, sorted by group id.
-///
-/// Only groups with more than one alternative appear — pinned ones included,
-/// since dropping them would make filenames irreversible, and singletons
-/// excluded, since they carry no information. Sorting by group id means a tuple
-/// always yields the same name regardless of walk order.
-pub fn name_pairs(groups: &[Group], tuple: &[usize]) -> Vec<String> {
-    let mut pairs: Vec<(&str, String)> = groups
-        .iter()
-        .zip(tuple)
-        .filter(|(group, _)| !group.is_singleton())
-        .map(|(group, &choice)| {
-            (
-                group.id.as_str(),
-                format!("{}={}", group.id, group.alternatives[choice].name),
-            )
-        })
-        .collect();
-    pairs.sort_by(|a, b| a.0.cmp(b.0));
-    pairs.into_iter().map(|(_, pair)| pair).collect()
+    out.push(path);
+    Ok(())
 }
 
 // --- discovery ------------------------------------------------------------
 
-/// Walks the tree, collecting groups in DFS order.
+/// Walks the tree, building a [`Dir`] pruned by `include` and `max_depth`.
 ///
-/// A directory's own file group comes before its subdirectories and
-/// subdirectories are visited in sorted order, so a tuple's layers come out
-/// shallow -> deep and §2.1's left-fold rule is unchanged.
+/// `is_eligible` decides which files count — the crate itself has no notion of
+/// file format, so the caller passes the predicate (e.g. "has a `.json` or
+/// `.toml` extension").
 ///
-/// `is_eligible` decides which files count as alternatives — the crate itself
-/// has no notion of file format, so the caller passes the predicate (e.g.
-/// "has a `.json` or `.toml` extension").
+/// `include` gets a `/`-separated path relative to `root`. [`EntryKind::Dir`]
+/// decides whether to enter a subdirectory; [`EntryKind::File`] decides whether
+/// a file is emitted as a leaf. Ancestor files are always kept.
+///
+/// `max_depth` is counted from the root (depth 0). `Some(0)` keeps only the
+/// root's files; `None` saturates.
 pub fn discover(
     root: &Path,
     is_eligible: impl Fn(&Path) -> bool,
-) -> Result<Vec<Group>, DiscoverError> {
+    include: impl Fn(&str, EntryKind) -> bool,
+    max_depth: Option<usize>,
+) -> Result<Dir, DiscoverError> {
     if !root.is_dir() {
         return Err(DiscoverError::NotADirectory {
             path: root.to_path_buf(),
         });
     }
-    let root_id = root_group_id(root)?;
-    let mut groups = Vec::new();
-    walk(root, "", &root_id, &mut groups, &is_eligible)?;
-
-    // A root basename colliding with a subdirectory name would make pins
-    // ambiguous. Cheap to detect here, so detect it here rather than producing
-    // a confusing pin error later.
-    let mut seen: HashSet<&str> = HashSet::new();
-    for group in &groups {
-        if !seen.insert(group.id.as_str()) {
-            return Err(DiscoverError::DuplicateGroup {
-                id: group.id.clone(),
-            });
-        }
+    match walk(root, "", 0, max_depth, &is_eligible, &include)? {
+        Some(dir) => Ok(dir),
+        None => Err(DiscoverError::NoMatch),
     }
-    Ok(groups)
 }
 
-/// The root's own file group is named by its basename, so `knf matrix config/`
-/// gives group `config`.
-pub fn root_group_id(root: &Path) -> Result<String, DiscoverError> {
-    if let Some(name) = root.file_name().and_then(|n| n.to_str()) {
-        return Ok(name.to_string());
-    }
-    // `.` and `..` have no file_name of their own.
-    let canonical = root
-        .canonicalize()
-        .map_err(|source| DiscoverError::Canonicalize {
-            path: root.to_path_buf(),
-            source,
-        })?;
-    Ok(canonical
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("root")
-        .to_string())
-}
-
-/// Returns whether `dir` contributed anything — either eligible files of its
-/// own or a subdirectory that did.
-///
-/// `rel` is the path from the root, `/`-separated and empty at the root itself.
-/// It, not the parent's group id, is what names a group: the root's file group
-/// is named by the root basename, so threading ids would make the root's
-/// subdirectory `db` come out as `config/db` and stop matching the pin `db`.
-fn walk<F: Fn(&Path) -> bool>(
+/// Returns `None` when glob or depth eliminated every contribution, so the
+/// parent can omit this child rather than treating it as [`EmptyDirectory`].
+fn walk<E, I>(
     dir: &Path,
     rel: &str,
-    root_id: &str,
-    groups: &mut Vec<Group>,
-    is_eligible: &F,
-) -> Result<bool, DiscoverError> {
-    let (files, subdirs) = read_entries(dir, is_eligible)?;
+    depth: usize,
+    max_depth: Option<usize>,
+    is_eligible: &E,
+    include: &I,
+) -> Result<Option<Dir>, DiscoverError>
+where
+    E: Fn(&Path) -> bool,
+    I: Fn(&str, EntryKind) -> bool,
+{
+    let (all_files, subdirs) = read_entries(dir, is_eligible)?;
+    let at_limit = max_depth.is_some_and(|max| depth >= max);
 
-    let mut contributed = false;
-    // The directory's own file group comes before its subdirectories, so the
-    // DFS order of `groups` is also the shallow -> deep layer order.
-    if !files.is_empty() {
-        contributed = true;
-        groups.push(Group {
-            id: if rel.is_empty() {
-                root_id.to_string()
+    let mut children = Vec::new();
+    if !at_limit {
+        for (name, path) in &subdirs {
+            let child_rel = if rel.is_empty() {
+                name.clone()
             } else {
-                rel.to_string()
-            },
-            alternatives: files,
-        });
-    }
-
-    for (name, path) in subdirs {
-        let child_rel = if rel.is_empty() {
-            name
-        } else {
-            format!("{rel}/{name}")
-        };
-        if walk(&path, &child_rel, root_id, groups, is_eligible)? {
-            contributed = true;
+                format!("{rel}/{name}")
+            };
+            if !include(&child_rel, EntryKind::Dir) {
+                continue;
+            }
+            if let Some(child) = walk(path, &child_rel, depth + 1, max_depth, is_eligible, include)?
+            {
+                children.push(child);
+            }
         }
     }
 
-    if !contributed {
-        return Err(DiscoverError::EmptyDirectory {
-            path: dir.to_path_buf(),
-        });
+    let files = if children.is_empty() {
+        all_files
+            .into_iter()
+            .filter(|file| include(&file_rel(rel, file), EntryKind::File))
+            .collect()
+    } else {
+        all_files
+    };
+
+    if files.is_empty() && children.is_empty() {
+        if subdirs.is_empty() {
+            return Err(DiscoverError::EmptyDirectory {
+                path: dir.to_path_buf(),
+            });
+        }
+        // Children exist on disk but glob or max_depth cut them, and this
+        // node has no (matching) files of its own.
+        return Ok(None);
     }
-    Ok(contributed)
+
+    Ok(Some(Dir {
+        path: dir.to_path_buf(),
+        files,
+        dirs: children,
+    }))
+}
+
+fn file_rel(dir_rel: &str, file: &File) -> String {
+    let name = file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if dir_rel.is_empty() {
+        name.to_string()
+    } else {
+        format!("{dir_rel}/{name}")
+    }
 }
 
 /// Eligible files and subdirectories of one directory, each sorted byte-wise.
-type Entries = (Vec<Alternative>, Vec<(String, PathBuf)>);
+type Entries = (Vec<File>, Vec<(String, PathBuf)>);
 
 fn read_entries<F: Fn(&Path) -> bool>(
     dir: &Path,
@@ -320,7 +278,7 @@ fn read_entries<F: Fn(&Path) -> bool>(
             source,
         })?;
         let Some(name) = entry.file_name().to_str() else {
-            continue; // A non-UTF-8 name could never be a group or choice name.
+            continue; // A non-UTF-8 name could never be a glob or output path.
         };
         // Skip dotfiles and dot-directories, so `knf matrix .` does not walk
         // `.git`. Symlinks are skipped rather than followed, which keeps the
@@ -334,14 +292,7 @@ fn read_entries<F: Fn(&Path) -> bool>(
         } else if is_eligible(entry.path()) {
             // Everything else is skipped silently — a README.md in a config
             // directory is not an error.
-            let stem = entry
-                .path()
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or(name)
-                .to_string();
-            files.push(Alternative {
-                name: stem,
+            files.push(File {
                 path: entry.path().to_path_buf(),
             });
         }
@@ -349,7 +300,7 @@ fn read_entries<F: Fn(&Path) -> bool>(
 
     // Byte-wise lexicographic, explicitly not natural/numeric sort — the latter
     // looks friendly right up until someone has both `2-x` and `10-x`.
-    files.sort_by(|a, b| a.name.cmp(&b.name));
+    files.sort_by(|a, b| a.path.file_name().cmp(&b.path.file_name()));
     subdirs.sort_by(|a, b| a.0.cmp(&b.0));
     Ok((files, subdirs))
 }
@@ -358,12 +309,22 @@ fn read_entries<F: Fn(&Path) -> bool>(
 mod tests {
     use super::*;
 
-    /// 2^64 documents must reach `--max` rather than wrapping to a small
-    /// number and quietly writing something.
+    fn file(path: &str) -> File {
+        File {
+            path: PathBuf::from(path),
+        }
+    }
+
+    /// `--max` must fire rather than returning a huge list.
     #[test]
-    fn product_overflow_is_not_a_panic() {
-        assert_eq!(product_size(&[]), Some(1));
-        assert_eq!(product_size(&[vec![0, 1], vec![0, 1, 2]]), Some(6));
-        assert_eq!(product_size(&vec![vec![0usize, 1]; 64]), None);
+    fn paths_capped_errors_instead_of_returning_too_many() {
+        let dir = Dir {
+            path: PathBuf::from("root"),
+            files: vec![file("a.toml"), file("b.toml"), file("c.toml")],
+            dirs: vec![],
+        };
+        assert_eq!(paths(&dir).len(), 3);
+        let err = paths_capped(&dir, 2).unwrap_err();
+        assert!(matches!(err, PathsError::TooMany { max: 2 }));
     }
 }

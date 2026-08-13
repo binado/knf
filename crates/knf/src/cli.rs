@@ -36,20 +36,18 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Enumerate a directory tree of config groups
+    /// Enumerate saturating paths through a config directory tree
     #[command(long_about = "\
-Enumerate a directory tree of config groups.
+Enumerate saturating paths through a config directory tree.
 
-A directory is a group and the files within it are mutually exclusive
-alternatives; each subdirectory is an independent axis that also applies. A
-group with one file auto-selects; a group with several must be pinned, or every
-combination is produced.
+Files in a directory are mutually exclusive layers for that node.
+Subdirectories are alternative branches: a path picks one child and continues,
+and files on the way down always apply. One matching path goes to stdout;
+several need --out-dir or --list.
 
   knf matrix config/ --list                    # show what would be produced
-  knf matrix config/ db=postgres server=nginx  # one document to stdout
-  knf matrix config/ --out-dir out/            # every combination, one file each
-
-An argument containing `=` is a group pin; anything else is the directory.
+  knf matrix config/ --glob 'db/postgres.toml' # one document to stdout
+  knf matrix config/ --out-dir out/            # every path, one file each
 
 Known limitation: a file named exactly `matrix` in the current directory is
 parsed as this subcommand. Write `./matrix` to disambiguate.")]
@@ -125,35 +123,37 @@ Dotted paths nest, so keys containing a literal dot are not addressable from
 
 #[derive(Args, Debug)]
 pub struct MatrixArgs {
-    /// The directory, plus any GROUP=CHOICE pins, in any order
-    #[arg(value_name = "DIR|GROUP=CHOICE")]
-    pub args: Vec<String>,
+    /// The config directory to walk
+    #[arg(value_name = "DIR")]
+    pub dir: PathBuf,
 
-    /// Write one file per combination here instead of to stdout
+    /// Keep only leaves whose path relative to DIR matches this glob.
+    /// Repeatable; multiple --glob form a union. Ancestor files still apply.
+    #[arg(long, value_name = "PATTERN")]
+    pub glob: Vec<String>,
+
+    /// Do not walk deeper than this. Root is depth 0.
+    #[arg(long, value_name = "N")]
+    pub max_depth: Option<usize>,
+
+    /// Write one file per path here instead of to stdout
     #[arg(
         long,
         value_name = "DIR",
         long_help = "\
-Write one file per combination here instead of to stdout.
+Write one file per path here instead of to stdout.
 
-Filenames are the GROUP=CHOICE pairs joined by --separator, sorted by group so a
-combination always gets the same name. Groups with a single alternative are
-omitted; pinned groups are kept, which is what makes the name reversible.
-
-A nested group keeps the slash in its id, so `db/tuning=small` puts the file one
-directory down even without --tree. Use --tree for nested trees."
+Each file is named after the leaf's path relative to the walked directory,
+with the output-format extension. Nested leaves keep their slashes, so
+db/mysql.toml lands at out/db/mysql.toml. Pass --separator to flatten."
     )]
     pub out_dir: Option<PathBuf>,
 
-    /// Nest output directories instead of using flat filenames
-    #[arg(long)]
-    pub tree: bool,
+    /// Replace `/` in output names with this string, flattening nested leaves
+    #[arg(long, value_name = "SEP")]
+    pub separator: Option<String>,
 
-    /// Joiner between GROUP=CHOICE pairs in filenames
-    #[arg(long, value_name = "SEP", default_value = ",")]
-    pub separator: String,
-
-    /// Print the resolved combinations and write nothing
+    /// Print the resolved paths and write nothing
     #[arg(long)]
     pub list: bool,
 

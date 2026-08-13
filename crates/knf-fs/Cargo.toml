@@ -1,11 +1,11 @@
 [package]
 name = "knf-fs"
-description = "Filesystem-as-config-groups: directory-tree discovery and cartesian enumeration"
+description = "Filesystem-as-config-paths: directory-tree discovery and saturating DFS enumeration"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-# Unpublished for the same reason as knf-merge: the group/tuple model is the
+# Unpublished for the same reason as knf-merge: the path model is the
 # least settled part of the design, and a crate boundary on crates.io is a
 # semver promise.
 publish = false

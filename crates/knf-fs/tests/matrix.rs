@@ -1,10 +1,9 @@
-//! Tuple enumeration as a plain table test (no filesystem), plus filesystem
+//! Path enumeration as a plain table test (no filesystem), plus filesystem
 //! fixtures for walker behaviour only.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use knf_fs::{Alternative, Group, discover, enumerate, name_pairs, resolve_axes};
+use knf_fs::{Dir, EntryKind, File, discover, paths, paths_capped, rel};
 use tempfile::TempDir;
 
 /// The eligibility predicate used by the filesystem fixtures: `.json` or
@@ -15,137 +14,120 @@ fn is_json_or_toml(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("json") || e.eq_ignore_ascii_case("toml"))
 }
 
+fn include_all(_: &str, _: EntryKind) -> bool {
+    true
+}
+
+fn file(path: &str) -> File {
+    File {
+        path: PathBuf::from(path),
+    }
+}
+
+fn dir(path: &str, files: Vec<File>, dirs: Vec<Dir>) -> Dir {
+    Dir {
+        path: PathBuf::from(path),
+        files,
+        dirs,
+    }
+}
+
+fn path_names(tree: &Dir) -> Vec<Vec<String>> {
+    paths(tree)
+        .into_iter()
+        .map(|p| {
+            p.into_iter()
+                .map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned())
+                .collect()
+        })
+        .collect()
+}
+
 // --- pure enumeration -----------------------------------------------------
 
-fn group(id: &str, alternatives: &[&str]) -> Group {
-    Group {
-        id: id.to_string(),
-        alternatives: alternatives
-            .iter()
-            .map(|name| Alternative {
-                name: (*name).to_string(),
-                path: PathBuf::from(format!("{id}/{name}.toml")),
-            })
-            .collect(),
-    }
-}
-
-struct Case {
-    name: &'static str,
-    /// Groups in DFS order, as the walker would produce them.
-    groups: &'static [(&'static str, &'static [&'static str])],
-    pins: &'static [(&'static str, &'static str)],
-    /// One entry per resolved tuple, rendered as its output name.
-    expect: &'static [&'static str],
-}
-
-#[rustfmt::skip]
-const CASES: &[Case] = &[
-    Case {
-        name: "singletons auto-select and name nothing",
-        groups: &[("config", &["base"]), ("db", &["only"])],
-        pins: &[],
-        expect: &[""],
-    },
-    // The §4.3 worked example: 2 x 2 = 4 documents.
-    Case {
-        name: "two free axes cross-product",
-        groups: &[("config", &["base"]), ("db", &["mysql", "postgres"]), ("server", &["apache", "nginx"])],
-        pins: &[],
-        expect: &[
-            "db=mysql,server=apache",
-            "db=mysql,server=nginx",
-            "db=postgres,server=apache",
-            "db=postgres,server=nginx",
-        ],
-    },
-    Case {
-        name: "pinning one axis leaves the other free",
-        groups: &[("config", &["base"]), ("db", &["mysql", "postgres"]), ("server", &["apache", "nginx"])],
-        pins: &[("db", "postgres")],
-        // The pinned group stays in the name: dropping it would make two
-        // different tuples share a filename once a second axis is pinned too.
-        expect: &["db=postgres,server=apache", "db=postgres,server=nginx"],
-    },
-    Case {
-        name: "everything pinned is one document",
-        groups: &[("config", &["base"]), ("db", &["mysql", "postgres"]), ("server", &["apache", "nginx"])],
-        pins: &[("db", "postgres"), ("server", "nginx")],
-        expect: &["db=postgres,server=nginx"],
-    },
-    Case {
-        name: "nested groups are independent axes",
-        groups: &[("config", &["base"]), ("db", &["mysql", "postgres"]), ("db/tuning", &["large", "small"])],
-        expect: &[
-            "db=mysql,db/tuning=large",
-            "db=mysql,db/tuning=small",
-            "db=postgres,db/tuning=large",
-            "db=postgres,db/tuning=small",
-        ],
-        pins: &[],
-    },
-    Case {
-        name: "three axes",
-        groups: &[("a", &["1", "2"]), ("b", &["1", "2"]), ("c", &["1", "2"])],
-        pins: &[],
-        expect: &[
-            "a=1,b=1,c=1", "a=1,b=1,c=2", "a=1,b=2,c=1", "a=1,b=2,c=2",
-            "a=2,b=1,c=1", "a=2,b=1,c=2", "a=2,b=2,c=1", "a=2,b=2,c=2",
-        ],
-    },
-    Case {
-        name: "pinning a singleton is allowed",
-        groups: &[("config", &["base"])],
-        pins: &[("config", "base")],
-        expect: &[""],
-    },
-];
-
 #[test]
-fn enumeration_table() {
-    for case in CASES {
-        let groups: Vec<Group> = case
-            .groups
-            .iter()
-            .map(|(id, alts)| group(id, alts))
-            .collect();
-        let pins: BTreeMap<String, String> = case
-            .pins
-            .iter()
-            .map(|(g, c)| ((*g).to_string(), (*c).to_string()))
-            .collect();
-
-        let axes = resolve_axes(&groups, &pins).unwrap_or_else(|e| panic!("{}: {e}", case.name));
-        let names: Vec<String> = enumerate(&axes)
-            .iter()
-            .map(|tuple| name_pairs(&groups, tuple).join(","))
-            .collect();
-
-        assert_eq!(names, case.expect, "case `{}`", case.name);
-    }
-}
-
-/// Names are sorted by group id, so walk order cannot change a filename.
-#[test]
-fn names_are_independent_of_group_order() {
-    let forward = vec![group("db", &["mysql", "postgres"]), group("app", &["web"])];
-    let reversed = vec![forward[1].clone(), forward[0].clone()];
+fn sibling_dirs_are_alternative_branches() {
+    // root/base + foo/{leaf,leaf-two} + bar/{leaf-three,leaf-four}
+    let tree = dir(
+        "root",
+        vec![file("root/base.toml")],
+        vec![
+            dir(
+                "root/bar",
+                vec![
+                    file("root/bar/leaf-four.toml"),
+                    file("root/bar/leaf-three.toml"),
+                ],
+                vec![],
+            ),
+            dir(
+                "root/foo",
+                vec![file("root/foo/leaf-two.toml"), file("root/foo/leaf.toml")],
+                vec![],
+            ),
+        ],
+    );
     assert_eq!(
-        name_pairs(&forward, &[1, 0]),
-        name_pairs(&reversed, &[0, 1])
+        path_names(&tree),
+        vec![
+            vec!["base.toml", "leaf-four.toml"],
+            vec!["base.toml", "leaf-three.toml"],
+            vec!["base.toml", "leaf-two.toml"],
+            vec!["base.toml", "leaf.toml"],
+        ]
     );
 }
 
 #[test]
-fn unknown_pins_are_rejected() {
-    let groups = vec![group("db", &["mysql", "postgres"])];
-    let pin = |g: &str, c: &str| BTreeMap::from([(g.to_string(), c.to_string())]);
+fn nested_single_child_still_crosses_files_along_the_path() {
+    let tree = dir(
+        "config",
+        vec![file("config/base.toml")],
+        vec![dir(
+            "config/db",
+            vec![
+                file("config/db/mysql.toml"),
+                file("config/db/postgres.toml"),
+            ],
+            vec![dir(
+                "config/db/tuning",
+                vec![
+                    file("config/db/tuning/large.toml"),
+                    file("config/db/tuning/small.toml"),
+                ],
+                vec![],
+            )],
+        )],
+    );
+    assert_eq!(
+        path_names(&tree),
+        vec![
+            vec!["base.toml", "mysql.toml", "large.toml"],
+            vec!["base.toml", "mysql.toml", "small.toml"],
+            vec!["base.toml", "postgres.toml", "large.toml"],
+            vec!["base.toml", "postgres.toml", "small.toml"],
+        ]
+    );
+}
 
-    let err = resolve_axes(&groups, &pin("cache", "redis")).unwrap_err();
-    assert!(err.to_string().contains("no group `cache`"), "{err}");
+#[test]
+fn singleton_chain_is_one_path() {
+    let tree = dir(
+        "config",
+        vec![file("config/base.toml")],
+        vec![dir("config/db", vec![file("config/db/only.toml")], vec![])],
+    );
+    assert_eq!(path_names(&tree), vec![vec!["base.toml", "only.toml"]]);
+}
 
-    let err = resolve_axes(&groups, &pin("db", "oracle")).unwrap_err();
-    assert!(err.to_string().contains("no alternative `oracle`"), "{err}");
+#[test]
+fn directory_with_no_files_passes_through() {
+    let tree = dir(
+        "outer",
+        vec![],
+        vec![dir("outer/inner", vec![file("outer/inner/x.toml")], vec![])],
+    );
+    assert_eq!(path_names(&tree), vec![vec!["x.toml"]]);
 }
 
 // --- the walker (filesystem fixtures) -------------------------------------
@@ -161,19 +143,46 @@ fn tree(files: &[(&str, &str)]) -> TempDir {
     dir
 }
 
-/// Group ids paired with their alternative names, in discovery order.
-fn shape(root: &Path) -> Vec<(String, Vec<String>)> {
-    discover(root, is_json_or_toml)
-        .expect("discover")
+fn discovered(root: &Path) -> Dir {
+    discover(root, is_json_or_toml, include_all, None).expect("discover")
+}
+
+fn lineages(root: &Path) -> Vec<Vec<String>> {
+    paths(&discovered(root))
         .into_iter()
-        .map(|g| (g.id, g.alternatives.into_iter().map(|a| a.name).collect()))
+        .map(|p| p.into_iter().map(|f| rel(root, f)).collect())
         .collect()
 }
 
-/// The root's file group is named by the root basename; subdirectories by their
-/// path relative to it. A directory's own group precedes its subdirectories.
+fn file_names_at(dir: &Dir) -> Vec<String> {
+    dir.files
+        .iter()
+        .map(|f| f.path.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect()
+}
+
 #[test]
-fn discovery_order_and_ids() {
+fn sibling_branches_from_disk() {
+    let dir = tree(&[
+        ("base.toml", "a=1"),
+        ("foo/leaf.toml", "a=1"),
+        ("foo/leaf-two.toml", "a=1"),
+        ("bar/leaf-three.toml", "a=1"),
+        ("bar/leaf-four.toml", "a=1"),
+    ]);
+    assert_eq!(
+        lineages(dir.path()),
+        vec![
+            vec!["base.toml", "bar/leaf-four.toml"],
+            vec!["base.toml", "bar/leaf-three.toml"],
+            vec!["base.toml", "foo/leaf-two.toml"],
+            vec!["base.toml", "foo/leaf.toml"],
+        ]
+    );
+}
+
+#[test]
+fn nested_tuning_is_on_the_db_path() {
     let dir = tree(&[
         ("config/base.toml", "a=1"),
         ("config/db/mysql.toml", "a=1"),
@@ -181,17 +190,13 @@ fn discovery_order_and_ids() {
         ("config/db/tuning/small.toml", "a=1"),
         ("config/server/nginx.toml", "a=1"),
     ]);
-
+    let root = dir.path().join("config");
     assert_eq!(
-        shape(&dir.path().join("config")),
+        lineages(&root),
         vec![
-            ("config".to_string(), vec!["base".to_string()]),
-            (
-                "db".to_string(),
-                vec!["mysql".to_string(), "postgres".to_string()]
-            ),
-            ("db/tuning".to_string(), vec!["small".to_string()]),
-            ("server".to_string(), vec!["nginx".to_string()]),
+            vec!["base.toml", "db/mysql.toml", "db/tuning/small.toml"],
+            vec!["base.toml", "db/postgres.toml", "db/tuning/small.toml"],
+            vec!["base.toml", "server/nginx.toml"],
         ]
     );
 }
@@ -203,9 +208,7 @@ fn skips_dotfiles_and_dot_directories() {
         (".hidden.toml", "a=1"),
         (".git/config.toml", "a=1"),
     ]);
-    let shape = shape(dir.path());
-    assert_eq!(shape.len(), 1, "{shape:?}");
-    assert_eq!(shape[0].1, vec!["base".to_string()]);
+    assert_eq!(lineages(dir.path()), vec![vec!["base.toml"]]);
 }
 
 /// A README in a config directory is not an error.
@@ -218,17 +221,14 @@ fn skips_files_outside_the_extension_allowlist() {
         ("notes.yaml", "a: 1"),
         ("noextension", "a=1"),
     ]);
-    assert_eq!(
-        shape(dir.path())[0].1,
-        vec!["base".to_string(), "over".to_string()]
-    );
+    assert_eq!(file_names_at(&discovered(dir.path())), vec!["base", "over"]);
 }
 
 #[test]
 fn empty_directory_is_an_error_naming_it() {
     let dir = tree(&[("base.toml", "a=1")]);
     std::fs::create_dir(dir.path().join("empty")).expect("mkdir");
-    let err = discover(dir.path(), is_json_or_toml)
+    let err = discover(dir.path(), is_json_or_toml, include_all, None)
         .unwrap_err()
         .to_string();
     assert!(err.contains("empty"), "{err}");
@@ -239,9 +239,86 @@ fn empty_directory_is_an_error_naming_it() {
 #[test]
 fn a_directory_contributing_only_via_a_subdirectory_is_not_empty() {
     let dir = tree(&[("outer/inner/x.toml", "a=1")]);
+    assert_eq!(lineages(dir.path()), vec![vec!["outer/inner/x.toml"]]);
+}
+
+#[test]
+fn glob_prunes_unused_branches() {
+    let dir = tree(&[
+        ("base.toml", "a=1"),
+        ("foo/leaf.toml", "a=1"),
+        ("foo/leaf-two.toml", "a=1"),
+        ("bar/leaf-three.toml", "a=1"),
+        ("bar/leaf-four.toml", "a=1"),
+    ]);
+    let include = |rel: &str, kind: EntryKind| match kind {
+        EntryKind::Dir => rel == "foo" || rel.starts_with("foo/"),
+        EntryKind::File => rel.starts_with("foo/"),
+    };
+    let tree = discover(dir.path(), is_json_or_toml, include, None).expect("discover");
+    let names: Vec<Vec<String>> = paths(&tree)
+        .into_iter()
+        .map(|p| p.into_iter().map(|f| rel(dir.path(), f)).collect())
+        .collect();
     assert_eq!(
-        shape(dir.path()),
-        vec![("outer/inner".to_string(), vec!["x".to_string()])]
+        names,
+        vec![
+            vec!["base.toml", "foo/leaf-two.toml"],
+            vec!["base.toml", "foo/leaf.toml"],
+        ]
+    );
+}
+
+#[test]
+fn glob_that_matches_nothing_is_no_match() {
+    let dir = tree(&[("base.toml", "a=1"), ("foo/leaf.toml", "a=1")]);
+    let include = |rel: &str, kind: EntryKind| match kind {
+        EntryKind::Dir => false,
+        EntryKind::File => rel.starts_with("missing/"),
+    };
+    let err = discover(dir.path(), is_json_or_toml, include, None)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("no paths matched"), "{err}");
+}
+
+#[test]
+fn max_depth_zero_keeps_only_root_files() {
+    let dir = tree(&[
+        ("base.toml", "a=1"),
+        ("foo/leaf.toml", "a=1"),
+        ("bar/leaf-three.toml", "a=1"),
+    ]);
+    let tree = discover(dir.path(), is_json_or_toml, include_all, Some(0)).expect("discover");
+    assert!(tree.dirs.is_empty(), "{tree:?}");
+    assert_eq!(lineages_of(dir.path(), &tree), vec![vec!["base.toml"]]);
+}
+
+fn lineages_of(root: &Path, tree: &Dir) -> Vec<Vec<String>> {
+    paths(tree)
+        .into_iter()
+        .map(|p| p.into_iter().map(|f| rel(root, f)).collect())
+        .collect()
+}
+
+#[test]
+fn max_depth_one_stops_before_nested_tuning() {
+    let dir = tree(&[
+        ("config/base.toml", "a=1"),
+        ("config/db/mysql.toml", "a=1"),
+        ("config/db/postgres.toml", "a=1"),
+        ("config/db/tuning/small.toml", "a=1"),
+        ("config/server/nginx.toml", "a=1"),
+    ]);
+    let root = dir.path().join("config");
+    let tree = discover(&root, is_json_or_toml, include_all, Some(1)).expect("discover");
+    assert_eq!(
+        lineages_of(&root, &tree),
+        vec![
+            vec!["base.toml", "db/mysql.toml"],
+            vec!["base.toml", "db/postgres.toml"],
+            vec!["base.toml", "server/nginx.toml"],
+        ]
     );
 }
 
@@ -254,10 +331,10 @@ fn symlinks_are_not_followed() {
         std::os::unix::fs::symlink(dir.path().join("real/r.toml"), dir.path().join("l.toml"))
             .expect("link");
     }
-    let shape = shape(dir.path());
-    assert_eq!(shape.len(), 2, "{shape:?}");
-    assert_eq!(shape[0].1, vec!["base".to_string()]);
-    assert_eq!(shape[1].0, "real");
+    assert_eq!(
+        lineages(dir.path()),
+        vec![vec!["base.toml", "real/r.toml"],]
+    );
 }
 
 /// Byte-wise lexicographic, explicitly not natural sort: `10-x` precedes `2-x`.
@@ -270,21 +347,26 @@ fn sorting_is_byte_wise_not_natural() {
         ("a-lower.toml", "a=1"),
     ]);
     assert_eq!(
-        shape(dir.path())[0].1,
-        vec![
-            "10-a".to_string(),
-            "2-b".to_string(),
-            "Z-upper".to_string(),
-            "a-lower".to_string(),
-        ]
+        file_names_at(&discovered(dir.path())),
+        vec!["10-a", "2-b", "Z-upper", "a-lower"]
     );
 }
 
 #[test]
-fn root_basename_colliding_with_a_subdirectory_is_an_error() {
+fn colliding_root_basename_is_just_a_nested_path() {
     let dir = tree(&[("cfg/base.toml", "a=1"), ("cfg/cfg/x.toml", "a=1")]);
-    let err = discover(&dir.path().join("cfg"), is_json_or_toml)
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("defined twice"), "{err}");
+    let root = dir.path().join("cfg");
+    assert_eq!(lineages(&root), vec![vec!["base.toml", "cfg/x.toml"]]);
+}
+
+#[test]
+fn paths_capped_from_disk_hits_max() {
+    let dir = tree(&[
+        ("foo/a.toml", "a=1"),
+        ("foo/b.toml", "a=1"),
+        ("bar/c.toml", "a=1"),
+    ]);
+    let tree = discovered(dir.path());
+    assert!(paths_capped(&tree, 2).is_err());
+    assert_eq!(paths(&tree).len(), 3);
 }
