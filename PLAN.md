@@ -389,22 +389,28 @@ knf/
     │   └── tests/
     │       ├── cases.rs        table tests + insta snapshots
     │       └── props.rs        proptest
+    ├── knf-fs/                publish = false
+    │   ├── Cargo.toml          deps: thiserror, walkdir   ← and nothing else
+    │   ├── src/
+    │   │   └── lib.rs          group model, discovery, tuple enumeration, naming
+    │   └── tests/
+    │       └── matrix.rs       enumeration table tests + walker fixtures
     └── knf/
-        ├── Cargo.toml          deps: knf-merge (path), toml, clap, anyhow, walkdir
+        ├── Cargo.toml          deps: knf-merge (path), knf-fs (path), toml, clap, anyhow
         ├── src/
         │   ├── main.rs         thin: parse args, call lib, map errors to exit codes
         │   ├── lib.rs          pipeline + error type
         │   ├── cli.rs          clap derive structs
         │   ├── format.rs       Format enum, parse, serialize, TOML normalize
         │   ├── set.rs          --set pair → Value
-        │   └── matrix.rs       walker, group discovery, tuple enumeration, naming
+        │   └── matrix.rs       command layer: parse → merge → format → write
         └── tests/
-            ├── matrix.rs
             └── cli.rs
 ```
 
-Rough sizes: `knf-merge` ~100 lines, `format.rs` ~150 (most of it TOML
-normalization), `matrix.rs` ~150, everything else small.
+Rough sizes: `knf-merge` ~100 lines, `knf-fs` ~200, `format.rs` ~150 (most of it
+TOML normalization), `matrix.rs` ~120 (command layer only), everything else
+small.
 
 ### 5.1 Why a separate crate, and why unpublished
 
@@ -451,12 +457,12 @@ it down would drag `toml` into the core.
 
 | Crate | Where | Why |
 | --- | --- | --- |
-| `serde_json` (`preserve_order`) | both | the IR; indexmap-backed maps |
-| `thiserror` | both | typed errors |
+| `serde_json` (`preserve_order`) | knf-merge, knf | the IR; indexmap-backed maps |
+| `thiserror` | knf-merge, knf-fs | typed errors |
 | `toml` | knf | TOML in/out |
 | `clap` (`derive`) | knf | CLI |
 | `anyhow` | knf | error plumbing in `main` |
-| `walkdir` | knf | `matrix` discovery |
+| `walkdir` | knf-fs | `discover` directory traversal |
 
 `preserve_order` must be enabled in the **workspace**, not just one member.
 Cargo unifies features across the graph, so a member enabling it silently
@@ -464,7 +470,7 @@ changes map behaviour for every other member — better to make that explicit
 than to discover it via a key-ordering test failing only under `cargo test
 --workspace`.
 
-Dev: `insta`, `proptest` (knf-merge), `assert_cmd`, `tempfile` (knf).
+Dev: `insta`, `proptest` (knf-merge), `assert_cmd`, `tempfile` (knf, knf-fs).
 
 ### 5.4 Testing shape
 
@@ -513,10 +519,10 @@ Listed so they aren't re-litigated mid-implementation.
 - **Publishing `knf-merge`** — once the options struct stops moving (i.e. once
   `--null-delete` and `--array-strategy` are decided one way or the other) and
   something other than `knf` wants it. See §5.1.
-- **Extracting `matrix.rs`** — if anything here deserves to be a crate on its
-  own merits it is the group/tuple enumeration, since filesystem-as-config-
-  groups has no obvious existing implementation. It is also the least settled
-  design in the document, so same conclusion: internal until the shape stops
-  moving.
+- **Publishing `knf-fs`** — extracted from `matrix.rs` into its own crate (same
+  rationale as `knf-merge`: compiler-enforced separation). Unpublished because
+  the group/tuple model is the least settled design in the document. Flip to
+  `publish = true` once the shape stops moving and something other than `knf`
+  wants it.
 - **Comment preservation** — impossible with a `Value` IR in any language.
   Would be a different tool built on `toml_edit`, single-format only.

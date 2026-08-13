@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 knf-merge.workspace = true
+knf-fs.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true

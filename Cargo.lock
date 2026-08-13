@@ -291,12 +291,22 @@ dependencies = [
  "assert_cmd",
  "clap",
  "insta",
+ "knf-fs",
  "knf-merge",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
  "toml",
+ "walkdir",
+]
+
+[[package]]
+name = "knf-fs"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "thiserror",
  "walkdir",
 ]
 

@@ -4,8 +4,16 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use knf::matrix::{Alternative, Group, discover, enumerate, name_pairs, resolve_axes};
+use knf_fs::{Alternative, Group, discover, enumerate, name_pairs, resolve_axes};
 use tempfile::TempDir;
+
+/// The eligibility predicate used by the filesystem fixtures: `.json` or
+/// `.toml`. This mirrors what `knf matrix` passes — the point of `knf-fs` is
+/// that the crate itself has no opinion about which files count.
+fn is_json_or_toml(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("json") || e.eq_ignore_ascii_case("toml"))
+}
 
 // --- pure enumeration -----------------------------------------------------
 
@@ -155,7 +163,7 @@ fn tree(files: &[(&str, &str)]) -> TempDir {
 
 /// Group ids paired with their alternative names, in discovery order.
 fn shape(root: &Path) -> Vec<(String, Vec<String>)> {
-    discover(root)
+    discover(root, is_json_or_toml)
         .expect("discover")
         .into_iter()
         .map(|g| (g.id, g.alternatives.into_iter().map(|a| a.name).collect()))
@@ -220,9 +228,11 @@ fn skips_files_outside_the_extension_allowlist() {
 fn empty_directory_is_an_error_naming_it() {
     let dir = tree(&[("base.toml", "a=1")]);
     std::fs::create_dir(dir.path().join("empty")).expect("mkdir");
-    let err = discover(dir.path()).unwrap_err().to_string();
+    let err = discover(dir.path(), is_json_or_toml)
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("empty"), "{err}");
-    assert!(err.contains("no .json or .toml files"), "{err}");
+    assert!(err.contains("no eligible files"), "{err}");
 }
 
 /// A directory whose only content is a contributing subdirectory is fine.
@@ -273,6 +283,8 @@ fn sorting_is_byte_wise_not_natural() {
 #[test]
 fn root_basename_colliding_with_a_subdirectory_is_an_error() {
     let dir = tree(&[("cfg/base.toml", "a=1"), ("cfg/cfg/x.toml", "a=1")]);
-    let err = discover(&dir.path().join("cfg")).unwrap_err().to_string();
+    let err = discover(&dir.path().join("cfg"), is_json_or_toml)
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("defined twice"), "{err}");
 }

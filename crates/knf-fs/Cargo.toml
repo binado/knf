@@ -1,0 +1,22 @@
+[package]
+name = "knf-fs"
+description = "Filesystem-as-config-groups: directory-tree discovery and cartesian enumeration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+# Unpublished for the same reason as knf-merge: the group/tuple model is the
+# least settled part of the design, and a crate boundary on crates.io is a
+# semver promise.
+publish = false
+
+# Dependencies are thiserror and walkdir. Nothing else — no anyhow, no clap,
+# no serde, no format logic, no I/O beyond directory traversal. Which files
+# count as eligible is the caller's predicate, not this crate's concern.
+# `cargo tree -p knf-fs --depth 1` is the enforcement.
+[dependencies]
+thiserror.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

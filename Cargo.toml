@@ -26,6 +26,7 @@ toml = { version = "1", features = ["preserve_order"] }
 walkdir = "2"
 
 knf-merge = { path = "crates/knf-merge" }
+knf-fs = { path = "crates/knf-fs" }
 
 [profile.release]
 lto = "thin"
