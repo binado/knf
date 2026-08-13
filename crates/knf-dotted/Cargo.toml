@@ -9,9 +9,21 @@ repository.workspace = true
 # A git/path dependency is enough for other projects in the meantime.
 publish = false
 
-# Dependencies are serde_json, thiserror, and serde. Nothing else — no anyhow,
-# no clap, no I/O. `cargo tree -p knf-dotted --depth 1` is the enforcement.
+# thiserror is always on. serde_json and toml are optional behind `json` / `toml`.
+# No anyhow, no clap, no I/O. `cargo tree -p knf-dotted --depth 1` is the enforcement.
+# The `toml` feature also enables serde_json: FromStr parses the RHS as JSON into
+# toml::Value (null becomes a string).
+[features]
+default = ["json"]
+json = ["dep:serde_json", "dep:serde"]
+toml = ["dep:toml", "dep:serde_json", "dep:serde"]
+
 [dependencies]
-serde_json.workspace = true
+serde_json = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 thiserror.workspace = true
-serde.workspace = true
+
+[dev-dependencies]
+serde_json = { workspace = true }
+toml = { workspace = true }

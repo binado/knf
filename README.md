@@ -81,7 +81,7 @@ is parsed as JSON with a string fallback:
 port=8080       → 8080     (number)
 debug=true      → true     (bool)
 name=foo        → "foo"    (JSON parse fails → string)
-proxy=null      → null     (a value, not a delete)
+proxy=null      → null     (JSON) / "null" (TOML has no null)
 tags=["a","b"]  → array
 tags=[a,b]      → "[a,b]"  (JSON parse fails → string)
 ```

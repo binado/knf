@@ -56,7 +56,7 @@ The value is parsed as JSON, falling back to a string when that fails:
   port=8080       -> 8080     (number)
   debug=true      -> true     (bool)
   name=foo        -> \"foo\"    (not valid JSON, so a string)
-  proxy=null      -> null     (a value, not a delete)
+  proxy=null      -> null     (JSON) or \"null\" (TOML has no null)
   tags=[\"a\",\"b\"]  -> array
   tags=[a,b]      -> \"[a,b]\"  (not valid JSON, so a string)
 
@@ -66,7 +66,7 @@ by quoting into JSON: --set version='\"1.0\"'.
 Dotted paths nest, so keys containing a literal dot are not addressable from
 --set; use a file."
     )]
-    pub set: Vec<PathLeaf>,
+    pub set: Vec<PathLeaf<String>>,
 
     /// Output format; required when inputs are mixed
     #[arg(short = 'f', long, value_name = "FORMAT")]

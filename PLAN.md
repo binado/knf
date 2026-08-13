@@ -165,9 +165,9 @@ pre-check is the only way to surface the impossibility. Provenance is a post-hoc
 lookup over the JSON layers that went into the merge (including `--set`), not
 threaded through the merge.
 
-`--set` stays JSON. On a native TOML merge the `--set` layers are folded among
-themselves first, then converted as one document, so `--set a=null --set a=1`
-does not fail a TOML emit.
+`--set` RHS is parsed as JSON into the output type. On a native TOML merge the
+path wraps as tables; JSON null becomes the string `"null"` because TOML has no
+null. `--set a=null --set a=1` therefore succeeds without a JSON fold.
 
 Not listed above, because it turned out not to exist: `ValueAfterTable`, which
 0.5-era `toml` raised when a scalar followed a table in the same table. Modern
@@ -231,7 +231,7 @@ RHS is parsed as JSON with a string fallback:
 port=8080       → 8080     (number)
 debug=true      → true     (bool)
 name=foo        → "foo"    (JSON parse fails → string)
-proxy=null      → null     (a value — see §2.1)
+proxy=null      → null     (JSON) / "null" (TOML has no null)
 tags=["a","b"]  → array
 tags=[a,b]      → "[a,b]"  (parse fails → string)
 ```
@@ -279,9 +279,11 @@ knf/
     │       ├── props.rs        proptest
     │       └── toml.rs         TOML smoke tests
     ├── knf-dotted/                publish = false
-    │   ├── Cargo.toml          deps: serde_json, thiserror, serde
+    │   ├── Cargo.toml          deps: thiserror; serde_json/toml/serde optional
     │   └── src/
-    │       └── lib.rs          PathLeaf, ParseError
+    │       ├── lib.rs          PathLeaf<V>, ParseError
+    │       ├── json.rs         FromStr/From for serde_json::Value  [feature = json]
+    │       └── toml.rs         FromStr/From for toml::Value        [feature = toml]
     └── knf/
         ├── Cargo.toml          deps: knf-merge, knf-dotted, toml, clap, anyhow
         ├── src/
@@ -346,16 +348,19 @@ Parse/emit stay in `knf` (`format.rs`); JSON↔TOML conversion stays in
 
 Same idea as §5.2: compiler-enforced separation, not distribution.
 
-- **Dependencies are `serde_json`, `thiserror`, and `serde`. Nothing else.** No
-  `anyhow`, no `clap`, no I/O. Serde is required because `PathLeaf` (de)serializes
-  as a string.
+- **`thiserror` is the only hard dependency.** `serde_json`, `toml`, and `serde`
+  are optional behind `json` / `toml` features. No `anyhow`, no `clap`, no I/O.
+  The `toml` feature also enables `serde_json`: `FromStr` parses the RHS as JSON
+  into `toml::Value` (null becomes a string).
 - **Errors are a local `ParseError` enum**, never `anyhow::Error`, and never
   mention `--set`. Provenance is the caller's job.
-- **Two conversions, not one.** `From<PathLeaf> for serde_json::Value` expands
-  to a nested object. Serde (de)serializes the expression string. Mixing those
-  would make `serde_json::to_value` surprise every caller.
-- **`Display` is canonical** (dotted path, `=`, compact JSON of the leaf). It
-  does not store or echo the original spelling.
+- **Two conversions, not one.** `From<PathLeaf<V>> for V` expands to a nested
+  object (JSON or TOML). Serde (de)serializes the expression string. Mixing those
+  would make `serde_json::to_value` surprise every caller. `FromStr` exists for
+  `PathLeaf<String>` (raw RHS), `PathLeaf<serde_json::Value>`, and
+  `PathLeaf<toml::Value>`.
+- **`Display` is canonical** for typed leaves (dotted path, `=`, compact JSON).
+  `PathLeaf<String>` displays the raw RHS.
 
 ### 5.4 Dependencies
 
@@ -363,8 +368,8 @@ Same idea as §5.2: compiler-enforced separation, not distribution.
 | --- | --- | --- |
 | `serde_json` (`preserve_order`) | knf-merge, knf-dotted, knf | JSON value type; indexmap-backed maps |
 | `thiserror` | knf-merge, knf-dotted | typed errors |
-| `serde` | knf-dotted | string (de)serialize for `PathLeaf` |
-| `toml` | knf | TOML in/out |
+| `serde` | knf-dotted | string (de)serialize for typed `PathLeaf` |
+| `toml` (`preserve_order`) | knf-merge, knf-dotted, knf | TOML value type; indexmap-backed maps |
 | `clap` (`derive`) | knf | CLI |
 | `anyhow` | knf | error plumbing in `main` |
 

@@ -177,6 +177,23 @@ fn set_layers_apply_last() {
     );
 }
 
+/// `--set a=null --set a=1` on TOML: null is the string "null", then overwritten.
+#[test]
+fn set_null_overwritten_before_toml_emit() {
+    let dir = tree(&[("f.toml", "a = 0\n")]);
+    assert_eq!(
+        run(&dir, &["f.toml", "--set", "a=null", "--set", "a=1"]),
+        "a = 1\n"
+    );
+}
+
+/// TOML has no null, so `--set a=null` is the string `"null"`.
+#[test]
+fn set_null_on_toml_is_the_string_null() {
+    let dir = tree(&[("f.toml", "a = 0\n")]);
+    assert_eq!(run(&dir, &["f.toml", "--set", "a=null"]), "a = \"null\"\n");
+}
+
 // --- exit codes -----------------------------------------------------------
 
 /// clap's own usage errors exit 2; everything else exits 1.

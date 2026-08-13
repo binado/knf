@@ -1,36 +1,39 @@
 //! A leaf value addressed by a dotted path.
 //!
-//! [`PathLeaf`] parses `key.path=value`, serde-(de)serializes as that
-//! expression string, and expands to a nested [`serde_json::Value`].
+//! [`PathLeaf`] parses `key.path=value`. The path is always typed; the leaf
+//! type `V` is chosen by the caller. [`FromStr`] for [`PathLeaf<String>`] keeps
+//! the RHS raw. The `json` and `toml` features parse that RHS as JSON into
+//! [`serde_json::Value`] or [`toml::Value`] (string fallback; TOML has no null,
+//! so `proxy=null` is the string `"null"`).
 //!
 //! This crate knows nothing about files or the command line; provenance
 //! (`--set`, filenames) is the caller's job.
 //!
 //! Two conversions, deliberately not the same:
 //!
-//! - [`From<PathLeaf> for Value`](From) expands to a nested object:
-//!   `server.port=8080` → `{"server":{"port":8080}}`.
+//! - [`From<PathLeaf<V>>`](From) expands to a nested object:
+//!   `server.port=8080` → `{"server":{"port":8080}}` (JSON or TOML).
 //! - Serde (de)serializes the expression string: `"server.port=8080"`.
 //!   [`serde_json::to_value`] therefore yields a JSON string, not the object.
 
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::{Map, Value};
-
 /// A leaf value addressed by a dotted path.
 ///
-/// The RHS of `key.path=value` is parsed as JSON, falling back to a string
-/// when that fails: `port=8080` is a number, `name=foo` is a string.
+/// [`FromStr`] for [`PathLeaf<String>`] splits `key.path=value` and stores the
+/// RHS as-is. Typed [`FromStr`] impls (behind `json` / `toml`) parse that RHS
+/// as JSON, falling back to a string: `port=8080` is a number, `name=foo` is a
+/// string. TOML has no null, so `proxy=null` becomes the string `"null"`.
 ///
-/// `Display` is canonical — dotted path, `=`, compact JSON of the leaf — so
-/// `name=foo` displays as `name="foo"`. [`FromStr`] ∘ [`Display`] preserves
-/// path and leaf, not the original spelling.
+/// `Display` of a typed leaf is canonical — dotted path, `=`, compact JSON of
+/// the leaf — so `name=foo` displays as `name="foo"`. [`FromStr`] ∘ [`Display`]
+/// preserves path and leaf, not the original spelling. [`PathLeaf<String>`]
+/// displays the raw RHS.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PathLeaf {
+pub struct PathLeaf<V> {
     path: Vec<String>,
-    leaf: Value,
+    leaf: V,
 }
 
 /// Why a `key.path=value` expression (or a programmatic constructor) was rejected.
@@ -53,9 +56,9 @@ pub enum ParseError {
     },
 }
 
-impl PathLeaf {
+impl<V> PathLeaf<V> {
     /// Build from path segments and a leaf. Rejects an empty path or any empty segment.
-    pub fn new(path: Vec<String>, leaf: Value) -> Result<Self, ParseError> {
+    pub fn new(path: Vec<String>, leaf: V) -> Result<Self, ParseError> {
         if path.is_empty() {
             return Err(ParseError::EmptyKey);
         }
@@ -73,112 +76,81 @@ impl PathLeaf {
     }
 
     /// The RHS value, not yet wrapped in nested objects.
-    pub fn leaf(&self) -> &Value {
+    pub fn leaf(&self) -> &V {
         &self.leaf
+    }
+
+    /// Replace the leaf, keeping the path. The path is already valid, so this
+    /// cannot fail the way [`new`](Self::new) can.
+    pub fn map_leaf<T>(self, f: impl FnOnce(V) -> T) -> PathLeaf<T> {
+        PathLeaf {
+            path: self.path,
+            leaf: f(self.leaf),
+        }
+    }
+
+    /// [`map_leaf`](Self::map_leaf) when the conversion can fail.
+    pub fn try_map_leaf<T, E>(self, f: impl FnOnce(V) -> Result<T, E>) -> Result<PathLeaf<T>, E> {
+        Ok(PathLeaf {
+            path: self.path,
+            leaf: f(self.leaf)?,
+        })
+    }
+
+    #[cfg(any(feature = "json", feature = "toml"))]
+    fn into_nested(self, nest: impl Fn(String, V) -> V) -> V {
+        self.path
+            .into_iter()
+            .rev()
+            .fold(self.leaf, |acc, key| nest(key, acc))
     }
 }
 
-impl FromStr for PathLeaf {
+impl FromStr for PathLeaf<String> {
     type Err = ParseError;
 
     fn from_str(expr: &str) -> Result<Self, Self::Err> {
-        // Split on the first `=` so the RHS may contain more of them.
-        let Some((lhs, rhs)) = expr.split_once('=') else {
-            return Err(ParseError::MissingEquals);
-        };
-        if lhs.is_empty() {
-            return Err(ParseError::EmptyKey);
-        }
-        let path: Vec<String> = lhs.split('.').map(str::to_string).collect();
-        // JSON first, string as the fallback. `port=8080` is a number, `name=foo`
-        // is a string because it is not valid JSON, and `tags=[a,b]` is the string
-        // "[a,b]" for the same reason.
-        let leaf = serde_json::from_str(rhs).unwrap_or_else(|_| Value::String(rhs.to_string()));
-        Self::new(path, leaf)
+        let (path, rhs) = split_expr(expr)?;
+        Self::new(path, rhs.to_string())
     }
 }
 
-impl fmt::Display for PathLeaf {
+impl fmt::Display for PathLeaf<String> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // `Value` always serializes; a failure here is a serde_json bug.
-        let rhs = serde_json::to_string(&self.leaf).expect("Value is always serializable");
-        write!(f, "{}={rhs}", self.path.join("."))
+        write!(f, "{}={}", self.path.join("."), self.leaf)
     }
 }
 
-impl From<PathLeaf> for Value {
-    fn from(path_leaf: PathLeaf) -> Self {
-        path_leaf
-            .path
-            .into_iter()
-            .rev()
-            .fold(path_leaf.leaf, |acc, key| {
-                let mut obj = Map::new();
-                obj.insert(key, acc);
-                Value::Object(obj)
-            })
+fn split_expr(expr: &str) -> Result<(Vec<String>, &str), ParseError> {
+    // Split on the first `=` so the RHS may contain more of them.
+    let Some((lhs, rhs)) = expr.split_once('=') else {
+        return Err(ParseError::MissingEquals);
+    };
+    if lhs.is_empty() {
+        return Err(ParseError::EmptyKey);
     }
+    Ok((lhs.split('.').map(str::to_string).collect(), rhs))
 }
 
-impl Serialize for PathLeaf {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.to_string())
-    }
+#[cfg(any(feature = "json", feature = "toml"))]
+fn write_canonical<V: serde::Serialize>(
+    path: &[String],
+    leaf: &V,
+    f: &mut fmt::Formatter<'_>,
+) -> fmt::Result {
+    // A failure here is a serde_json bug: the leaf already deserialized.
+    let rhs = serde_json::to_string(leaf).expect("leaf is always serializable");
+    write!(f, "{}={rhs}", path.join("."))
 }
 
-impl<'de> Deserialize<'de> for PathLeaf {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        s.parse().map_err(serde::de::Error::custom)
-    }
-}
+#[cfg(feature = "json")]
+mod json;
+#[cfg(feature = "toml")]
+mod toml;
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::*;
-
-    fn parse(expr: &str) -> PathLeaf {
-        expr.parse().expect("valid PathLeaf")
-    }
-
-    fn nested(expr: &str) -> Value {
-        Value::from(parse(expr))
-    }
-
-    /// The §4.2 table, verbatim.
-    #[test]
-    fn value_typing() {
-        assert_eq!(nested("port=8080"), json!({"port": 8080}));
-        assert_eq!(nested("debug=true"), json!({"debug": true}));
-        assert_eq!(nested("name=foo"), json!({"name": "foo"}));
-        assert_eq!(nested("proxy=null"), json!({"proxy": null}));
-        assert_eq!(nested(r#"tags=["a","b"]"#), json!({"tags": ["a", "b"]}));
-        assert_eq!(nested("tags=[a,b]"), json!({"tags": "[a,b]"}));
-    }
-
-    /// The sharp edge: a bare `1.0` is a number.
-    #[test]
-    fn numeric_looking_strings() {
-        assert_eq!(nested("version=1.0"), json!({"version": 1.0}));
-        assert_eq!(nested(r#"version="1.0""#), json!({"version": "1.0"}));
-    }
-
-    #[test]
-    fn dotted_paths_nest() {
-        assert_eq!(
-            nested("server.port=8080"),
-            json!({"server": {"port": 8080}})
-        );
-        assert_eq!(nested("a.b.c=1"), json!({"a": {"b": {"c": 1}}}));
-    }
-
-    #[test]
-    fn splits_on_the_first_equals_only() {
-        assert_eq!(nested("q=a=b"), json!({"q": "a=b"}));
-        assert_eq!(nested("q="), json!({"q": ""}));
-    }
 
     #[test]
     fn rejects_malformed_expressions() {
@@ -189,72 +161,40 @@ mod tests {
             (".a=1", ParseError::EmptySegment { key: ".a".into() }),
             ("a.=1", ParseError::EmptySegment { key: "a.".into() }),
         ] {
-            assert_eq!(bad.parse::<PathLeaf>().unwrap_err(), want, "{bad}");
+            assert_eq!(bad.parse::<PathLeaf<String>>().unwrap_err(), want, "{bad}");
         }
     }
 
     #[test]
     fn new_rejects_empty_path_and_empty_segments() {
         assert_eq!(
-            PathLeaf::new(vec![], json!(1)).unwrap_err(),
+            PathLeaf::<String>::new(vec![], "1".into()).unwrap_err(),
             ParseError::EmptyKey
         );
         assert_eq!(
-            PathLeaf::new(vec!["".into()], json!(1)).unwrap_err(),
+            PathLeaf::<String>::new(vec!["".into()], "1".into()).unwrap_err(),
             ParseError::EmptySegment { key: "".into() }
         );
         assert_eq!(
-            PathLeaf::new(vec!["a".into(), "".into()], json!(1)).unwrap_err(),
+            PathLeaf::<String>::new(vec!["a".into(), "".into()], "1".into()).unwrap_err(),
             ParseError::EmptySegment { key: "a.".into() }
         );
     }
 
     #[test]
-    fn display_is_canonical() {
-        assert_eq!(parse("name=foo").to_string(), r#"name="foo""#);
-        assert_eq!(parse("port=8080").to_string(), "port=8080");
-        assert_eq!(parse("q=").to_string(), r#"q="""#);
-        assert_eq!(parse("q=a=b").to_string(), r#"q="a=b""#);
-        assert_eq!(parse("server.port=8080").to_string(), "server.port=8080");
+    fn raw_fromstr_keeps_the_rhs_unparsed() {
+        let path_leaf: PathLeaf<String> = "port=8080".parse().unwrap();
+        assert_eq!(path_leaf.path(), ["port"]);
+        assert_eq!(path_leaf.leaf(), "8080");
+        assert_eq!(path_leaf.to_string(), "port=8080");
     }
 
     #[test]
-    fn fromstr_display_preserves_path_and_leaf() {
-        for expr in [
-            "port=8080",
-            "name=foo",
-            r#"name="foo""#,
-            "debug=true",
-            "proxy=null",
-            r#"tags=["a","b"]"#,
-            "q=",
-            "q=a=b",
-            "server.port=8080",
-        ] {
-            let parsed = parse(expr);
-            let round = parsed.to_string().parse::<PathLeaf>().unwrap();
-            assert_eq!(round.path(), parsed.path(), "{expr}");
-            assert_eq!(round.leaf(), parsed.leaf(), "{expr}");
-        }
-    }
-
-    #[test]
-    fn serde_is_the_expression_string_not_the_object() {
-        let path_leaf = parse("port=8080");
-        assert_eq!(
-            serde_json::to_value(&path_leaf).unwrap(),
-            json!("port=8080")
-        );
-        assert_eq!(Value::from(path_leaf.clone()), json!({"port": 8080}));
-
-        let path_leaf = parse("name=foo");
-        assert_eq!(
-            serde_json::to_value(&path_leaf).unwrap(),
-            json!(r#"name="foo""#)
-        );
-
-        let back: PathLeaf = serde_json::from_value(json!("server.port=8080")).unwrap();
-        assert_eq!(back.path(), ["server", "port"]);
-        assert_eq!(back.leaf(), &json!(8080));
+    fn map_leaf_preserves_the_path() {
+        let path_leaf = PathLeaf::new(vec!["a".into()], "xy".to_string())
+            .unwrap()
+            .map_leaf(|s| s.len());
+        assert_eq!(path_leaf.path(), ["a"]);
+        assert_eq!(*path_leaf.leaf(), 2);
     }
 }
