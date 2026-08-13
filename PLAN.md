@@ -16,21 +16,28 @@ It exists because the alternatives (`yq ea '. as $i ireduce ({}; . * $i)'`,
 `jq -s 'reduce ...'`) require non-obvious incantations for what is a common,
 simple operation. `knf <files>` should need no explanation.
 
-JSON and TOML layers can be mixed freely, because everything is parsed into
-one in-memory representation.
+JSON and TOML layers can be mixed freely. Each format parses into its native
+value type; conversion is explicit and only runs when a layer's type is not
+the output format.
 
 ---
 
 ## 2. Core model
 
-All formats deserialize directly into `serde_json::Value`. Serde is
-format-agnostic on both sides, so no conversion layer is needed:
+Each format deserializes into its native value type (`serde_json::Value` or
+`toml::Value`), wrapped in a local newtype so conversion traits can sit on it:
 
 ```rust
-let v: serde_json::Value = toml::from_str(&s)?;   // works as-is
+struct Json(serde_json::Value);
+struct Toml(toml::Value);
+
+impl From<Toml> for Json { /* datetime → string */ }
+impl TryFrom<Json> for Toml { /* null → error */ }
 ```
 
-Merging is a left fold over the layers, seeded with an empty object.
+Merge is a left fold over the layers, seeded with an empty object, generic over
+a `MergeValue` trait. Homogeneous inputs merge natively. JSON↔TOML conversion
+fires only at the type boundary — never as a hidden IR.
 
 ### 2.1 Merge semantics
 
@@ -127,48 +134,38 @@ changes the output encoding. `--format`/`-f` selects explicitly.
 Pretty-printed by default so `knf a.json b.json > merged.json` produces a
 reviewable diff. `--compact` to opt out.
 
-### 3.2 TOML-specific handling
+### 3.2 JSON↔TOML conversion
 
-Two known artefacts. The rule for which to fix and which to surface:
+Two known mismatches. The rule for which to fix and which to surface:
 
-> **User-data impossibility → surface it. Tool-representation artefact → fix it
-> before the user sees it.**
+> **User-data impossibility → surface it. Type-boundary artefact → convert it
+> explicitly, and only when the types actually differ.**
 
 | Issue | Kind | Action |
 | --- | --- | --- |
-| Datetimes deserialize as `{"$__toml_private_datetime": "..."}` | artefact — silently produces garbage JSON | convert at **emit** time only |
-| Null present when emitting TOML | genuine impossibility in user data | **error**, from a pre-check |
+| TOML datetime has no JSON equivalent | type mismatch | `From<Toml> for Json`: datetime → string |
+| JSON null has no TOML equivalent | genuine impossibility in user data | `TryFrom<Json> for Toml`: **error** |
 
-**Datetimes.** Parsing is unavoidable and needs no fix: `toml`'s deserializer
-calls `visit_map(DatetimeDeserializer::new(v))` under `deserialize_any`, so
-TOML → `serde_json::Value` yields the sentinel map. The sentinel then flows
-through the merge as an ordinary object, which is correct by construction — one
-key, so last-wins does the right thing.
+Homogeneous TOML (including `--set` on TOML files) never crosses the boundary:
+merge runs on `toml::Value`, so datetimes stay first-class scalars. Homogeneous
+JSON never sees a datetime.
 
-It cannot be converted back by re-inserting the sentinel key, because the
-serializer detects a datetime by **struct name** (`toml_datetime::ser::is_datetime`
-on the name passed to `serialize_struct`), and a `serde_json::Map` always
-serialises through `serialize_map`. So emission wraps the tree in a
-`TomlValue<'a>(&'a Value)` that recognises the sentinel shape and delegates to
-`Datetime::serialize`, whose own impl uses the magic struct name. That wrapper is
-what makes TOML → TOML lossless. JSON output takes a cheaper route: a pre-pass
-replacing sentinels with their plain string.
+**Datetimes.** `From<Toml> for Json` turns a datetime into a plain string. That
+is also what `-f json` prints. The cost of an honest conversion: `knf a.toml
+b.json -f toml` emits a datetime that came from TOML as a quoted string, because
+the mixed merge has to pass through JSON (so a null that is later overwritten
+does not false-positive). Native TOML → TOML does not take this path.
 
-`$__toml_private_datetime` is `pub(crate)` in `toml_datetime` 1.x, so the literal
-is hardcoded.
+**Nulls.** `TryFrom<Json> for Toml` walks the JSON tree for null paths before
+converting. serde's own message ("unsupported None value") has no key path, and
+`toml`'s map serializer *skips* `None` entries rather than failing — so a
+pre-check is the only way to surface the impossibility. Provenance is a post-hoc
+lookup over the JSON layers that went into the merge (including `--set`), not
+threaded through the merge.
 
-**Nulls.** The null case needs no flag and no silent dropping. It only triggers
-when nulls survive into the final tree *and* the output is TOML — a narrow
-corner. Letting serde surface it is not an option: `toml`'s map serializer
-*catches* `UnsupportedNone` from a value and skips the key, which is how `Option`
-struct fields work, so relying on the serializer would silently drop nulls rather
-than fail. And serde's message ("unsupported None value") has no key path anyway,
-leaving the user to bisect a merged tree by hand.
-
-So: **pre-check.** Walk the merged tree for null paths before serialising, then
-look each path up in the already-parsed input `Value`s and report the last file
-containing it. Deterministic, independent of error text, and a post-hoc lookup
-over data still in memory — no provenance threading through the merge.
+`--set` stays JSON. On a native TOML merge the `--set` layers are folded among
+themselves first, then converted as one document, so `--set a=null --set a=1`
+does not fail a TOML emit.
 
 Not listed above, because it turned out not to exist: `ValueAfterTable`, which
 0.5-era `toml` raised when a scalar followed a table in the same table. Modern
@@ -270,10 +267,10 @@ knf/
     ├── knf-merge/              publish = false
     │   ├── Cargo.toml          deps: serde_json, thiserror   ← and nothing else
     │   ├── src/
-    │   │   ├── lib.rs          merge, merge_all, MergeError
+    │   │   ├── lib.rs          MergeValue, merge, merge_all, MergeError
     │   │   └── strict.rs       type-conflict detection
     │   └── tests/
-    │       ├── cases.rs        table tests + insta snapshots
+    │       ├── cases.rs        table tests
     │       └── props.rs        proptest
     └── knf/
         ├── Cargo.toml          deps: knf-merge (path), toml, clap, anyhow
@@ -281,14 +278,15 @@ knf/
         │   ├── main.rs         thin: parse args, call lib, map errors to exit codes
         │   ├── lib.rs          pipeline + error type
         │   ├── cli.rs          clap derive structs
-        │   ├── format.rs       Format enum, parse, serialize, TOML normalize
-        │   └── set.rs          --set pair → Value
+        │   ├── format.rs       Format enum, parse, emit
+        │   ├── value.rs        Json/Toml newtypes, From/TryFrom
+        │   └── set.rs          --set pair → Json
         └── tests/
             └── cli.rs
 ```
 
-Rough sizes: `knf-merge` ~100 lines, `format.rs` ~150 (most of it TOML
-normalization), everything else small.
+Rough sizes: `knf-merge` ~150 lines, `value.rs` holds the conversion, everything
+else small.
 
 ### 5.1 Why a separate crate, and why unpublished
 
@@ -322,20 +320,22 @@ These are what make the separation real rather than cosmetic. Enforced by
 - **Conflicts carry a key path (`Vec<String>`) and nothing else.** No
   filenames, no file indices, no layer numbers. Provenance is the caller's job,
   which is already how the null-in-TOML error works (§3.2: post-hoc lookup over
-  the parsed inputs, not threaded through the merge).
+  the JSON layers, not threaded through the merge).
 - **Strict mode is a parameter, not a build feature.** Cargo features are
   additive and unify across a dependency graph; a `strict` feature would be a
   correctness hazard the moment a second consumer exists.
+- **The algorithm is generic over `MergeValue`.** `serde_json::Value` is the
+  built-in impl so tests stay process-free. TOML's impl lives in `knf` on the
+  `Toml` newtype — pulling `toml` into this crate would break the two-dep rule.
 
-Everything format-specific stays in `knf/format.rs` — the TOML datetime and
-`ValueAfterTable` handling of §3.2 is serialization, not merging, and pulling
-it down would drag `toml` into the core.
+Everything format-specific stays in `knf` — parse/emit in `format.rs`, JSON↔TOML
+conversion in `value.rs`.
 
 ### 5.3 Dependencies
 
 | Crate | Where | Why |
 | --- | --- | --- |
-| `serde_json` (`preserve_order`) | knf-merge, knf | the IR; indexmap-backed maps |
+| `serde_json` (`preserve_order`) | knf-merge, knf | JSON value type; indexmap-backed maps |
 | `thiserror` | knf-merge | typed errors |
 | `toml` | knf | TOML in/out |
 | `clap` (`derive`) | knf | CLI |
@@ -364,8 +364,8 @@ In `knf-merge`:
 
 In `knf`:
 
-- **Round-trip tests per format**, which is where the TOML datetime and
-  ordering artefacts of §3.2 get caught. These belong here, not in the core.
+- **Round-trip tests per format**, which is where native TOML datetimes and
+  the JSON↔TOML conversion of §3.2 get caught. These belong here, not in the core.
 - **`assert_cmd`** reserved for genuinely CLI-level behaviour: exit codes,
   stdin, the directory-rejected error text, the null-in-TOML error text.
 

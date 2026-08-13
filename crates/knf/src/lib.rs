@@ -3,41 +3,129 @@
 pub mod cli;
 pub mod format;
 pub mod set;
+pub mod value;
 
 use std::io::{Read, Write};
 use std::path::Path;
 
 use anyhow::{Context, bail};
-use knf_merge::{MergeOptions, merge_all};
+use knf_merge::{MergeOptions, merge, merge_all};
 
 use cli::Cli;
-use format::{Format, Source, SourceName};
+use format::{Format, SourceName};
+use value::{Document, Json, Toml};
 
 /// The positional that means "read stdin".
 const STDIN: &str = "-";
 
 /// `knf <files...>` — merge layers left to right, print one document.
 pub fn run(cli: Cli) -> anyhow::Result<()> {
-    let mut sources: Vec<Source> = Vec::new();
+    let mut files: Vec<(SourceName, Document)> = Vec::new();
     let mut input_formats: Vec<Format> = Vec::new();
 
     for path in &cli.files {
         let (name, format, text) = read_input(path, cli.input_format)?;
-        let value = format::parse(format, &text, &name)?;
+        let doc = format::parse(format, &text, &name)?;
         input_formats.push(format);
-        sources.push((name, value));
+        files.push((name, doc));
     }
 
-    // --set layers are terminal: appended after every file, folded through the
-    // same merge, so --strict applies to them too.
+    // --set layers are terminal: appended after every file. Folded among
+    // themselves first so `--set a=null --set a=1` can convert to TOML as one
+    // document (the null does not survive).
+    let mut set_layers: Vec<(SourceName, Json)> = Vec::new();
     for expr in &cli.set {
-        sources.push((SourceName::Set(expr.clone()), set::parse(expr)?));
+        set_layers.push((SourceName::Set(expr.clone()), Json(set::parse(expr)?)));
     }
 
     let out_format = resolve_output_format(cli.format, &input_formats)?;
-    let merged = merge_all(sources.iter().map(|(_, v)| v.clone()), &merge_options(&cli))?;
-    let text = format::emit(out_format, merged, !cli.compact, &sources)?;
+    let opts = merge_options(&cli);
+    let merged = merge_layers(files, set_layers, out_format, &opts)?;
+    let text = format::emit(merged, !cli.compact)?;
     write_stdout(&text)
+}
+
+/// Merge in the native type of `out` whenever every file already has that type.
+/// Otherwise convert foreign layers into JSON, merge, and convert once at the end.
+fn merge_layers(
+    files: Vec<(SourceName, Document)>,
+    set_layers: Vec<(SourceName, Json)>,
+    out: Format,
+    opts: &MergeOptions,
+) -> anyhow::Result<Document> {
+    let all_files_toml = !files.is_empty()
+        && files
+            .iter()
+            .all(|(_, doc)| matches!(doc, Document::Toml(_)));
+
+    if all_files_toml {
+        return merge_native_toml(files, set_layers, out, opts);
+    }
+
+    merge_via_json(files, set_layers, out, opts)
+}
+
+fn merge_native_toml(
+    files: Vec<(SourceName, Document)>,
+    set_layers: Vec<(SourceName, Json)>,
+    out: Format,
+    opts: &MergeOptions,
+) -> anyhow::Result<Document> {
+    let file_layers = files.into_iter().map(|(_, doc)| match doc {
+        Document::Toml(t) => t,
+        Document::Json(_) => unreachable!("filtered to TOML files"),
+    });
+    let acc = merge_all(file_layers, opts)?;
+    match out {
+        Format::Toml => {
+            let mut acc = acc;
+            if !set_layers.is_empty() {
+                let folded = merge_all(set_layers.iter().map(|(_, v)| v.clone()), opts)?;
+                let set_toml = Toml::try_from(folded).map_err(|e| e.with_origins(&set_layers))?;
+                merge(&mut acc, set_toml, opts)?;
+            }
+            Ok(Document::Toml(acc))
+        }
+        Format::Json => {
+            let mut json = Json::from(acc);
+            for (_, set) in set_layers {
+                merge(&mut json, set, opts)?;
+            }
+            Ok(Document::Json(json))
+        }
+    }
+}
+
+fn merge_via_json(
+    files: Vec<(SourceName, Document)>,
+    set_layers: Vec<(SourceName, Json)>,
+    out: Format,
+    opts: &MergeOptions,
+) -> anyhow::Result<Document> {
+    let mut json_layers = Vec::new();
+    let mut json_sources: Vec<(SourceName, Json)> = Vec::new();
+    for (name, doc) in files {
+        match doc {
+            Document::Json(j) => {
+                json_sources.push((name, j.clone()));
+                json_layers.push(j);
+            }
+            Document::Toml(t) => json_layers.push(Json::from(t)),
+        }
+    }
+    for (name, j) in set_layers {
+        json_sources.push((name, j.clone()));
+        json_layers.push(j);
+    }
+
+    let merged = merge_all(json_layers, opts)?;
+    match out {
+        Format::Json => Ok(Document::Json(merged)),
+        Format::Toml => {
+            let toml = Toml::try_from(merged).map_err(|e| e.with_origins(&json_sources))?;
+            Ok(Document::Toml(toml))
+        }
+    }
 }
 
 /// Reads one positional, resolving its format.

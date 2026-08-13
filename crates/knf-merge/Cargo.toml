@@ -1,6 +1,6 @@
 [package]
 name = "knf-merge"
-description = "Layered merge over serde_json::Value"
+description = "Layered merge over JSON-like value trees"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

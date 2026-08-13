@@ -12,8 +12,8 @@ It exists because the alternatives (`yq ea '. as $i ireduce ({}; . * $i)'`,
 `jq -s 'reduce ...'`) require non-obvious incantations for what is a common,
 simple operation. `knf <files>` should need no explanation.
 
-JSON and TOML layers mix freely, because everything is parsed into one
-in-memory representation.
+JSON and TOML layers mix freely. Each format parses into its native value type;
+conversion runs only when a layer's type is not the output format.
 
 ## Install
 
@@ -57,7 +57,11 @@ Output is the inputs' format when they agree; when they don't, `-f` is required
 rather than guessed, so reordering arguments can never silently change the
 encoding. Pretty-printed by default; `--compact` opts out.
 
-TOML cannot represent null, so emitting a document containing one is an error
+A TOML datetime becomes a JSON string under `-f json`, and also when a TOML
+file is mixed with a JSON file and emitted back as TOML. Homogeneous TOML
+(including `--set` on TOML files) keeps datetimes unquoted.
+
+TOML cannot represent null, so converting a document containing one is an error
 that names the paths and the file each came from:
 
 ```

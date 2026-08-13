@@ -292,7 +292,6 @@ dependencies = [
  "clap",
  "insta",
  "knf-merge",
- "serde",
  "serde_json",
  "tempfile",
  "toml",

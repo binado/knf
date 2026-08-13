@@ -55,9 +55,8 @@ name = \"svc\"
 date = 1979-05-27T07:32:00Z
 ";
 
-/// The correction to the design: `toml` deserializes a datetime into a sentinel
-/// map and re-serializes it only from a struct name, so TOML -> TOML is lossless
-/// only because emission unwraps the sentinel back into a real `Datetime`.
+/// TOML → TOML is lossless because merge runs on `toml::Value`, where datetime
+/// is a first-class scalar.
 #[test]
 fn toml_datetime_survives_a_toml_round_trip() {
     let dir = tree(&[("f.toml", DATED)]);
@@ -70,6 +69,36 @@ fn toml_datetime_survives_a_toml_round_trip() {
         !out.contains("__toml_private"),
         "sentinel leaked into output:\n{out}"
     );
+}
+
+/// Native TOML merge: a datetime stays a datetime, even when `--set` adds a
+/// JSON layer on top. Conversion never runs on the file tree.
+#[test]
+fn toml_datetime_survives_set_on_the_native_path() {
+    let dir = tree(&[("f.toml", DATED)]);
+    let out = run(&dir, &["f.toml", "--set", "extra=1"]);
+    assert!(
+        out.contains("date = 1979-05-27T07:32:00Z"),
+        "datetime was not emitted unquoted:\n{out}"
+    );
+    assert!(
+        !out.contains("__toml_private"),
+        "sentinel leaked into output:\n{out}"
+    );
+    assert!(out.contains("extra = 1"), "set layer missing:\n{out}");
+}
+
+/// Crossing the JSON type boundary stringifies datetimes. Homogeneous TOML
+/// (including `--set`) does not take this path.
+#[test]
+fn mixed_toml_json_to_toml_stringifies_datetime() {
+    let dir = tree(&[("f.toml", DATED), ("g.json", r#"{"extra":1}"#)]);
+    let out = run(&dir, &["f.toml", "g.json", "-f", "toml"]);
+    assert!(
+        out.contains("date = \"1979-05-27T07:32:00Z\""),
+        "datetime should be a quoted string after a JSON round-trip:\n{out}"
+    );
+    assert!(out.contains("extra = 1"), "json overlay missing:\n{out}");
 }
 
 /// Under `-f json` the same datetime is a plain string, not the sentinel map.
