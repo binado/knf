@@ -36,8 +36,8 @@ let merged = merge([base, overlay])?;
 
 ## Merging
 
-Files are merged left to right in argument order. Exactly one document
-goes to stdout.
+Files are merged left to right in argument order. In ordinary mode, exactly one
+document goes to stdout.
 
 | Case | Behaviour |
 | --- | --- |
@@ -60,6 +60,51 @@ catches the class of mistake where a leaf accidentally shadows a subtree.
 $ knf a.json b.json --strict
 error: type conflict at `server`: object would be replaced by number
 ```
+
+## Cartesian products
+
+A positional `x` separates factors whose files are alternatives. The shell
+expands the globs, then `knf` selects one file from each factor and merges each
+combination left to right:
+
+```bash
+knf foo*.toml x bar*.toml --output-dir generated
+```
+
+Given `foo1.toml`, `foo2.toml`, `bar1.toml`, and `bar2.toml`, this writes:
+
+```text
+generated/foo1+bar1.toml
+generated/foo1+bar2.toml
+generated/foo2+bar1.toml
+generated/foo2+bar2.toml
+```
+
+The paths are also printed to stdout, one per line. Add more `x` separators for
+more factors:
+
+```bash
+knf env/*.toml x region/*.toml x service/*.toml -o generated
+```
+
+In product mode, repeated `--set` expressions are alternatives in one final
+factor rather than sequential layers:
+
+```bash
+knf foo*.toml x bar*.toml \
+  --set region=us --set region=eu \
+  -o generated
+```
+
+This produces one `region=us` and one `region=eu` variant of every file
+combination, named like `foo1+bar1+region=us.toml`.
+
+The output directory may already exist, but existing output files are never
+overwritten. Unsafe filename bytes, including a literal `+`, are
+percent-encoded. A file literally named `x` can be passed as `./x`.
+
+All candidates share one output format. As in ordinary mode, mixed JSON and
+TOML inputs therefore require `-f json` or `-f toml`.
 
 ### Caveats with formats
 

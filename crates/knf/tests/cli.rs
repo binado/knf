@@ -48,6 +48,10 @@ fn run_err(dir: &TempDir, args: &[&str]) -> String {
     String::from_utf8(out.stderr).expect("utf-8 stderr")
 }
 
+fn read(dir: &TempDir, path: &str) -> String {
+    std::fs::read_to_string(dir.path().join(path)).expect("read generated file")
+}
+
 // --- round-trips ----------------------------------------------------------
 
 const DATED: &str = "\
@@ -203,6 +207,329 @@ fn inline_configs_apply_last() {
     assert_eq!(
         run(&dir, &["--set", "a.b=1", "--compact"]),
         "{\"a\":{\"b\":1}}\n"
+    );
+}
+
+// --- Cartesian products ---------------------------------------------------
+
+#[test]
+fn two_factors_generate_the_cartesian_product_in_order() {
+    let dir = tree(&[
+        ("foo1.toml", "foo = 1\nwinner = \"foo1\"\n"),
+        ("foo2.toml", "foo = 2\nwinner = \"foo2\"\n"),
+        ("bar1.toml", "bar = 1\nwinner = \"bar1\"\n"),
+        ("bar2.toml", "bar = 2\nwinner = \"bar2\"\n"),
+    ]);
+
+    let out = run(
+        &dir,
+        &[
+            "foo1.toml",
+            "foo2.toml",
+            "x",
+            "bar1.toml",
+            "bar2.toml",
+            "-o",
+            "out",
+        ],
+    );
+
+    assert_eq!(
+        out,
+        "\
+out/foo1+bar1.toml
+out/foo1+bar2.toml
+out/foo2+bar1.toml
+out/foo2+bar2.toml
+"
+    );
+    assert_eq!(
+        read(&dir, "out/foo1+bar2.toml"),
+        "foo = 1\nwinner = \"bar2\"\nbar = 2\n"
+    );
+    assert_eq!(
+        read(&dir, "out/foo2+bar1.toml"),
+        "foo = 2\nwinner = \"bar1\"\nbar = 1\n"
+    );
+}
+
+#[test]
+fn three_factors_preserve_left_to_right_merge_order() {
+    let dir = tree(&[
+        ("base1.json", r#"{"base":1,"value":{"from":"base"}}"#),
+        ("base2.json", r#"{"base":2,"value":{"from":"base"}}"#),
+        ("middle.json", r#"{"middle":true,"value":5}"#),
+        ("last1.json", r#"{"last":1,"value":{"from":"last1"}}"#),
+        ("last2.json", r#"{"last":2,"value":{"from":"last2"}}"#),
+    ]);
+
+    let out = run(
+        &dir,
+        &[
+            "base1.json",
+            "base2.json",
+            "x",
+            "middle.json",
+            "x",
+            "last1.json",
+            "last2.json",
+            "-o",
+            "out",
+            "--compact",
+        ],
+    );
+
+    assert_eq!(out.lines().count(), 4);
+    assert_eq!(
+        read(&dir, "out/base1+middle+last2.json"),
+        "{\"base\":1,\"value\":{\"from\":\"last2\"},\"middle\":true,\"last\":2}\n"
+    );
+}
+
+#[test]
+fn repeated_sets_are_a_final_alternatives_factor() {
+    let dir = tree(&[("foo.toml", "foo = true\n"), ("bar.toml", "bar = true\n")]);
+
+    let out = run(
+        &dir,
+        &[
+            "foo.toml",
+            "x",
+            "bar.toml",
+            "--set",
+            "region=us",
+            "--set",
+            "region=eu",
+            "-o",
+            "out",
+        ],
+    );
+
+    assert_eq!(
+        out,
+        "out/foo+bar+region=us.toml\nout/foo+bar+region=eu.toml\n"
+    );
+    assert_eq!(
+        read(&dir, "out/foo+bar+region=eu.toml"),
+        "foo = true\nbar = true\nregion = \"eu\"\n"
+    );
+}
+
+#[test]
+fn product_names_percent_encode_unsafe_bytes() {
+    let dir = tree(&[
+        ("left+side.toml", "left = true\n"),
+        ("right.toml", "right = true\n"),
+    ]);
+
+    let out = run(
+        &dir,
+        &[
+            "left+side.toml",
+            "x",
+            "right.toml",
+            "--set",
+            "path=/tmp/a b",
+            "-o",
+            "out",
+        ],
+    );
+
+    assert_eq!(out, "out/left%2Bside+right+path=%2Ftmp%2Fa%20b.toml\n");
+}
+
+#[test]
+fn dot_slash_escapes_a_file_named_x() {
+    let dir = tree(&[
+        ("x", r#"{"left":true}"#),
+        ("right.json", r#"{"right":true}"#),
+    ]);
+
+    let out = run(
+        &dir,
+        &[
+            "./x",
+            "x",
+            "right.json",
+            "--input-format",
+            "json",
+            "-o",
+            "out",
+            "--compact",
+        ],
+    );
+
+    assert_eq!(out, "out/x+right.json\n");
+    assert_eq!(
+        read(&dir, "out/x+right.json"),
+        "{\"left\":true,\"right\":true}\n"
+    );
+}
+
+#[test]
+fn malformed_product_factors_are_rejected() {
+    let dir = tree(&[
+        ("left.toml", "left = true\n"),
+        ("right.toml", "right = true\n"),
+    ]);
+
+    for args in [
+        vec!["x", "right.toml", "-o", "out"],
+        vec!["left.toml", "x", "x", "right.toml", "-o", "out"],
+        vec!["left.toml", "x", "-o", "out"],
+    ] {
+        let err = run_err(&dir, &args);
+        assert!(err.contains("factor is empty"), "{err}");
+    }
+}
+
+#[test]
+fn output_dir_is_required_only_for_product_mode() {
+    let dir = tree(&[
+        ("left.toml", "left = true\n"),
+        ("right.toml", "right = true\n"),
+    ]);
+
+    let missing = run_err(&dir, &["left.toml", "x", "right.toml"]);
+    assert!(missing.contains("requires --output-dir"), "{missing}");
+
+    let misplaced = run_err(&dir, &["left.toml", "-o", "out"]);
+    assert!(
+        misplaced.contains("--output-dir requires Cartesian-product mode"),
+        "{misplaced}"
+    );
+}
+
+#[test]
+fn existing_outputs_are_never_overwritten() {
+    let dir = tree(&[
+        ("left.toml", "left = true\n"),
+        ("right.toml", "right = true\n"),
+        ("out/left+right.toml", "keep = \"me\"\n"),
+    ]);
+
+    let err = run_err(&dir, &["left.toml", "x", "right.toml", "-o", "out"]);
+    assert!(err.contains("refusing to overwrite"), "{err}");
+    assert_eq!(read(&dir, "out/left+right.toml"), "keep = \"me\"\n");
+}
+
+#[test]
+fn duplicate_generated_names_are_rejected_before_writing() {
+    let dir = tree(&[
+        ("a/same.toml", "source = \"a\"\n"),
+        ("b/same.toml", "source = \"b\"\n"),
+        ("right.toml", "right = true\n"),
+    ]);
+
+    let err = run_err(
+        &dir,
+        &["a/same.toml", "b/same.toml", "x", "right.toml", "-o", "out"],
+    );
+    assert!(err.contains("multiple combinations"), "{err}");
+    assert!(!dir.path().join("out").exists());
+}
+
+#[test]
+fn a_generation_error_leaves_no_output_files() {
+    let dir = tree(&[
+        ("base1.json", r#"{"value":{"nested":true}}"#),
+        ("base2.json", r#"{"value":1}"#),
+        ("over.json", r#"{"value":2}"#),
+    ]);
+
+    let err = run_err(
+        &dir,
+        &[
+            "base1.json",
+            "base2.json",
+            "x",
+            "over.json",
+            "--strict",
+            "-o",
+            "out",
+        ],
+    );
+    assert!(err.contains("type conflict"), "{err}");
+    assert_eq!(
+        std::fs::read_dir(dir.path().join("out"))
+            .expect("output directory")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn product_mode_resolves_one_format_across_all_candidates() {
+    let dir = tree(&[
+        ("left.toml", "left = true\n"),
+        ("alternative.json", r#"{"alternative":true}"#),
+        ("right.toml", "right = true\n"),
+    ]);
+
+    let err = run_err(
+        &dir,
+        &[
+            "left.toml",
+            "alternative.json",
+            "x",
+            "right.toml",
+            "-o",
+            "out",
+        ],
+    );
+    assert!(err.contains("-f is required"), "{err}");
+
+    let out = run(
+        &dir,
+        &[
+            "left.toml",
+            "alternative.json",
+            "x",
+            "right.toml",
+            "-f",
+            "json",
+            "-o",
+            "out",
+            "--compact",
+        ],
+    );
+    assert_eq!(out, "out/left+right.json\nout/alternative+right.json\n");
+}
+
+#[test]
+fn stdin_is_loaded_once_and_reused_across_combinations() {
+    let dir = tree(&[
+        ("one.json", r#"{"choice":1}"#),
+        ("two.json", r#"{"choice":2}"#),
+    ]);
+    let out = knf(&dir)
+        .args([
+            "-",
+            "x",
+            "one.json",
+            "two.json",
+            "--input-format",
+            "json",
+            "-o",
+            "out",
+            "--compact",
+        ])
+        .write_stdin(r#"{"base":true}"#)
+        .output()
+        .expect("spawn");
+
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(out.stdout).expect("utf-8"),
+        "out/stdin+one.json\nout/stdin+two.json\n"
+    );
+    assert_eq!(
+        read(&dir, "out/stdin+two.json"),
+        "{\"base\":true,\"choice\":2}\n"
     );
 }
 
