@@ -100,10 +100,12 @@ This produces one `region=us` and one `region=eu` variant of every file
 combination, named like `foo1+bar1+region=us.toml`.
 
 The output directory may already exist, but existing output files are never
-overwritten. Unsafe filename bytes, including a literal `+`, are
-percent-encoded. `--output-separator` overrides the default `+` delimiter
-used between factor names in output files (e.g. `--output-separator _`).
-A file literally named `x` can be passed as `./x`.
+overwritten. Factor labels are used as-is in the generated file name (so
+non-ASCII text like `café.toml` passes through unchanged); a `--set`
+expression containing `/`, `\`, or a NUL byte is rejected rather than
+encoded. `--output-separator` overrides the default `+` delimiter used
+between factor names in output files (e.g. `--output-separator _`); an empty
+separator is rejected. A file literally named `x` can be passed as `./x`.
 
 All candidates share one output format. As in ordinary mode, mixed JSON and
 TOML inputs therefore require `-f json` or `-f toml`.

@@ -316,26 +316,49 @@ fn repeated_sets_are_a_final_alternatives_factor() {
 }
 
 #[test]
-fn product_names_percent_encode_unsafe_bytes() {
+fn product_names_use_non_ascii_and_space_labels_unencoded() {
     let dir = tree(&[
-        ("left+side.toml", "left = true\n"),
+        ("café.toml", "left = true\n"),
         ("right.toml", "right = true\n"),
     ]);
 
     let out = run(
         &dir,
         &[
-            "left+side.toml",
+            "café.toml",
             "x",
             "right.toml",
             "--set",
-            "path=/tmp/a b",
+            "path=a b",
             "-o",
             "out",
         ],
     );
 
-    assert_eq!(out, "out/left%2Bside+right+path=%2Ftmp%2Fa%20b.toml\n");
+    assert_eq!(out, "out/café+right+path=a b.toml\n");
+}
+
+#[test]
+fn set_with_a_path_separator_is_rejected() {
+    let dir = tree(&[
+        ("left.toml", "left = true\n"),
+        ("right.toml", "right = true\n"),
+    ]);
+
+    let err = run_err(
+        &dir,
+        &[
+            "left.toml",
+            "x",
+            "right.toml",
+            "--set",
+            "path=/tmp/a",
+            "-o",
+            "out",
+        ],
+    );
+    assert!(err.contains("path=/tmp/a"), "{err}");
+    assert!(err.contains("path separator or null byte"), "{err}");
 }
 
 #[test]
@@ -491,6 +514,28 @@ fn invalid_output_separator_is_rejected() {
         err.contains("output separator cannot contain path separators or null bytes"),
         "{err}"
     );
+}
+
+#[test]
+fn empty_output_separator_is_rejected() {
+    let dir = tree(&[
+        ("left.toml", "left = true\n"),
+        ("right.toml", "right = true\n"),
+    ]);
+
+    let err = run_err(
+        &dir,
+        &[
+            "left.toml",
+            "x",
+            "right.toml",
+            "-o",
+            "out",
+            "--output-separator",
+            "",
+        ],
+    );
+    assert!(err.contains("output separator cannot be empty"), "{err}");
 }
 
 #[test]

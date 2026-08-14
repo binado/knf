@@ -29,7 +29,7 @@ const MAX_OUTPUT_NAME_BYTES: usize = 240;
 struct LoadedLayer {
     source: SourceName,
     value: Value,
-    encoded_label: String,
+    label: String,
 }
 
 /// Runs ordinary single-document mode or Cartesian-product generation.
@@ -105,7 +105,7 @@ fn run_product(cli: Cli) -> anyhow::Result<()> {
             loaded.push(LoadedLayer {
                 source,
                 value: parsed,
-                encoded_label: file_label(path)?,
+                label: file_label(path)?,
             });
         }
         factors.push(loaded);
@@ -114,38 +114,34 @@ fn run_product(cli: Cli) -> anyhow::Result<()> {
     // Unlike ordinary mode, repeated --set expressions are alternatives in one
     // final factor. One --set still appears in every generated configuration.
     if !cli.set.is_empty() {
-        factors.push(cli.set.iter().map(load_set).collect());
+        factors.push(
+            cli.set
+                .iter()
+                .map(load_set)
+                .collect::<anyhow::Result<Vec<_>>>()?,
+        );
     }
 
     let out_format = resolve_output_format(cli.format, &input_formats)?;
     let separator = cli.output_separator.as_deref().unwrap_or("+");
+    if separator.is_empty() {
+        bail!("output separator cannot be empty");
+    }
     if separator.contains(['/', '\\', '\0']) {
         bail!("output separator cannot contain path separators or null bytes: `{separator}`");
     }
 
-    let lengths: Vec<usize> = factors.iter().map(Vec::len).collect();
-    let combinations = lengths
-        .iter()
-        .try_fold(1usize, |total, length| total.checked_mul(*length));
-    if combinations.is_none() {
-        bail!("Cartesian product is too large to enumerate");
-    }
-
+    let combinations = enumerate_combinations(&factors, separator, out_format)?;
     validate_output_dir(output_dir)?;
-    preflight_outputs(&factors, &lengths, output_dir, separator, out_format)?;
+    preflight_outputs(&combinations, output_dir)?;
     fs::create_dir_all(output_dir)
         .with_context(|| format!("creating output directory `{}`", output_dir.display()))?;
 
     let opts = merge_options(&cli);
     let mut prepared = Vec::new();
-    for_each_combination(&lengths, |indices| {
-        let selected: Vec<&LoadedLayer> = indices
-            .iter()
-            .enumerate()
-            .map(|(factor, choice)| &factors[factor][*choice])
-            .collect();
-        let name = output_name(&selected, separator, out_format)?;
-        let destination = output_dir.join(name);
+    for combination in &combinations {
+        let selected = &combination.selected;
+        let destination = output_dir.join(&combination.name);
 
         let sources: Vec<(SourceName, Value)> = match out_format {
             Format::Toml => selected
@@ -168,8 +164,7 @@ fn run_product(cli: Cli) -> anyhow::Result<()> {
             format!("flushing temporary output for `{}`", destination.display())
         })?;
         prepared.push((temporary.into_temp_path(), destination));
-        Ok(())
-    })?;
+    }
 
     let mut written = Vec::with_capacity(prepared.len());
     for (temporary, destination) in prepared {
@@ -219,15 +214,16 @@ fn split_factors(paths: &[PathBuf]) -> anyhow::Result<Vec<Vec<&Path>>> {
     Ok(factors)
 }
 
-fn load_set(path_leaf: &PathLeaf<String>) -> LoadedLayer {
+fn load_set(path_leaf: &PathLeaf<String>) -> anyhow::Result<LoadedLayer> {
     let expression = path_leaf.to_string();
+    reject_unsafe_label(&expression)?;
     let source = SourceName::Set(expression.clone());
     let json = serde_json::Value::from(PathLeaf::<serde_json::Value>::from(path_leaf.clone()));
-    LoadedLayer {
+    Ok(LoadedLayer {
         source,
         value: value::from_json(json),
-        encoded_label: encode_name_bytes(expression.as_bytes()),
-    }
+        label: expression,
+    })
 }
 
 fn validate_output_dir(output_dir: &Path) -> anyhow::Result<()> {
@@ -240,25 +236,49 @@ fn validate_output_dir(output_dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn preflight_outputs(
-    factors: &[Vec<LoadedLayer>],
-    lengths: &[usize],
-    output_dir: &Path,
+/// One Cartesian-product combination's selected layers and the output name
+/// derived from them, computed once and shared between preflight and the
+/// write loop so the two can never drift apart.
+struct Combination<'a> {
+    selected: Vec<&'a LoadedLayer>,
+    name: String,
+}
+
+fn enumerate_combinations<'a>(
+    factors: &'a [Vec<LoadedLayer>],
     separator: &str,
     format: Format,
-) -> anyhow::Result<()> {
-    let mut names = HashSet::new();
-    for_each_combination(lengths, |indices| {
+) -> anyhow::Result<Vec<Combination<'a>>> {
+    let lengths: Vec<usize> = factors.iter().map(Vec::len).collect();
+    let total = lengths
+        .iter()
+        .try_fold(1usize, |total, length| total.checked_mul(*length))
+        .context("Cartesian product is too large to enumerate")?;
+
+    let mut combinations = Vec::with_capacity(total);
+    for_each_combination(&lengths, |indices| {
         let selected: Vec<&LoadedLayer> = indices
             .iter()
             .enumerate()
             .map(|(factor, choice)| &factors[factor][*choice])
             .collect();
         let name = output_name(&selected, separator, format)?;
-        if !names.insert(name.clone()) {
-            bail!("multiple combinations produce the output name `{name}`");
+        combinations.push(Combination { selected, name });
+        Ok(())
+    })?;
+    Ok(combinations)
+}
+
+fn preflight_outputs(combinations: &[Combination], output_dir: &Path) -> anyhow::Result<()> {
+    let mut names = HashSet::new();
+    for combination in combinations {
+        if !names.insert(combination.name.as_str()) {
+            bail!(
+                "multiple combinations produce the output name `{}`",
+                combination.name
+            );
         }
-        let destination = output_dir.join(&name);
+        let destination = output_dir.join(&combination.name);
         if destination
             .try_exists()
             .with_context(|| format!("checking `{}`", destination.display()))?
@@ -268,8 +288,8 @@ fn preflight_outputs(
                 destination.display()
             );
         }
-        Ok(())
-    })
+    }
+    Ok(())
 }
 
 fn output_name(
@@ -279,7 +299,7 @@ fn output_name(
 ) -> anyhow::Result<String> {
     let mut name = selected
         .iter()
-        .map(|layer| layer.encoded_label.as_str())
+        .map(|layer| layer.label.as_str())
         .collect::<Vec<_>>()
         .join(separator);
     name.push('.');
@@ -301,47 +321,34 @@ fn file_label(path: &Path) -> anyhow::Result<String> {
             path.display()
         )
     })?;
-    let encoded = encode_os_str(stem);
-    if encoded.is_empty() {
+    let stem = stem.to_str().with_context(|| {
+        format!(
+            "cannot derive an output name from input `{}`: file name is not valid UTF-8",
+            path.display()
+        )
+    })?;
+    if stem.is_empty() {
         bail!(
             "cannot derive an output name from input `{}`",
             path.display()
         );
     }
-    Ok(encoded)
+    reject_unsafe_label(stem)?;
+    Ok(stem.to_string())
 }
 
-#[cfg(unix)]
-fn encode_os_str(value: &OsStr) -> String {
-    use std::os::unix::ffi::OsStrExt;
-    encode_name_bytes(value.as_bytes())
-}
-
-#[cfg(windows)]
-fn encode_os_str(value: &OsStr) -> String {
-    use std::os::windows::ffi::OsStrExt;
-    let bytes: Vec<u8> = value.encode_wide().flat_map(u16::to_le_bytes).collect();
-    encode_name_bytes(&bytes)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn encode_os_str(value: &OsStr) -> String {
-    encode_name_bytes(value.to_string_lossy().as_bytes())
-}
-
-fn encode_name_bytes(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut encoded = String::with_capacity(bytes.len());
-    for byte in bytes {
-        if byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_' | b'.' | b'=') {
-            encoded.push(char::from(*byte));
-        } else {
-            encoded.push('%');
-            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
-        }
+/// Guards against a `--set` expression (the one label source not shaped by
+/// the filesystem) smuggling a path separator or NUL into a generated name.
+/// A no-op for file stems in practice, since a single path component cannot
+/// structurally contain these characters.
+fn reject_unsafe_label(text: &str) -> anyhow::Result<()> {
+    if text.contains(['/', '\\', '\0']) {
+        bail!(
+            "cannot use `{text}` in an output filename: it contains a path \
+             separator or null byte"
+        );
     }
-    encoded
+    Ok(())
 }
 
 fn for_each_combination(

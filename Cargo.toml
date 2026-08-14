@@ -24,6 +24,7 @@ clap = { version = "4", features = ["derive"] }
 # alphabetises the output regardless of what the IR preserved.
 toml = { version = "1", features = ["preserve_order"] }
 serde = "1"
+tempfile = "3"
 
 # version is required so `cargo publish` can rewrite the path dep to a crates.io
 # requirement. Keep it equal to [workspace.package].version.
