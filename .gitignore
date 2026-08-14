@@ -1,1 +1,6 @@
 /target
+*.md
+!README.md
+!CHANGELOG.md
+!AGENTS.md
+!CLAUDE.md
