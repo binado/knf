@@ -9,15 +9,15 @@ repository.workspace = true
 # A git/path dependency is enough for other projects in the meantime.
 publish = false
 
-# thiserror is always on. serde_json and serde are optional behind `json`.
+# thiserror is always on. serde_json is optional behind `json`, and is the JSON
+# *parser* for the RHS, not just a value type — there is no serde derive here.
 # No anyhow, no clap, no I/O. `cargo tree -p knf-dotted --depth 1` is the enforcement.
 [features]
 default = ["json"]
-json = ["dep:serde_json", "dep:serde"]
+json = ["dep:serde_json"]
 
 [dependencies]
 serde_json = { workspace = true, optional = true }
-serde = { workspace = true, optional = true }
 thiserror.workspace = true
 
 [dev-dependencies]

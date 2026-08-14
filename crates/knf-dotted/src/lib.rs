@@ -8,12 +8,11 @@
 //! This crate knows nothing about files or the command line; provenance
 //! (`--set`, filenames) is the caller's job.
 //!
-//! Two conversions, deliberately not the same:
-//!
-//! - [`From<PathLeaf<V>>`](From) expands to a nested object:
-//!   `server.port=8080` → `{"server":{"port":8080}}`.
-//! - Serde (de)serializes the expression string: `"server.port=8080"`.
-//!   [`serde_json::to_value`] therefore yields a JSON string, not the object.
+//! [`From<PathLeaf<V>>`](From) expands to a nested object: `server.port=8080` →
+//! `{"server":{"port":8080}}`. There are deliberately no `Serialize`/
+//! `Deserialize` impls — a `PathLeaf` is an expression, and serializing one
+//! could reasonably mean either the string or the object, so callers pick
+//! explicitly via [`Display`](fmt::Display) or the conversion.
 
 use std::fmt;
 use std::str::FromStr;
@@ -129,17 +128,6 @@ fn split_expr(expr: &str) -> Result<(Vec<String>, &str), ParseError> {
         return Err(ParseError::EmptyKey);
     }
     Ok((lhs.split('.').map(str::to_string).collect(), rhs))
-}
-
-#[cfg(feature = "json")]
-fn write_canonical<V: serde::Serialize>(
-    path: &[String],
-    leaf: &V,
-    f: &mut fmt::Formatter<'_>,
-) -> fmt::Result {
-    // A failure here is a serde_json bug: the leaf already deserialized.
-    let rhs = serde_json::to_string(leaf).expect("leaf is always serializable");
-    write!(f, "{}={rhs}", path.join("."))
 }
 
 #[cfg(feature = "json")]
