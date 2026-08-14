@@ -8,8 +8,8 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use anyhow::{Context, bail};
+use knf_core::{MergeOptions, Value, merge_with};
 use knf_dotted::PathLeaf;
-use knf_merge::{MergeOptions, Value, merge_all};
 
 use cli::Cli;
 use format::{Format, SourceName};
@@ -51,7 +51,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         Format::Json => Vec::new(),
     };
 
-    let merged = merge_all(layers.into_iter().map(|(_, value)| value), &opts)?;
+    let merged = merge_with(layers.into_iter().map(|(_, value)| value), &opts)?;
     let text = format::emit(merged, out_format, !cli.compact, &sources)?;
     write_stdout(&text)
 }

@@ -1,5 +1,5 @@
 [package]
-name = "knf-merge"
+name = "knf-core"
 description = "Layered merge over an owned JSON/TOML-superset value tree"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,7 @@ repository.workspace = true
 
 # thiserror and indexmap, and nothing else. No format crates, no anyhow, no clap,
 # no I/O — there are no features to gate because there is nothing to gate.
-# `cargo tree -p knf-merge --depth 1` is the enforcement.
+# `cargo tree -p knf-core --depth 1` is the enforcement.
 [dependencies]
 indexmap = "2"
 thiserror.workspace = true

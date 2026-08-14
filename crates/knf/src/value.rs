@@ -1,14 +1,14 @@
 //! Conversion between the merge IR and the native JSON/TOML value types.
 //!
-//! Merge runs on [`knf_merge::Value`], so these fire exactly twice per run: once
+//! Merge runs on [`knf_core::Value`], so these fire exactly twice per run: once
 //! per layer on the way in, once on the whole document on the way out. Free
 //! functions rather than `From`/`TryFrom` impls because both sides are foreign
-//! types — `impl From<toml::Value> for knf_merge::Value` names nothing local and
+//! types — `impl From<toml::Value> for knf_core::Value` names nothing local and
 //! does not compile.
 
 use std::fmt;
 
-use knf_merge::{Number, Value};
+use knf_core::{Number, Value};
 
 /// JSON → IR. Total: every JSON value has an IR counterpart.
 pub fn from_json(value: serde_json::Value) -> Value {

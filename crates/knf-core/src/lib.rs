@@ -6,7 +6,7 @@
 //! provenance are all the caller's job.
 //!
 //! `thiserror` and `indexmap` are the only dependencies — neither is a format
-//! crate. `cargo tree -p knf-merge --depth 1` is the enforcement.
+//! crate. `cargo tree -p knf-core --depth 1` is the enforcement.
 
 mod strict;
 mod value;
@@ -68,9 +68,16 @@ fn render_path(path: &[String]) -> String {
 /// Objects recurse per key. Arrays, scalars, datetimes and null all replace
 /// wholesale — notably arrays are never index-merged or concatenated, and null
 /// is an ordinary value that overwrites rather than a delete instruction.
-pub fn merge(base: &mut Value, over: Value, opts: &MergeOptions) -> Result<(), MergeError> {
+pub fn merge_into(base: &mut Value, over: Value, opts: &MergeOptions) -> Result<(), MergeError> {
     let mut path = Vec::new();
     merge_at(base, over, opts, &mut path)
+}
+
+/// Folds a list of layers into one document, last-wins, seeded with an empty object.
+///
+/// Equivalent to [`merge_with`] using [`MergeOptions::LAST_WINS`].
+pub fn merge(layers: impl IntoIterator<Item = Value>) -> Result<Value, MergeError> {
+    merge_with(layers, &MergeOptions::LAST_WINS)
 }
 
 /// Folds a list of layers into one document, seeded with an empty object.
@@ -86,7 +93,7 @@ pub fn merge(base: &mut Value, over: Value, opts: &MergeOptions) -> Result<(), M
 ///
 /// So callers must never merge subgroups and then combine the results.
 /// Flatten first, fold second.
-pub fn merge_all(
+pub fn merge_with(
     layers: impl IntoIterator<Item = Value>,
     opts: &MergeOptions,
 ) -> Result<Value, MergeError> {

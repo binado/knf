@@ -5,7 +5,7 @@ release_always = false
 semver_check = false
 
 [[package]]
-name = "knf"
+name = "knf-cli"
 # Merge-core and --set parser live in sibling crates; their commits belong
 # in the CLI changelog.
-changelog_include = ["knf-merge", "knf-dotted"]
+changelog_include = ["knf-core", "knf-dotted"]

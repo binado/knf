@@ -284,34 +284,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "knf"
+name = "knf-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
  "insta",
+ "knf-core",
  "knf-dotted",
- "knf-merge",
  "serde_json",
  "tempfile",
  "toml",
 ]
 
 [[package]]
-name = "knf-dotted"
+name = "knf-core"
 version = "0.1.0"
 dependencies = [
+ "indexmap",
+ "proptest",
  "serde_json",
  "thiserror",
 ]
 
 [[package]]
-name = "knf-merge"
+name = "knf-dotted"
 version = "0.1.0"
 dependencies = [
- "indexmap",
- "proptest",
  "serde_json",
  "thiserror",
 ]
