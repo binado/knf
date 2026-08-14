@@ -5,9 +5,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-# Unpublished until something other than knf depends on it via crates.io.
-# A git/path dependency is enough for other projects in the meantime.
-publish = false
 
 # thiserror is always on. serde_json is optional behind `json`, and is the JSON
 # *parser* for the RHS, not just a value type — there is no serde derive here.

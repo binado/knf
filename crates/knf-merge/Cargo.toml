@@ -5,10 +5,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-# The merge semantics are the part of the design still in flux (--null-delete,
-# --array-strategy would both change MergeOptions), and a crate boundary on
-# crates.io is a semver promise. Unpublished until that stops moving.
-publish = false
 
 # thiserror and indexmap, and nothing else. No format crates, no anyhow, no clap,
 # no I/O — there are no features to gate because there is nothing to gate.
