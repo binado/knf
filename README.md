@@ -120,3 +120,7 @@ cargo test -p knf-merge          # fast inner loop: no filesystem, no process
 ```
 
 See `PLAN.md` for the design and the reasoning behind each decision.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
