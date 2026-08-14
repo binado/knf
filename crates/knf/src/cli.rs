@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use knf_dotted::PathLeaf;
+use knf_dotted::{KeyPath, PathLeaf};
 
 use crate::format::Format;
 
@@ -21,9 +21,15 @@ mixed freely. Exactly one document goes to stdout.
   knf base.toml prod.toml
   knf base.json - --input-format json          # stdin as a layer
   knf defaults.json --set server.port=8080 -f toml
+  knf base.toml prod.toml --append plugins     # concatenate one array
 
 Objects merge key by key. Arrays, scalars and null all replace wholesale —
-null is an ordinary value that overwrites, not a delete instruction."
+null is an ordinary value that overwrites, not a delete instruction.
+
+--append, --replace and --fail change that at the paths they name, and only
+there. A path may be named by at most one of them, and since all three consume
+the whole value at their path, no rule may sit below another. Rules are a set:
+their order never affects the output."
 )]
 pub struct Cli {
     /// Files to merge as layers; `-` reads stdin
@@ -67,6 +73,61 @@ Dotted paths nest, so keys containing a literal dot are not addressable from
 --set; use a file."
     )]
     pub set: Vec<PathLeaf<String>>,
+
+    /// Concatenate arrays at this path instead of replacing them
+    #[arg(
+        long,
+        value_name = "KEY.PATH",
+        long_help = "\
+Concatenate arrays at this path instead of replacing them. Repeatable.
+
+Both sides must be arrays; anything else is an error. The path is only combined
+where the merge already has a value for it, so a lone layer's array is inserted
+as-is rather than doubled:
+
+  knf base.toml prod.toml --append plugins    # base's plugins ++ prod's
+
+Dotted paths address nested keys, so a key containing a literal dot cannot be
+named."
+    )]
+    pub append: Vec<KeyPath>,
+
+    /// Replace the value at this path wholesale, without merging into it
+    #[arg(
+        long,
+        value_name = "KEY.PATH",
+        long_help = "\
+Replace the value at this path wholesale, without merging into it. Repeatable.
+
+Object over object stops recursing, so the later layer's table is taken whole
+and keys it omits are dropped:
+
+  knf base.toml prod.toml --replace db        # db is prod's db, entirely
+
+This applies to --set layers too, which are ordinary layers: --replace db
+--set db.host=x leaves db with nothing but host.
+
+Dotted paths address nested keys, so a key containing a literal dot cannot be
+named."
+    )]
+    pub replace: Vec<KeyPath>,
+
+    /// Error if a later layer sets this path again
+    #[arg(
+        long,
+        value_name = "KEY.PATH",
+        long_help = "\
+Error if a later layer sets this path again. Repeatable.
+
+The first layer to define the path pins it; the path may still be absent from
+every layer. Use it to protect a value that later layers must not override:
+
+  knf base.toml prod.toml --fail db.host
+
+Dotted paths address nested keys, so a key containing a literal dot cannot be
+named."
+    )]
+    pub fail: Vec<KeyPath>,
 
     /// Output format; required when inputs are mixed
     #[arg(short = 'f', long, value_name = "FORMAT")]

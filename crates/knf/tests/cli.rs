@@ -206,6 +206,119 @@ fn inline_configs_apply_last() {
     );
 }
 
+// --- per-path strategies --------------------------------------------------
+
+const BASE: &str = "plugins = [\"auth\"]\n[db]\nhost = \"local\"\nport = 5432\n";
+const PROD: &str = "plugins = [\"metrics\"]\n[db]\nhost = \"prod\"\n";
+
+/// The default is unchanged: the array replaces, the table merges.
+#[test]
+fn without_rules_arrays_replace_and_tables_merge() {
+    let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
+    let out = run(&dir, &["base.toml", "prod.toml"]);
+    assert!(out.contains("plugins = [\"metrics\"]"), "{out}");
+    assert!(out.contains("port = 5432"), "{out}");
+}
+
+/// TOML in, base ++ overlay out. Emitted as compact JSON so the assertion is
+/// one exact string rather than a guess at the TOML writer's line breaking; it
+/// also pins that only the named path changed — `db` still merged key by key.
+#[test]
+fn append_concatenates_a_toml_array() {
+    let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
+    let out = run(
+        &dir,
+        &[
+            "base.toml",
+            "prod.toml",
+            "--append",
+            "plugins",
+            "-f",
+            "json",
+            "--compact",
+        ],
+    );
+    assert_eq!(
+        out,
+        "{\"plugins\":[\"auth\",\"metrics\"],\"db\":{\"host\":\"prod\",\"port\":5432}}\n"
+    );
+}
+
+/// The property from `props.rs`, end to end: one layer under `--append` must be
+/// byte-identical to one layer without it.
+#[test]
+fn append_does_not_double_a_single_layer() {
+    let dir = tree(&[("base.toml", BASE)]);
+    assert_eq!(
+        run(&dir, &["base.toml", "--append", "plugins"]),
+        run(&dir, &["base.toml"])
+    );
+}
+
+/// `--replace` stops the recursion, so the overlay's table is taken whole and
+/// `port` is gone.
+#[test]
+fn replace_takes_a_table_wholesale() {
+    let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
+    let out = run(&dir, &["base.toml", "prod.toml", "--replace", "db"]);
+    assert!(out.contains("host = \"prod\""), "{out}");
+    assert!(!out.contains("port"), "replace recursed into db:\n{out}");
+}
+
+/// Rules apply to `--set` layers, which are ordinary terminal layers. Correct,
+/// and surprising enough to pin: the whole table is replaced by the one key.
+#[test]
+fn rules_apply_to_set_layers_too() {
+    let dir = tree(&[("base.toml", BASE)]);
+    let out = run(
+        &dir,
+        &["base.toml", "--replace", "db", "--set", "db.host=x"],
+    );
+    assert!(out.contains("host = \"x\""), "{out}");
+    assert!(
+        !out.contains("port"),
+        "--set layer did not replace db:\n{out}"
+    );
+}
+
+/// Flag order is not part of the result: rules are a set.
+#[test]
+fn rule_order_does_not_affect_the_output() {
+    let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
+    let forward = run(
+        &dir,
+        &[
+            "base.toml",
+            "prod.toml",
+            "--append",
+            "plugins",
+            "--replace",
+            "db",
+        ],
+    );
+    let backward = run(
+        &dir,
+        &[
+            "base.toml",
+            "prod.toml",
+            "--replace",
+            "db",
+            "--append",
+            "plugins",
+        ],
+    );
+    assert_eq!(forward, backward);
+}
+
+/// The path may be absent from every layer; `--fail` pins it, it does not
+/// require it.
+#[test]
+fn fail_allows_a_path_no_layer_sets_twice() {
+    let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
+    let out = run(&dir, &["base.toml", "prod.toml", "--fail", "db.port"]);
+    assert!(out.contains("port = 5432"), "{out}");
+}
+
 /// The null pre-check runs on the *merged* document, so a null that a later
 /// layer overwrites never reaches TOML conversion and is not an error.
 #[test]
@@ -292,6 +405,54 @@ fn directory_in_the_default_command_error() {
 fn mixed_input_formats_error() {
     let dir = tree(&[("a.toml", "a = 1\n"), ("b.json", "{}")]);
     insta::assert_snapshot!(run_err(&dir, &["a.toml", "b.json"]));
+}
+
+/// A locked path names the path and the flag that locked it. The core supplies
+/// the first line, the binary the `help:`.
+#[test]
+fn fail_locked_path_error() {
+    let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
+    insta::assert_snapshot!(run_err(
+        &dir,
+        &["base.toml", "prod.toml", "--fail", "db.host"]
+    ));
+}
+
+#[test]
+fn append_over_a_non_array_error() {
+    let dir = tree(&[
+        ("a.json", r#"{"plugins":"auth"}"#),
+        ("b.json", r#"{"plugins":["metrics"]}"#),
+    ]);
+    insta::assert_snapshot!(run_err(&dir, &["a.json", "b.json", "--append", "plugins"]));
+}
+
+/// One path, two strategies — rejected whichever order the flags arrive in.
+#[test]
+fn conflicting_rules_error() {
+    let dir = tree(&[("a.json", "{}")]);
+    let forward = run_err(&dir, &["a.json", "--append", "db", "--replace", "db"]);
+    assert_eq!(
+        forward,
+        run_err(&dir, &["a.json", "--replace", "db", "--append", "db"])
+    );
+    insta::assert_snapshot!(forward);
+}
+
+/// A rule beneath a terminal rule could never fire, and saying so must not
+/// depend on reading anything: the file here does not exist.
+#[test]
+fn unreachable_rule_error_precedes_file_io() {
+    let dir = tree(&[]);
+    let err = run_err(
+        &dir,
+        &["missing.toml", "--replace", "db", "--append", "db.plugins"],
+    );
+    assert!(
+        !err.contains("missing.toml"),
+        "the rule set should be rejected before the file is read:\n{err}"
+    );
+    insta::assert_snapshot!(err);
 }
 
 #[test]

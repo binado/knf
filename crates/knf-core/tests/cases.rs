@@ -3,29 +3,44 @@
 mod common;
 
 use common::ir;
-use knf_core::{MergeError, MergeOptions, Value, merge_with};
+use knf_core::{MergeError, MergeOptions, Rules, Strategy, Value, merge_with};
+
+use ErrKind::{AppendKind, Locked, TypeConflict};
+use Expect::{Doc, Error};
+use Strategy::{Append, Fail, Replace};
 
 struct Case {
     name: &'static str,
     /// JSON literals, merged left to right.
     layers: &'static [&'static str],
-    opts: MergeOptions,
+    strict: bool,
+    /// Dotted paths and their strategies, in no meaningful order.
+    rules: &'static [(&'static str, Strategy)],
     expect: Expect,
 }
 
 enum Expect {
     /// A JSON literal the merge must equal.
     Doc(&'static str),
-    /// A type conflict at this dotted key path.
-    Conflict(&'static str),
+    /// This kind of error, at this dotted key path.
+    Error(ErrKind, &'static str),
+}
+
+/// Which [`MergeError`] a case expects, without repeating its payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrKind {
+    TypeConflict,
+    Locked,
+    AppendKind,
 }
 
 const fn ok(name: &'static str, layers: &'static [&'static str], doc: &'static str) -> Case {
     Case {
         name,
         layers,
-        opts: MergeOptions::LAST_WINS,
-        expect: Expect::Doc(doc),
+        strict: false,
+        rules: &[],
+        expect: Doc(doc),
     }
 }
 
@@ -33,8 +48,9 @@ const fn strict(name: &'static str, layers: &'static [&'static str], doc: &'stat
     Case {
         name,
         layers,
-        opts: MergeOptions::STRICT,
-        expect: Expect::Doc(doc),
+        strict: true,
+        rules: &[],
+        expect: Doc(doc),
     }
 }
 
@@ -42,8 +58,64 @@ const fn conflict(name: &'static str, layers: &'static [&'static str], path: &'s
     Case {
         name,
         layers,
-        opts: MergeOptions::STRICT,
-        expect: Expect::Conflict(path),
+        strict: true,
+        rules: &[],
+        expect: Error(TypeConflict, path),
+    }
+}
+
+const fn ruled(
+    name: &'static str,
+    layers: &'static [&'static str],
+    rules: &'static [(&'static str, Strategy)],
+    expect: Expect,
+) -> Case {
+    Case {
+        name,
+        layers,
+        strict: false,
+        rules,
+        expect,
+    }
+}
+
+const fn strict_ruled(
+    name: &'static str,
+    layers: &'static [&'static str],
+    rules: &'static [(&'static str, Strategy)],
+    expect: Expect,
+) -> Case {
+    Case {
+        name,
+        layers,
+        strict: true,
+        rules,
+        expect,
+    }
+}
+
+/// Rules are validated once per case; every `CASES` entry must be a legal set.
+fn options(case: &Case) -> MergeOptions {
+    let rules = case.rules.iter().map(|(dotted, strategy)| {
+        (
+            dotted.split('.').map(str::to_string).collect::<Vec<_>>(),
+            *strategy,
+        )
+    });
+    MergeOptions {
+        strict: case.strict,
+        rules: match case.rules.is_empty() {
+            true => None,
+            false => Some(Rules::build(rules).expect(case.name)),
+        },
+    }
+}
+
+fn err_kind(err: &MergeError) -> ErrKind {
+    match err {
+        MergeError::TypeConflict { .. } => TypeConflict,
+        MergeError::Locked { .. } => Locked,
+        MergeError::AppendKind { .. } => AppendKind,
     }
 }
 
@@ -100,27 +172,71 @@ const CASES: &[Case] = &[
     conflict("bool shadowing a number", &[r#"{"a":1}"#, r#"{"a":true}"#], "a"),
     conflict("conflict reports a nested path", &[r#"{"a":{"b":{"c":1}}}"#, r#"{"a":{"b":{"c":[]}}}"#], "a.b.c"),
     conflict("conflict from the third layer", &[r#"{"a":1}"#, r#"{"a":2}"#, r#"{"a":"three"}"#], "a"),
+
+    // --- per-path strategies ------------------------------------------------
+    ruled("append concatenates base ++ overlay", &[r#"{"a":[1,2]}"#, r#"{"a":[3]}"#], &[("a", Append)], Doc(r#"{"a":[1,2,3]}"#)),
+    ruled("append across three layers", &[r#"{"a":[1]}"#, r#"{"a":[2]}"#, r#"{"a":[3]}"#], &[("a", Append)], Doc(r#"{"a":[1,2,3]}"#)),
+    // The seed is empty, so the first layer *inserts*: one layer must never
+    // double its own array.
+    ruled("append inserts where the key is absent", &[r#"{"a":[1,2]}"#], &[("a", Append)], Doc(r#"{"a":[1,2]}"#)),
+    ruled("append inserts into a missing branch", &[r#"{"b":1}"#, r#"{"a":[1]}"#], &[("a", Append)], Doc(r#"{"b":1,"a":[1]}"#)),
+    ruled("append needs an array on the left", &[r#"{"a":1}"#, r#"{"a":[2]}"#], &[("a", Append)], Error(AppendKind, "a")),
+    ruled("append needs an array on the right", &[r#"{"a":[1]}"#, r#"{"a":2}"#], &[("a", Append)], Error(AppendKind, "a")),
+    ruled("append applies at depth", &[r#"{"a":{"b":[1]}}"#, r#"{"a":{"b":[2]}}"#], &[("a.b", Append)], Doc(r#"{"a":{"b":[1,2]}}"#)),
+
+    // Replace is the whole point: object over object stops recursing, so keys
+    // the overlay omits are gone.
+    ruled("replace does not recurse into objects", &[r#"{"a":{"x":1,"y":2}}"#, r#"{"a":{"y":9}}"#], &[("a", Replace)], Doc(r#"{"a":{"y":9}}"#)),
+    ruled("replace still inserts where the key is absent", &[r#"{"b":1}"#, r#"{"a":{"y":9}}"#], &[("a", Replace)], Doc(r#"{"b":1,"a":{"y":9}}"#)),
+    ruled("replace at depth leaves the parent merging", &[r#"{"a":{"b":{"x":1},"c":{"x":1}}}"#, r#"{"a":{"b":{"y":2},"c":{"y":2}}}"#], &[("a.b", Replace)], Doc(r#"{"a":{"b":{"y":2},"c":{"x":1,"y":2}}}"#)),
+
+    // Fail pins a path to whichever layer defined it first.
+    ruled("fail allows the first insert", &[r#"{"a":1}"#], &[("a", Fail)], Doc(r#"{"a":1}"#)),
+    ruled("fail rejects the second layer", &[r#"{"a":1}"#, r#"{"a":2}"#], &[("a", Fail)], Error(Locked, "a")),
+    ruled("fail rejects an identical value too", &[r#"{"a":1}"#, r#"{"a":1}"#], &[("a", Fail)], Error(Locked, "a")),
+    ruled("fail reports a nested path", &[r#"{"a":{"b":1}}"#, r#"{"a":{"b":2}}"#], &[("a.b", Fail)], Error(Locked, "a.b")),
+
+    // A rule is exact: siblings and parents merge as usual.
+    ruled("a rule at a.b leaves a.c alone", &[r#"{"a":{"b":[1],"c":[1]}}"#, r#"{"a":{"b":[2],"c":[2]}}"#], &[("a.b", Append)], Doc(r#"{"a":{"b":[1,2],"c":[2]}}"#)),
+    ruled("an unrelated rule changes nothing", &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":2}}"#], &[("zz", Replace)], Doc(r#"{"a":{"x":1,"y":2}}"#)),
+
+    // --strict is orthogonal: it kind-checks wherever a replacement happens,
+    // and --replace makes object-over-object one of those places.
+    strict_ruled("strict kind-checks under replace", &[r#"{"a":{"x":1}}"#, r#"{"a":5}"#], &[("a", Replace)], Error(TypeConflict, "a")),
+    strict_ruled("strict allows a same-kind replace", &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":2}}"#], &[("a", Replace)], Doc(r#"{"a":{"y":2}}"#)),
+    strict_ruled("strict has nothing to check on append", &[r#"{"a":[1]}"#, r#"{"a":[2]}"#], &[("a", Append)], Doc(r#"{"a":[1,2]}"#)),
 ];
 
 #[test]
 fn table() {
     for case in CASES {
         let layers = case.layers.iter().map(|s| ir(s));
-        let got = merge_with(layers, &case.opts);
+        let got = merge_with(layers, &options(case));
 
         match (&case.expect, got) {
-            (Expect::Doc(want), Ok(got)) => {
+            (Doc(want), Ok(got)) => {
                 assert_eq!(got, ir(want), "case `{}`", case.name);
             }
-            (Expect::Doc(want), Err(e)) => {
+            (Doc(want), Err(e)) => {
                 panic!("case `{}`: expected {want}, got error: {e}", case.name);
             }
-            (Expect::Conflict(want), Err(MergeError::TypeConflict { path, .. })) => {
-                assert_eq!(path.join("."), *want, "case `{}`: wrong path", case.name);
+            (Error(kind, want), Err(e)) => {
+                assert_eq!(
+                    err_kind(&e),
+                    *kind,
+                    "case `{}`: wrong error: {e}",
+                    case.name
+                );
+                assert_eq!(
+                    e.path().join("."),
+                    *want,
+                    "case `{}`: wrong path",
+                    case.name
+                );
             }
-            (Expect::Conflict(want), Ok(got)) => {
+            (Error(kind, want), Ok(got)) => {
                 panic!(
-                    "case `{}`: expected conflict at `{want}`, merged to {got:?}",
+                    "case `{}`: expected {kind:?} at `{want}`, merged to {got:?}",
                     case.name
                 );
             }
@@ -133,12 +249,13 @@ fn table() {
 #[test]
 fn merge_into_matches_merge_with() {
     for case in CASES {
-        let Expect::Doc(want) = case.expect else {
+        let Doc(want) = case.expect else {
             continue;
         };
+        let opts = options(case);
         let mut acc = Value::Object(Default::default());
         for layer in case.layers {
-            knf_core::merge_into(&mut acc, ir(layer), &case.opts).expect(case.name);
+            knf_core::merge_into(&mut acc, ir(layer), &opts).expect(case.name);
         }
         assert_eq!(acc, ir(want), "case `{}`", case.name);
     }
@@ -148,10 +265,10 @@ fn merge_into_matches_merge_with() {
 #[test]
 fn merge_is_last_wins() {
     for case in CASES {
-        if case.opts != MergeOptions::LAST_WINS {
+        if case.strict || !case.rules.is_empty() {
             continue;
         }
-        let Expect::Doc(want) = case.expect else {
+        let Doc(want) = case.expect else {
             continue;
         };
         let got = knf_core::merge(case.layers.iter().map(|s| ir(s))).expect(case.name);
@@ -214,5 +331,40 @@ fn datetime_conflicts_with_string_under_strict() {
             assert_eq!(expected, "datetime");
             assert_eq!(found, "string");
         }
+        other => panic!("expected a type conflict, got {other}"),
     }
+}
+
+/// The two rule-driven errors, whose text is what a user acts on. Neither may
+/// name a flag: `--append` and `--fail` are the caller's words, not the core's.
+#[test]
+fn rule_error_messages_carry_paths_only() {
+    let locked = merge_with(
+        [ir(r#"{"db":{"host":"a"}}"#), ir(r#"{"db":{"host":"b"}}"#)],
+        &MergeOptions {
+            strict: false,
+            rules: Some(Rules::build([(vec!["db".into(), "host".into()], Fail)]).expect("valid")),
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        locked.to_string(),
+        "`db.host` is locked: an earlier layer already set it"
+    );
+
+    let bad_append = merge_with(
+        [
+            ir(r#"{"plugins":"auth"}"#),
+            ir(r#"{"plugins":["metrics"]}"#),
+        ],
+        &MergeOptions {
+            strict: false,
+            rules: Some(Rules::build([(vec!["plugins".into()], Append)]).expect("valid")),
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        bad_append.to_string(),
+        "cannot append array to string at `plugins`"
+    );
 }

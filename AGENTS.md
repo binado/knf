@@ -42,8 +42,14 @@ merging, so a JSON layer over a TOML layer needs no conversion in the middle. Fo
 crates appear only at the two boundaries, and the conversions live only in
 `crates/knf/src/value.rs`, called only from `crates/knf/src/format.rs`.
 
-Pipeline (`crates/knf/src/lib.rs::run`): read each positional → `format::parse` into
-`Value` → append `--set` layers → `merge_with` over the flat list → `format::emit`.
+Pipeline (`crates/knf/src/lib.rs::run`): build `MergeOptions` (so a bad rule set fails
+before any I/O) → read each positional → `format::parse` into `Value` → append `--set`
+layers → `merge_with` over the flat list → `format::emit`.
+
+**Per-path strategies** (`knf-core/src/rules.rs`) live in the core because `merge_at`
+already threads the key path and the rule trie narrows on the same descent — pure data,
+no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every mention of
+`--append`, `--replace` and `--fail`: the core knows only `Strategy` names.
 
 ### Invariants worth not breaking
 
@@ -51,7 +57,21 @@ Pipeline (`crates/knf/src/lib.rs::run`): read each positional → `format::parse
   scalar shadowing an object breaks it), so never merge subgroups and combine results.
   Flatten first, fold second. Strict mode rejects exactly the type changes that break
   associativity, so under `--strict` the merge *is* associative.
-- **Arrays replace wholesale**; never index-merge or concatenate.
+- **Arrays replace wholesale** unless `--append` names the path; never index-merge, and
+  never concatenate anywhere else.
+- **Rules are a set, not a list.** Flag order must never affect the output — the same
+  value `resolve_output_format` protects. `Rules::build` validates the finished set in
+  one pass (rather than an insert-time check) and reports every offender sorted, so an
+  illegal set produces an identical message whatever order the flags arrived in.
+- **Terminal nesting is rejected up front.** `replace`, `fail` and `append` stop the
+  walk, so a rule beneath one can never fire and is an error when the set is built —
+  before any file is read. Only `merge` (the default) permits deeper rules. There is no
+  `--merge` flag in v1 precisely because, without globs, such a rule could only ever be
+  redundant or unreachable.
+- **A strategy only applies where the accumulator already holds a value**; an absent key
+  is inserted regardless. That is what keeps `Fail` meaning "the first layer to define
+  this pins it" and keeps `Append` from doubling a lone layer's array against the empty
+  seed — see the identity property in `props.rs`.
 - **Null is an ordinary value, not a delete instruction.** This is what makes
   `knf a.json` with one argument a byte-level no-op — a property tested in
   `crates/knf-core/tests/props.rs`.
@@ -66,7 +86,9 @@ Pipeline (`crates/knf/src/lib.rs::run`): read each positional → `format::parse
   `NullInToml::with_origins`, by re-resolving each null path against the retained
   layers. That is also why `run` only clones the layer list when output is TOML.
 - **Errors in the core carry key paths and nothing else** — no filenames, no layer
-  indices. Same rule in `knf-dotted`: no `--set` in its messages.
+  indices, and no flag names: `Locked` and `AppendKind` must not say `--fail` or
+  `--append`. `crates/knf/src/lib.rs` adds the `help:` line naming the flag. Same rule
+  in `knf-dotted`: no `--set` in its messages.
 - Every input must be an object at the top level (`format::parse`).
 - Output format is never guessed for mixed inputs — `-f` is required, so reordering
   arguments can never silently change the encoding.
@@ -76,7 +98,8 @@ Pipeline (`crates/knf/src/lib.rs::run`): read each positional → `format::parse
 - `crates/knf-core/tests/cases.rs` is table-driven; adding a merge case is one line
   in `CASES`, written as JSON literals converted by `tests/common/mod.rs` (which
   duplicates ~20 lines of `knf/src/value.rs` on purpose — merge tests must not depend
-  on the binary crate).
+  on the binary crate). A `Case` holds `strict` and a `rules` slice rather than a
+  `MergeOptions`, so the table stays `const` and one line per case.
 - `crates/knf-core/tests/props.rs` holds the proptest invariants above. Its value
   strategy excludes floats deliberately, so equality stays total.
 - `crates/knf/tests/cli.rs` runs the real binary in a tempdir with `current_dir` set
