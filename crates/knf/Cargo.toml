@@ -1,10 +1,14 @@
 [package]
-name = "knf"
+# crates.io already has an unrelated `knf`; the installed binary is still `knf`.
+name = "knf-cli"
 description = "Merge layered configuration files and print the result"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+
+[lib]
+name = "knf"
 
 [[bin]]
 name = "knf"

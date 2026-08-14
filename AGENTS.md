@@ -7,8 +7,8 @@ This file provides guidance to AI agents when working with code in this reposito
 ```bash
 cargo test --workspace                  # everything
 cargo test -p knf-merge                 # fast inner loop: no filesystem, no process
-cargo test -p knf --test cli <name>     # one CLI test by name substring
-cargo run -p knf -- base.toml prod.toml --strict
+cargo test -p knf-cli --test cli <name> # one CLI test by name substring
+cargo run -p knf-cli -- base.toml prod.toml --strict
 
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
@@ -28,7 +28,7 @@ Three crates, and the dependency direction is the design:
 ```
 knf-merge/    the merge core + its value type — indexmap + thiserror, nothing else
 knf-dotted/   the `key.path=value` parser behind --set — thiserror, serde_json behind `json`
-knf/          CLI, formats, and the conversions to and from the core's value type
+knf/          CLI crate, published as knf-cli (binary `knf`)
 ```
 
 `knf-merge` and `knf-dotted` are separate crates for **compiler-enforced separation**.
