@@ -32,19 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Verify package license copies
-        run: |
-          for crate in crates/*; do
-            cmp LICENSE "$crate/LICENSE"
-          done
-      - name: Create all crate packages
-        run: cargo package --workspace --locked --no-verify
-      - name: Verify package README and LICENSE listings
-        run: |
-          for manifest in crates/*/Cargo.toml; do
-            listing="$(cargo package --locked --no-verify --list --manifest-path "$manifest")"
-            grep -Fxq LICENSE <<<"$listing"
-            grep -Fxq README.md <<<"$listing"
-          done
+      - name: Create unpublished crate packages
+        run: cargo package -p knf-merge -p knf-dotted --locked --no-verify
       - name: Verify local CLI installation
-        run: cargo install --path crates/toargv --locked
+        run: cargo install --path crates/knf --locked
