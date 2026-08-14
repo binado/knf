@@ -1,6 +1,6 @@
 //! Two cheap properties that catch real bugs in the recursion.
 
-use knf_merge::{Map, MergeOptions, Number, Value, merge};
+use knf_core::{Map, MergeOptions, Number, Value, merge_into};
 use proptest::prelude::*;
 
 /// Arbitrary IR values, deliberately without floats so that equality is total —
@@ -36,7 +36,7 @@ fn arb_doc() -> impl Strategy<Value = Value> {
 }
 
 fn merged(mut base: Value, over: Value) -> Value {
-    merge(&mut base, over, &MergeOptions::LAST_WINS).expect("non-strict merge cannot fail");
+    merge_into(&mut base, over, &MergeOptions::LAST_WINS).expect("non-strict merge cannot fail");
     base
 }
 
@@ -61,7 +61,7 @@ proptest! {
     #[test]
     fn strict_agrees_with_default_when_it_succeeds(a in arb_doc(), b in arb_doc()) {
         let mut strict = a.clone();
-        if merge(&mut strict, b.clone(), &MergeOptions::STRICT).is_ok() {
+        if merge_into(&mut strict, b.clone(), &MergeOptions::STRICT).is_ok() {
             prop_assert_eq!(strict, merged(a, b));
         }
     }

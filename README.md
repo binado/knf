@@ -22,6 +22,18 @@ simple operation. `knf <files>` should need no explanation.
 cargo install knf-cli
 ```
 
+## Library
+
+```bash
+cargo add knf-core
+```
+
+```rust
+use knf_core::{Value, merge};
+
+let merged = merge([base, overlay])?;
+```
+
 ## Merging
 
 Files are merged left to right in argument order. Exactly one document
@@ -78,7 +90,7 @@ help: emit JSON with -f json, or remove the null
 
 ```bash
 cargo test --workspace
-cargo test -p knf-merge          # fast inner loop: no filesystem, no process
+cargo test -p knf-core           # fast inner loop: no filesystem, no process
 ```
 
 ## License

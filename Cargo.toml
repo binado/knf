@@ -27,7 +27,7 @@ serde = "1"
 
 # version is required so `cargo publish` can rewrite the path dep to a crates.io
 # requirement. Keep it equal to [workspace.package].version.
-knf-merge = { path = "crates/knf-merge", version = "0.1.0" }
+knf-core = { path = "crates/knf-core", version = "0.1.0" }
 knf-dotted = { path = "crates/knf-dotted", version = "0.1.0" }
 
 [profile.release]

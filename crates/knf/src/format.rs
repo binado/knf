@@ -8,7 +8,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use knf_merge::Value;
+use knf_core::Value;
 
 use crate::value;
 

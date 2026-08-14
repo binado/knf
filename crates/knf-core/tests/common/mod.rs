@@ -5,7 +5,7 @@
 //! duplicates ~20 lines of `knf/src/value.rs` on purpose: the merge tests must
 //! not depend on the binary crate.
 
-use knf_merge::{Number, Value};
+use knf_core::{Number, Value};
 
 /// Parses a JSON literal into the IR. Panics on a malformed literal — every
 /// caller passes a `&'static str` written in the test file.

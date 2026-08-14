@@ -291,27 +291,27 @@ dependencies = [
  "assert_cmd",
  "clap",
  "insta",
+ "knf-core",
  "knf-dotted",
- "knf-merge",
  "serde_json",
  "tempfile",
  "toml",
 ]
 
 [[package]]
-name = "knf-dotted"
+name = "knf-core"
 version = "0.1.0"
 dependencies = [
+ "indexmap",
+ "proptest",
  "serde_json",
  "thiserror",
 ]
 
 [[package]]
-name = "knf-merge"
+name = "knf-dotted"
 version = "0.1.0"
 dependencies = [
- "indexmap",
- "proptest",
  "serde_json",
  "thiserror",
 ]

@@ -3,7 +3,7 @@
 mod common;
 
 use common::ir;
-use knf_merge::{MergeError, MergeOptions, Value, merge_all};
+use knf_core::{MergeError, MergeOptions, Value, merge_with};
 
 struct Case {
     name: &'static str,
@@ -72,7 +72,7 @@ const CASES: &[Case] = &[
     ok("null survives a single layer", &[r#"{"a":null}"#], r#"{"a":null}"#),
 
     // --- §2.1: merge is not associative -------------------------------------
-    // The worked example. merge_all folds strictly left over the flat list, so
+    // The worked example. merge_with folds strictly left over the flat list, so
     // {a:5} erases {a:{b:1}} and {a:{c:2}} then merges into a fresh object.
     ok("left fold, not right", &[r#"{"a":{"b":1}}"#, r#"{"a":5}"#, r#"{"a":{"c":2}}"#], r#"{"a":{"c":2}}"#),
     // Grouping the last two first would give {"a":{"b":1,"c":2}} — the bug this
@@ -106,7 +106,7 @@ const CASES: &[Case] = &[
 fn table() {
     for case in CASES {
         let layers = case.layers.iter().map(|s| ir(s));
-        let got = merge_all(layers, &case.opts);
+        let got = merge_with(layers, &case.opts);
 
         match (&case.expect, got) {
             (Expect::Doc(want), Ok(got)) => {
@@ -128,19 +128,34 @@ fn table() {
     }
 }
 
-/// `merge` and `merge_all` must agree — the former is what callers reach for
+/// `merge_into` and `merge_with` must agree — the former is what callers reach for
 /// when they already hold an accumulator.
 #[test]
-fn merge_matches_merge_all() {
+fn merge_into_matches_merge_with() {
     for case in CASES {
         let Expect::Doc(want) = case.expect else {
             continue;
         };
         let mut acc = Value::Object(Default::default());
         for layer in case.layers {
-            knf_merge::merge(&mut acc, ir(layer), &case.opts).expect(case.name);
+            knf_core::merge_into(&mut acc, ir(layer), &case.opts).expect(case.name);
         }
         assert_eq!(acc, ir(want), "case `{}`", case.name);
+    }
+}
+
+/// [`knf_core::merge`] is last-wins [`merge_with`].
+#[test]
+fn merge_is_last_wins() {
+    for case in CASES {
+        if case.opts != MergeOptions::LAST_WINS {
+            continue;
+        }
+        let Expect::Doc(want) = case.expect else {
+            continue;
+        };
+        let got = knf_core::merge(case.layers.iter().map(|s| ir(s))).expect(case.name);
+        assert_eq!(got, ir(want), "case `{}`", case.name);
     }
 }
 
@@ -149,7 +164,8 @@ fn merge_matches_merge_all() {
 #[test]
 fn root_level_conflict_has_empty_path() {
     let mut base = Value::Object(Default::default());
-    let err = knf_merge::merge(&mut base, Value::Bool(true), &MergeOptions::STRICT).unwrap_err();
+    let err =
+        knf_core::merge_into(&mut base, Value::Bool(true), &MergeOptions::STRICT).unwrap_err();
     assert_eq!(err.path(), &[] as &[String]);
     assert!(err.to_string().contains("<root>"), "{err}");
 }
@@ -158,7 +174,7 @@ fn root_level_conflict_has_empty_path() {
 /// without the user re-running with more verbosity.
 #[test]
 fn conflict_message_names_both_kinds() {
-    let err = merge_all(
+    let err = merge_with(
         [ir(r#"{"a":{"b":1}}"#), ir(r#"{"a":5}"#)],
         &MergeOptions::STRICT,
     )
@@ -182,7 +198,7 @@ fn datetime_conflicts_with_string_under_strict() {
         .into_iter()
         .collect(),
     );
-    let err = knf_merge::merge(
+    let err = knf_core::merge_into(
         &mut base,
         ir(r#"{"a":"1979-05-27T07:32:00Z"}"#),
         &MergeOptions::STRICT,
