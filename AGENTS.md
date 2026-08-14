@@ -31,11 +31,10 @@ knf-dotted/   the `key.path=value` parser behind --set — thiserror, serde_json
 knf/          CLI, formats, and the conversions to and from the core's value type
 ```
 
-`knf-merge` and `knf-dotted` are separate crates for **compiler-enforced separation**,
-not for distribution (both are `publish = false`). A `use clap::…` or `use toml::…`
-added to the core is meant to be a build error, not a slow leak. Do not add
-dependencies to either without a deliberate reason — the manifests document the rule
-and `cargo tree` checks it.
+`knf-merge` and `knf-dotted` are separate crates for **compiler-enforced separation**.
+A `use clap::…` or `use toml::…` added to the core is meant to be a build error, not
+a slow leak. Do not add dependencies to either without a deliberate reason — the
+manifests document the rule and `cargo tree` checks it.
 
 **One IR for every format.** `knf_merge::Value` is a deliberate *superset* of JSON and
 TOML: `Null` is JSON-only, `Datetime` is TOML-only. Every layer parses into it before

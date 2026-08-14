@@ -19,7 +19,7 @@ simple operation. `knf <files>` should need no explanation.
 ## Installation
 
 ```bash
-cargo install --path crates/knf
+cargo install knf
 ```
 
 ## Merging

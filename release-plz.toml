@@ -1,12 +1,7 @@
 [workspace]
-# knf-merge and knf-dotted are `publish = false`, and knf depends on them by
-# path, so nothing in this workspace can go to crates.io yet. Version from
-# git tags; GitHub releases only.
-git_only = true
-# Only tag when the Release PR is merged, not on every push to main.
+# Only tag and publish when the Release PR is merged, not on every push to main.
 release_always = false
-# knf is a binary; the libraries are unpublished. cargo-semver-checks has
-# nothing useful to compare against.
+# No crates.io baseline yet; cargo-semver-checks has nothing to compare against.
 semver_check = false
 
 [[package]]
@@ -14,11 +9,3 @@ name = "knf"
 # Merge-core and --set parser live in sibling crates; their commits belong
 # in the CLI changelog.
 changelog_include = ["knf-merge", "knf-dotted"]
-
-[[package]]
-name = "knf-merge"
-release = false
-
-[[package]]
-name = "knf-dotted"
-release = false

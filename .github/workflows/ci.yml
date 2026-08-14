@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Create unpublished crate packages
-        run: cargo package -p knf-merge -p knf-dotted --locked --no-verify
+      - name: Create crate packages
+        run: cargo package --workspace --locked --no-verify
       - name: Verify local CLI installation
         run: cargo install --path crates/knf --locked
