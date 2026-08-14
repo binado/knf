@@ -101,7 +101,9 @@ combination, named like `foo1+bar1+region=us.toml`.
 
 The output directory may already exist, but existing output files are never
 overwritten. Unsafe filename bytes, including a literal `+`, are
-percent-encoded. A file literally named `x` can be passed as `./x`.
+percent-encoded. `--output-separator` overrides the default `+` delimiter
+used between factor names in output files (e.g. `--output-separator _`).
+A file literally named `x` can be passed as `./x`.
 
 All candidates share one output format. As in ordinary mode, mixed JSON and
 TOML inputs therefore require `-f json` or `-f toml`.

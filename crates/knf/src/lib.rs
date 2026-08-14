@@ -50,6 +50,9 @@ fn run_single(cli: Cli) -> anyhow::Result<()> {
     if cli.output_dir.is_some() {
         bail!("--output-dir requires Cartesian-product mode with a positional `x`");
     }
+    if cli.output_separator.is_some() {
+        bail!("--output-separator requires Cartesian-product mode with a positional `x`");
+    }
 
     let mut layers: Vec<(SourceName, Value)> = Vec::new();
     let mut input_formats: Vec<Format> = Vec::new();
@@ -115,6 +118,11 @@ fn run_product(cli: Cli) -> anyhow::Result<()> {
     }
 
     let out_format = resolve_output_format(cli.format, &input_formats)?;
+    let separator = cli.output_separator.as_deref().unwrap_or("+");
+    if separator.contains(['/', '\\', '\0']) {
+        bail!("output separator cannot contain path separators or null bytes: `{separator}`");
+    }
+
     let lengths: Vec<usize> = factors.iter().map(Vec::len).collect();
     let combinations = lengths
         .iter()
@@ -124,7 +132,7 @@ fn run_product(cli: Cli) -> anyhow::Result<()> {
     }
 
     validate_output_dir(output_dir)?;
-    preflight_outputs(&factors, &lengths, output_dir, out_format)?;
+    preflight_outputs(&factors, &lengths, output_dir, separator, out_format)?;
     fs::create_dir_all(output_dir)
         .with_context(|| format!("creating output directory `{}`", output_dir.display()))?;
 
@@ -136,7 +144,7 @@ fn run_product(cli: Cli) -> anyhow::Result<()> {
             .enumerate()
             .map(|(factor, choice)| &factors[factor][*choice])
             .collect();
-        let name = output_name(&selected, out_format)?;
+        let name = output_name(&selected, separator, out_format)?;
         let destination = output_dir.join(name);
 
         let sources: Vec<(SourceName, Value)> = match out_format {
@@ -236,6 +244,7 @@ fn preflight_outputs(
     factors: &[Vec<LoadedLayer>],
     lengths: &[usize],
     output_dir: &Path,
+    separator: &str,
     format: Format,
 ) -> anyhow::Result<()> {
     let mut names = HashSet::new();
@@ -245,7 +254,7 @@ fn preflight_outputs(
             .enumerate()
             .map(|(factor, choice)| &factors[factor][*choice])
             .collect();
-        let name = output_name(&selected, format)?;
+        let name = output_name(&selected, separator, format)?;
         if !names.insert(name.clone()) {
             bail!("multiple combinations produce the output name `{name}`");
         }
@@ -263,12 +272,16 @@ fn preflight_outputs(
     })
 }
 
-fn output_name(selected: &[&LoadedLayer], format: Format) -> anyhow::Result<String> {
+fn output_name(
+    selected: &[&LoadedLayer],
+    separator: &str,
+    format: Format,
+) -> anyhow::Result<String> {
     let mut name = selected
         .iter()
         .map(|layer| layer.encoded_label.as_str())
         .collect::<Vec<_>>()
-        .join("+");
+        .join(separator);
     name.push('.');
     name.push_str(format.extension());
 

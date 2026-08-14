@@ -398,6 +398,99 @@ fn output_dir_is_required_only_for_product_mode() {
         misplaced.contains("--output-dir requires Cartesian-product mode"),
         "{misplaced}"
     );
+
+    let separator_misplaced = run_err(&dir, &["left.toml", "--output-separator", "_"]);
+    assert!(
+        separator_misplaced.contains("--output-separator requires Cartesian-product mode"),
+        "{separator_misplaced}"
+    );
+}
+
+#[test]
+fn output_separator_overrides_plus_in_product_names() {
+    let dir = tree(&[
+        ("foo1.toml", "foo = 1\n"),
+        ("foo2.toml", "foo = 2\n"),
+        ("bar1.toml", "bar = 1\n"),
+        ("bar2.toml", "bar = 2\n"),
+    ]);
+
+    let out = run(
+        &dir,
+        &[
+            "foo1.toml",
+            "foo2.toml",
+            "x",
+            "bar1.toml",
+            "bar2.toml",
+            "-o",
+            "out",
+            "--output-separator",
+            "_",
+        ],
+    );
+
+    assert_eq!(
+        out,
+        "\
+out/foo1_bar1.toml
+out/foo1_bar2.toml
+out/foo2_bar1.toml
+out/foo2_bar2.toml
+"
+    );
+    assert_eq!(read(&dir, "out/foo1_bar1.toml"), "foo = 1\nbar = 1\n");
+}
+
+#[test]
+fn output_separator_supports_multi_char_and_set() {
+    let dir = tree(&[("foo.toml", "foo = true\n"), ("bar.toml", "bar = true\n")]);
+
+    let out = run(
+        &dir,
+        &[
+            "foo.toml",
+            "x",
+            "bar.toml",
+            "--set",
+            "region=us",
+            "-o",
+            "out",
+            "--output-separator",
+            "__",
+        ],
+    );
+
+    assert_eq!(out, "out/foo__bar__region=us.toml\n");
+    assert_eq!(
+        read(&dir, "out/foo__bar__region=us.toml"),
+        "foo = true\nbar = true\nregion = \"us\"\n"
+    );
+}
+
+#[test]
+fn invalid_output_separator_is_rejected() {
+    let dir = tree(&[
+        ("left.toml", "left = true\n"),
+        ("right.toml", "right = true\n"),
+    ]);
+
+    let err = run_err(
+        &dir,
+        &[
+            "left.toml",
+            "x",
+            "right.toml",
+            "-o",
+            "out",
+            "--output-separator",
+            "a/b",
+        ],
+    );
+    assert!(
+        err.contains("output separator cannot contain path separators or null bytes"),
+        "{err}"
+    );
 }
 
 #[test]
