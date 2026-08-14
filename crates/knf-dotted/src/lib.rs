@@ -25,7 +25,7 @@ use std::str::FromStr;
 /// string.
 ///
 /// `Display` of a typed leaf is canonical — dotted path, `=`, compact JSON of
-/// the leaf — so `name=foo` displays as `name="foo"`. [`FromStr`] ∘ [`Display`]
+/// the leaf — so `name=foo` displays as `name="foo"`. [`FromStr`] ∘ [`Display`](fmt::Display)
 /// preserves path and leaf, not the original spelling. [`PathLeaf<String>`]
 /// displays the raw RHS.
 #[derive(Debug, Clone, PartialEq)]
