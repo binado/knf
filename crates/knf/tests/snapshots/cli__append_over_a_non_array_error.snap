@@ -1,0 +1,6 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"a.json\", \"b.json\", \"--append\", \"plugins\"])"
+---
+error: cannot append array to string at `plugins`
+help: --append needs an array on both sides

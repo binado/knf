@@ -48,8 +48,8 @@ goes to stdout.
 
 Two consequences worth knowing:
 
-- **Arrays replace.** Index-merging would turn `["a"]` over `["x","y","z"]` into
-  `["a","y","z"]` — a value nobody wrote.
+- **Arrays replace**, unless `--append` names the path. Index-merging would turn
+  `["a"]` over `["x","y","z"]` into `["a","y","z"]` — a value nobody wrote.
 - **Null is a value, not a delete.** So `knf a.json` with one argument is always
   a byte-level no-op.
 
@@ -61,7 +61,23 @@ $ knf a.json b.json --strict
 error: type conflict at `server`: object would be replaced by number
 ```
 
-### Caveats with formats
+### Override merge behavior on specific paths
+
+What if a document has one array that should be appended to, and not replaced? 
+`knf` understands how to override the merge behavior on a specifc path: 
+```bash
+knf base.toml prod.toml --append plugins    # concatenate, base ++ prod
+knf base.toml prod.toml --replace db        # take prod's [db] whole
+knf base.toml prod.toml --fail db.host      # error if prod overrides db.host
+```
+
+| Flag | At that path |
+| --- | --- |
+| `--append` | concatenate; both sides must be arrays |
+| `--replace` | assign wholesale, no recursion, even object over object |
+| `--fail` | error; the first layer to define the path pins it |
+
+## Caveats with formats
 
 JSON and TOML, inferred from the file extension. `--input-format` overrides it
 for every input and is required for `-` (stdin).

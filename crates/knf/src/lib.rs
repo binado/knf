@@ -7,8 +7,10 @@ pub mod value;
 use std::io::{Read, Write};
 use std::path::Path;
 
-use anyhow::{Context, bail};
-use knf_core::{MergeOptions, Value, merge_with};
+use anyhow::{Context, anyhow, bail};
+use knf_core::{
+    MergeError, MergeOptions, RuleError, RuleErrors, Rules, Strategy, Value, merge_with,
+};
 use knf_dotted::PathLeaf;
 
 use cli::Cli;
@@ -23,6 +25,10 @@ const STDIN: &str = "-";
 /// [`Value`], the fold runs once, and the output format is only consulted at
 /// emit. Nothing about JSON or TOML reaches the merge.
 pub fn run(cli: Cli) -> anyhow::Result<()> {
+    // Before anything is read: a broken rule set is a mistake in the command
+    // line, and saying so must not wait on the files existing or parsing.
+    let opts = merge_options(&cli)?;
+
     let mut layers: Vec<(SourceName, Value)> = Vec::new();
     let mut input_formats: Vec<Format> = Vec::new();
 
@@ -42,7 +48,6 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
     }
 
     let out_format = resolve_output_format(cli.format, &input_formats)?;
-    let opts = merge_options(&cli);
 
     // Provenance is only ever read by the null-in-TOML error, so JSON output
     // does not pay for the clone.
@@ -51,7 +56,8 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         Format::Json => Vec::new(),
     };
 
-    let merged = merge_with(layers.into_iter().map(|(_, value)| value), &opts)?;
+    let merged =
+        merge_with(layers.into_iter().map(|(_, value)| value), &opts).map_err(name_the_flag)?;
     let text = format::emit(merged, out_format, !cli.compact, &sources)?;
     write_stdout(&text)
 }
@@ -127,8 +133,69 @@ pub fn resolve_output_format(
     }
 }
 
-pub fn merge_options(cli: &Cli) -> MergeOptions {
-    MergeOptions { strict: cli.strict }
+/// Builds the merge knobs, validating the whole rule set up front.
+///
+/// Fallible, and called before any input is read: the rules come from argv
+/// alone, so nothing about the files can change whether they are legal.
+pub fn merge_options(cli: &Cli) -> anyhow::Result<MergeOptions> {
+    let flags = [
+        (&cli.append, Strategy::Append),
+        (&cli.replace, Strategy::Replace),
+        (&cli.fail, Strategy::Fail),
+    ];
+    let rules: Vec<(Vec<String>, Strategy)> = flags
+        .into_iter()
+        .flat_map(|(paths, strategy)| {
+            paths
+                .iter()
+                .map(move |path| (path.segments().to_vec(), strategy))
+        })
+        .collect();
+
+    Ok(MergeOptions {
+        strict: cli.strict,
+        rules: Rules::build(rules).map_err(explain_rules)?,
+    })
+}
+
+/// Turns a rule-set rejection into the flags the user actually typed.
+///
+/// `knf-core` names strategies, never flags — it has no idea they are spelled
+/// `--append`, `--replace` and `--fail` — so the help lines belong here.
+fn explain_rules(errors: RuleErrors) -> anyhow::Error {
+    const FLAGS: &str = "--append, --replace and --fail";
+    let mut help = String::new();
+    if errors
+        .errors()
+        .iter()
+        .any(|e| matches!(e, RuleError::Conflict { .. }))
+    {
+        help.push_str(&format!(
+            "\nhelp: a path may be named by only one of {FLAGS}"
+        ));
+    }
+    if errors
+        .errors()
+        .iter()
+        .any(|e| matches!(e, RuleError::Unreachable { .. }))
+    {
+        help.push_str(&format!(
+            "\nhelp: {FLAGS} take the whole value at their path, so a rule below one can never fire"
+        ));
+    }
+    anyhow!("{errors}{help}")
+}
+
+/// Same division of labour for the errors a rule raises during the merge.
+fn name_the_flag(err: MergeError) -> anyhow::Error {
+    let help = match err {
+        MergeError::Locked { .. } => {
+            "help: --fail pins a path to the first layer that sets it; drop the flag or the later value"
+        }
+        MergeError::AppendKind { .. } => "help: --append needs an array on both sides",
+        MergeError::TypeConflict { .. } => return err.into(),
+    };
+    anyhow!("{err}\n{help}")
 }
 
 /// Writes to stdout, treating a closed pipe as success so `knf big.json | head`

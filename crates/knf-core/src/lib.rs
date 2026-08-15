@@ -8,25 +8,36 @@
 //! `thiserror` and `indexmap` are the only dependencies — neither is a format
 //! crate. `cargo tree -p knf-core --depth 1` is the enforcement.
 
+mod rules;
 mod strict;
 mod value;
 
+pub use rules::{RuleError, RuleErrors, Rules, Strategy};
 pub use value::{Map, Number, Value};
 
 /// Knobs on the merge itself. Passed by reference rather than encoded as cargo
 /// features: features are additive and unify across a dependency graph, so a
 /// `strict` feature would silently change behaviour for one consumer the moment
 /// a second consumer enabled it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MergeOptions {
     pub strict: bool,
+    /// Per-path overrides of the default merge. An empty set is the default
+    /// merge everywhere.
+    pub rules: Rules,
 }
 
 impl MergeOptions {
     /// The default: last layer wins, no type checking.
-    pub const LAST_WINS: Self = Self { strict: false };
+    pub const LAST_WINS: Self = Self {
+        strict: false,
+        rules: Rules::EMPTY,
+    };
     /// Error when a layer changes the kind of an existing key.
-    pub const STRICT: Self = Self { strict: true };
+    pub const STRICT: Self = Self {
+        strict: true,
+        rules: Rules::EMPTY,
+    };
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -43,13 +54,25 @@ pub enum MergeError {
         expected: &'static str,
         found: &'static str,
     },
+    /// A layer supplied a value for a path pinned by [`Strategy::Fail`].
+    #[error("`{}` is locked: an earlier layer already set it", render_path(path))]
+    Locked { path: Vec<String> },
+    /// [`Strategy::Append`] met something other than two arrays.
+    #[error("cannot append {found} to {base} at `{}`", render_path(path))]
+    AppendKind {
+        path: Vec<String>,
+        base: &'static str,
+        found: &'static str,
+    },
 }
 
 impl MergeError {
     /// The dotted key path the conflict occurred at.
     pub fn path(&self) -> &[String] {
         match self {
-            Self::TypeConflict { path, .. } => path,
+            Self::TypeConflict { path, .. }
+            | Self::Locked { path }
+            | Self::AppendKind { path, .. } => path,
         }
     }
 }
@@ -68,9 +91,11 @@ fn render_path(path: &[String]) -> String {
 /// Objects recurse per key. Arrays, scalars, datetimes and null all replace
 /// wholesale — notably arrays are never index-merged or concatenated, and null
 /// is an ordinary value that overwrites rather than a delete instruction.
+///
+/// [`MergeOptions::rules`] overrides that at the paths it names, and only there.
 pub fn merge_into(base: &mut Value, over: Value, opts: &MergeOptions) -> Result<(), MergeError> {
     let mut path = Vec::new();
-    merge_at(base, over, opts, &mut path)
+    apply(base, over, opts, &mut path, Some(&opts.rules))
 }
 
 /// Folds a list of layers into one document, last-wins, seeded with an empty object.
@@ -93,6 +118,9 @@ pub fn merge(layers: impl IntoIterator<Item = Value>) -> Result<Value, MergeErro
 ///
 /// So callers must never merge subgroups and then combine the results.
 /// Flatten first, fold second.
+///
+/// [`Strategy::Append`] does not reintroduce the problem: concatenation is
+/// associative, so strict mode still buys associativity with rules in play.
 pub fn merge_with(
     layers: impl IntoIterator<Item = Value>,
     opts: &MergeOptions,
@@ -100,35 +128,98 @@ pub fn merge_with(
     let mut acc = Value::Object(Map::new());
     let mut path = Vec::new();
     for layer in layers {
-        merge_at(&mut acc, layer, opts, &mut path)?;
+        apply(&mut acc, layer, opts, &mut path, Some(&opts.rules))?;
         debug_assert!(path.is_empty(), "breadcrumb leaked between layers");
     }
     Ok(acc)
 }
 
+/// Dispatches one node to its strategy. `rules` is the subtree of rules rooted
+/// at `path`, so the lookup is one `BTreeMap` probe per level and `None`
+/// short-circuits everything below it.
+///
+/// Reached only where `base` already holds a value: a key the accumulator does
+/// not have yet is inserted without consulting any strategy, which is what
+/// keeps [`Fail`](Strategy::Fail) meaning "the first layer to define this pins
+/// it" and keeps [`Append`](Strategy::Append) from doubling a lone layer's
+/// array against the empty seed.
+fn apply(
+    base: &mut Value,
+    over: Value,
+    opts: &MergeOptions,
+    path: &mut Vec<String>,
+    rules: Option<&Rules>,
+) -> Result<(), MergeError> {
+    match rules.and_then(Rules::strategy) {
+        None => merge_at(base, over, opts, path, rules),
+        Some(Strategy::Replace) => replace(base, over, opts, path),
+        Some(Strategy::Append) => append(base, over, path),
+        Some(Strategy::Fail) => Err(MergeError::Locked { path: path.clone() }),
+    }
+}
+
 /// The recursive worker. `path` is a breadcrumb threaded by push/pop so that a
-/// conflict can report where it happened without every frame allocating.
+/// conflict can report where it happened without every frame allocating;
+/// `rules` narrows on the same descent.
 fn merge_at(
     base: &mut Value,
     over: Value,
     opts: &MergeOptions,
     path: &mut Vec<String>,
+    rules: Option<&Rules>,
 ) -> Result<(), MergeError> {
     match (base, over) {
         (Value::Object(base_map), Value::Object(over_map)) => {
             for (k, v) in over_map {
+                let child = rules.and_then(|r| r.child(&k));
                 if let Some(slot) = base_map.get_mut(&k) {
                     path.push(k);
-                    merge_at(slot, v, opts, path)?;
+                    apply(slot, v, opts, path, child)?;
                     path.pop();
                 } else {
+                    // No collision, so no strategy applies.
                     base_map.insert(k, v);
                 }
             }
             Ok(())
         }
-        (base, over) => replace(base, over, opts, path),
+        (base, over) => {
+            if let Some(rules) = rules
+                && let Some(locked) = locked_path(base, rules)
+            {
+                let mut path = path.clone();
+                path.extend(locked);
+                return Err(MergeError::Locked { path });
+            }
+            replace(base, over, opts, path)
+        }
     }
+}
+
+/// The path to a [`Fail`](Strategy::Fail)-protected key that `base` already
+/// holds a value at, if any is nested under `rules`.
+///
+/// This is the ancestor-replacement counterpart to the direct check in
+/// [`apply`]: `merge_at` only recurses key-by-key on an `(Object, Object)`
+/// pair, so a layer that replaces an *ancestor* of a locked path wholesale
+/// (`db.host` pinned, a later layer sets `db` itself to a string) never
+/// visits `db.host` and so never consults its rule. Without this, `--fail`
+/// would silently stop meaning "pinned" the moment a layer reached far enough
+/// up the tree. `--append`'s protection does not need the same treatment: an
+/// ancestor replacement leaves no array on either side to concatenate, so
+/// there is nothing for it to protect there.
+fn locked_path(base: &Value, rules: &Rules) -> Option<Vec<String>> {
+    if rules.strategy() == Some(Strategy::Fail) {
+        return Some(Vec::new());
+    }
+    let Value::Object(map) = base else {
+        return None;
+    };
+    rules.children().find_map(|(key, child)| {
+        let mut rest = locked_path(map.get(key)?, child)?;
+        rest.insert(0, key.to_string());
+        Some(rest)
+    })
 }
 
 fn replace(
@@ -142,4 +233,20 @@ fn replace(
     }
     *base = over;
     Ok(())
+}
+
+/// Concatenates base ++ overlay. The one place a layer adds to a value instead
+/// of replacing it, so both sides must really be arrays.
+fn append(base: &mut Value, over: Value, path: &[String]) -> Result<(), MergeError> {
+    match (base, over) {
+        (Value::Array(base_items), Value::Array(over_items)) => {
+            base_items.extend(over_items);
+            Ok(())
+        }
+        (base, over) => Err(MergeError::AppendKind {
+            path: path.to_vec(),
+            base: base.kind(),
+            found: over.kind(),
+        }),
+    }
 }

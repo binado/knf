@@ -1,0 +1,6 @@
+---
+source: crates/knf/tests/cli.rs
+expression: err
+---
+error: rule at `db.plugins` can never fire: `db` is `replace`, which does not recurse
+help: --append, --replace and --fail take the whole value at their path, so a rule below one can never fire

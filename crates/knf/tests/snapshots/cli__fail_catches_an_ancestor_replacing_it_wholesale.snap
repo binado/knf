@@ -1,0 +1,7 @@
+---
+source: crates/knf/tests/cli.rs
+assertion_line: 427
+expression: "run_err(&dir, &[\"a.json\", \"b.json\", \"--fail\", \"db.host\"])"
+---
+error: `db.host` is locked: an earlier layer already set it
+help: --fail pins a path to the first layer that sets it; drop the flag or the later value

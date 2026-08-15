@@ -5,6 +5,9 @@
 //! the RHS raw. The `json` feature parses that RHS as JSON into
 //! [`serde_json::Value`], falling back to a string.
 //!
+//! [`KeyPath`] is the same path with no `=value` half, for callers that address
+//! a location rather than assign to one.
+//!
 //! This crate knows nothing about files or the command line; provenance
 //! (`--set`, filenames) is the caller's job.
 //!
@@ -30,7 +33,7 @@ use std::str::FromStr;
 /// displays the raw RHS.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PathLeaf<V> {
-    path: Vec<String>,
+    path: KeyPath,
     leaf: V,
 }
 
@@ -54,9 +57,25 @@ pub enum ParseError {
     },
 }
 
-impl<V> PathLeaf<V> {
-    /// Build from path segments and a leaf. Rejects an empty path or any empty segment.
-    pub fn new(path: Vec<String>, leaf: V) -> Result<Self, ParseError> {
+/// A validated dotted path, with no `=value` half.
+///
+/// The same path [`PathLeaf`] carries, for callers that address a location
+/// rather than assign to one. [`PathLeaf::new`] is defined in terms of it, so
+/// the empty-key and empty-segment rules exist in exactly one place.
+///
+/// [`ParseError::MissingEquals`] is shared but unreachable from
+/// [`FromStr::from_str`]: there is no `=` to miss.
+///
+/// Dots separate segments, so a key containing a literal dot is not addressable
+/// by a `KeyPath`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct KeyPath {
+    path: Vec<String>,
+}
+
+impl KeyPath {
+    /// Build from segments. Rejects an empty path or any empty segment.
+    pub fn new(path: Vec<String>) -> Result<Self, ParseError> {
         if path.is_empty() {
             return Err(ParseError::EmptyKey);
         }
@@ -65,12 +84,46 @@ impl<V> PathLeaf<V> {
                 key: path.join("."),
             });
         }
-        Ok(Self { path, leaf })
+        Ok(Self { path })
+    }
+
+    /// Path segments, in order. `server.port` is `["server", "port"]`.
+    pub fn segments(&self) -> &[String] {
+        &self.path
+    }
+
+    /// The owned segments.
+    pub fn into_segments(self) -> Vec<String> {
+        self.path
+    }
+}
+
+impl FromStr for KeyPath {
+    type Err = ParseError;
+
+    fn from_str(key: &str) -> Result<Self, Self::Err> {
+        Self::new(split_key(key)?)
+    }
+}
+
+impl fmt::Display for KeyPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.path.join("."))
+    }
+}
+
+impl<V> PathLeaf<V> {
+    /// Build from path segments and a leaf. Rejects an empty path or any empty segment.
+    pub fn new(path: Vec<String>, leaf: V) -> Result<Self, ParseError> {
+        Ok(Self {
+            path: KeyPath::new(path)?,
+            leaf,
+        })
     }
 
     /// Path segments, in order. `server.port` is `["server", "port"]`.
     pub fn path(&self) -> &[String] {
-        &self.path
+        self.path.segments()
     }
 
     /// The RHS value, not yet wrapped in nested objects.
@@ -98,6 +151,7 @@ impl<V> PathLeaf<V> {
     #[cfg(feature = "json")]
     fn into_nested(self, nest: impl Fn(String, V) -> V) -> V {
         self.path
+            .into_segments()
             .into_iter()
             .rev()
             .fold(self.leaf, |acc, key| nest(key, acc))
@@ -115,7 +169,7 @@ impl FromStr for PathLeaf<String> {
 
 impl fmt::Display for PathLeaf<String> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}={}", self.path.join("."), self.leaf)
+        write!(f, "{}={}", self.path, self.leaf)
     }
 }
 
@@ -124,10 +178,16 @@ fn split_expr(expr: &str) -> Result<(Vec<String>, &str), ParseError> {
     let Some((lhs, rhs)) = expr.split_once('=') else {
         return Err(ParseError::MissingEquals);
     };
-    if lhs.is_empty() {
+    Ok((split_key(lhs)?, rhs))
+}
+
+/// Splits a dotted key into segments. `""` is an empty key rather than one
+/// empty segment, which is the more useful of the two messages.
+fn split_key(key: &str) -> Result<Vec<String>, ParseError> {
+    if key.is_empty() {
         return Err(ParseError::EmptyKey);
     }
-    Ok((lhs.split('.').map(str::to_string).collect(), rhs))
+    Ok(key.split('.').map(str::to_string).collect())
 }
 
 #[cfg(feature = "json")]
@@ -172,6 +232,35 @@ mod tests {
         assert_eq!(path_leaf.path(), ["port"]);
         assert_eq!(path_leaf.leaf(), "8080");
         assert_eq!(path_leaf.to_string(), "port=8080");
+    }
+
+    /// The rules live in `KeyPath::new`, so both types reject the same spellings.
+    #[test]
+    fn key_path_rejects_what_path_leaf_rejects() {
+        for (bad, want) in [
+            ("", ParseError::EmptyKey),
+            ("a..b", ParseError::EmptySegment { key: "a..b".into() }),
+            (".a", ParseError::EmptySegment { key: ".a".into() }),
+            ("a.", ParseError::EmptySegment { key: "a.".into() }),
+        ] {
+            assert_eq!(bad.parse::<KeyPath>().unwrap_err(), want, "{bad}");
+        }
+        assert_eq!(KeyPath::new(vec![]).unwrap_err(), ParseError::EmptyKey);
+    }
+
+    #[test]
+    fn key_path_round_trips_through_display() {
+        let key: KeyPath = "db.plugins".parse().unwrap();
+        assert_eq!(key.segments(), ["db", "plugins"]);
+        assert_eq!(key.to_string(), "db.plugins");
+        assert_eq!(key.into_segments(), ["db", "plugins"]);
+    }
+
+    /// A `=` has no special meaning without a leaf to assign, so it is just part
+    /// of a (weird) key rather than a `MissingEquals`-shaped hole.
+    #[test]
+    fn key_path_has_no_equals_half() {
+        assert_eq!("a=b".parse::<KeyPath>().unwrap().segments(), ["a=b"]);
     }
 
     #[test]
