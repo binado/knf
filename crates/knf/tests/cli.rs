@@ -439,6 +439,17 @@ fn conflicting_rules_error() {
     insta::assert_snapshot!(forward);
 }
 
+/// Three flags, one path, one round: naming only two of them would leave the
+/// user to rediscover the third on the next run.
+#[test]
+fn a_three_way_conflict_names_every_flag() {
+    let dir = tree(&[("a.json", "{}")]);
+    insta::assert_snapshot!(run_err(
+        &dir,
+        &["a.json", "--append", "x", "--replace", "x", "--fail", "x"]
+    ));
+}
+
 /// A rule beneath a terminal rule could never fire, and saying so must not
 /// depend on reading anything: the file here does not exist.
 #[test]

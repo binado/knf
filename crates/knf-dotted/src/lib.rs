@@ -33,7 +33,7 @@ use std::str::FromStr;
 /// displays the raw RHS.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PathLeaf<V> {
-    path: Vec<String>,
+    path: KeyPath,
     leaf: V,
 }
 
@@ -116,14 +116,14 @@ impl<V> PathLeaf<V> {
     /// Build from path segments and a leaf. Rejects an empty path or any empty segment.
     pub fn new(path: Vec<String>, leaf: V) -> Result<Self, ParseError> {
         Ok(Self {
-            path: KeyPath::new(path)?.into_segments(),
+            path: KeyPath::new(path)?,
             leaf,
         })
     }
 
     /// Path segments, in order. `server.port` is `["server", "port"]`.
     pub fn path(&self) -> &[String] {
-        &self.path
+        self.path.segments()
     }
 
     /// The RHS value, not yet wrapped in nested objects.
@@ -151,6 +151,7 @@ impl<V> PathLeaf<V> {
     #[cfg(feature = "json")]
     fn into_nested(self, nest: impl Fn(String, V) -> V) -> V {
         self.path
+            .into_segments()
             .into_iter()
             .rev()
             .fold(self.leaf, |acc, key| nest(key, acc))
@@ -168,7 +169,7 @@ impl FromStr for PathLeaf<String> {
 
 impl fmt::Display for PathLeaf<String> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}={}", self.path.join("."), self.leaf)
+        write!(f, "{}={}", self.path, self.leaf)
     }
 }
 

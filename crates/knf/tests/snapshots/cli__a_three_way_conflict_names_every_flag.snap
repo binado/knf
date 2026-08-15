@@ -1,0 +1,6 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"a.json\", \"--append\", \"x\", \"--replace\", \"x\", \"--fail\", \"x\"])"
+---
+error: conflicting strategies at `x`: `append`, `replace` and `fail`
+help: a path may be named by only one of --append, --replace and --fail

@@ -43,12 +43,7 @@ fn arb_doc() -> impl Strategy<Value = Value> {
 /// Paths are non-empty, matching every rule a command line can express; the
 /// empty path names the accumulator itself, which is seeded rather than absent.
 fn arb_rules() -> impl Strategy<Value = Rules> {
-    let strategy = prop_oneof![
-        Just(Rule::Merge),
-        Just(Rule::Append),
-        Just(Rule::Replace),
-        Just(Rule::Fail),
-    ];
+    let strategy = prop_oneof![Just(Rule::Append), Just(Rule::Replace), Just(Rule::Fail)];
     let path = prop::collection::vec("[a-c]{1,2}", 1..3);
     prop::collection::vec((path, strategy), 0..4)
         .prop_filter_map("rule sets must be valid", |rules| Rules::build(rules).ok())
@@ -92,7 +87,7 @@ proptest! {
     /// `knf a.json` rests on.
     #[test]
     fn a_single_layer_is_identity_for_any_rule_set(a in arb_doc(), rules in arb_rules()) {
-        let opts = MergeOptions { strict: false, rules: Some(rules) };
+        let opts = MergeOptions { strict: false, rules };
         let got = merge_with([a.clone()], &opts).expect("no rule fires against an empty seed");
         prop_assert_eq!(got, a);
     }

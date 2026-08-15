@@ -29,7 +29,7 @@ impl fmt::Display for PathLeaf<Value> {
         // Infallible for a `Value`: only maps with non-string keys and
         // non-finite floats can fail, and neither survives a JSON parse.
         let rhs = serde_json::to_string(&self.leaf).expect("a Value always serializes");
-        write!(f, "{}={rhs}", self.path.join("."))
+        write!(f, "{}={rhs}", self.path)
     }
 }
 

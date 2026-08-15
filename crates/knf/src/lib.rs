@@ -154,10 +154,7 @@ pub fn merge_options(cli: &Cli) -> anyhow::Result<MergeOptions> {
 
     Ok(MergeOptions {
         strict: cli.strict,
-        rules: match rules.is_empty() {
-            true => None,
-            false => Some(Rules::build(rules).map_err(explain_rules)?),
-        },
+        rules: Rules::build(rules).map_err(explain_rules)?,
     })
 }
 

@@ -2,5 +2,5 @@
 source: crates/knf/tests/cli.rs
 expression: forward
 ---
-error: conflicting strategies at `db`: append and replace
+error: conflicting strategies at `db`: `append` and `replace`
 help: a path may be named by only one of --append, --replace and --fail

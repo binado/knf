@@ -62,11 +62,14 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
 - **Rules are a set, not a list.** Flag order must never affect the output — the same
   value `resolve_output_format` protects. `Rules::build` validates the finished set in
   one pass (rather than an insert-time check) and reports every offender sorted, so an
-  illegal set produces an identical message whatever order the flags arrived in.
-- **Terminal nesting is rejected up front.** `replace`, `fail` and `append` stop the
-  walk, so a rule beneath one can never fire and is an error when the set is built —
-  before any file is read. Only `merge` (the default) permits deeper rules. There is no
-  `--merge` flag in v1 precisely because, without globs, such a rule could only ever be
+  illegal set produces an identical message whatever order the flags arrived in. A
+  conflict reports the *whole* set at that path, not a pair: three flags on one path is
+  one error naming all three, so the user never learns of them one run at a time.
+- **Terminal nesting is rejected up front.** Every `Strategy` stops the walk, so a rule
+  beneath another can never fire and is an error when the set is built — before any file
+  is read. The rationale is structural rather than a carve-out: the default merge is the
+  *absence* of a rule, not a variant, so there is nothing a deeper rule could sit under.
+  That is also why there is no `--merge` flag — without globs it could only ever be
   redundant or unreachable.
 - **A strategy only applies where the accumulator already holds a value**; an absent key
   is inserted regardless. That is what keeps `Fail` meaning "the first layer to define

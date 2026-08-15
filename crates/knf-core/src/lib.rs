@@ -19,27 +19,24 @@ pub use value::{Map, Number, Value};
 /// features: features are additive and unify across a dependency graph, so a
 /// `strict` feature would silently change behaviour for one consumer the moment
 /// a second consumer enabled it.
-///
-/// Not `Copy`, because [`Rules`] is not — but `None` is const-constructible
-/// whatever it wraps, so the constants below survive.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MergeOptions {
     pub strict: bool,
-    /// Per-path overrides of the default merge. `None` is the default merge
-    /// everywhere.
-    pub rules: Option<Rules>,
+    /// Per-path overrides of the default merge. An empty set is the default
+    /// merge everywhere.
+    pub rules: Rules,
 }
 
 impl MergeOptions {
     /// The default: last layer wins, no type checking.
     pub const LAST_WINS: Self = Self {
         strict: false,
-        rules: None,
+        rules: Rules::EMPTY,
     };
     /// Error when a layer changes the kind of an existing key.
     pub const STRICT: Self = Self {
         strict: true,
-        rules: None,
+        rules: Rules::EMPTY,
     };
 }
 
@@ -98,7 +95,7 @@ fn render_path(path: &[String]) -> String {
 /// [`MergeOptions::rules`] overrides that at the paths it names, and only there.
 pub fn merge_into(base: &mut Value, over: Value, opts: &MergeOptions) -> Result<(), MergeError> {
     let mut path = Vec::new();
-    apply(base, over, opts, &mut path, opts.rules.as_ref())
+    apply(base, over, opts, &mut path, Some(&opts.rules))
 }
 
 /// Folds a list of layers into one document, last-wins, seeded with an empty object.
@@ -131,7 +128,7 @@ pub fn merge_with(
     let mut acc = Value::Object(Map::new());
     let mut path = Vec::new();
     for layer in layers {
-        apply(&mut acc, layer, opts, &mut path, opts.rules.as_ref())?;
+        apply(&mut acc, layer, opts, &mut path, Some(&opts.rules))?;
         debug_assert!(path.is_empty(), "breadcrumb leaked between layers");
     }
     Ok(acc)
@@ -153,11 +150,11 @@ fn apply(
     path: &mut Vec<String>,
     rules: Option<&Rules>,
 ) -> Result<(), MergeError> {
-    match rules.and_then(Rules::strategy).unwrap_or(Strategy::Merge) {
-        Strategy::Merge => merge_at(base, over, opts, path, rules),
-        Strategy::Replace => replace(base, over, opts, path),
-        Strategy::Append => append(base, over, path),
-        Strategy::Fail => Err(MergeError::Locked { path: path.clone() }),
+    match rules.and_then(Rules::strategy) {
+        None => merge_at(base, over, opts, path, rules),
+        Some(Strategy::Replace) => replace(base, over, opts, path),
+        Some(Strategy::Append) => append(base, over, path),
+        Some(Strategy::Fail) => Err(MergeError::Locked { path: path.clone() }),
     }
 }
 

@@ -18,15 +18,14 @@ use crate::render_path;
 
 /// What to do where a layer supplies a value for a path that already has one.
 ///
-/// Everything but [`Merge`](Strategy::Merge) is *terminal*: it consumes the
-/// overlay whole and never recurses, so no rule below it can ever fire.
+/// Every strategy is *terminal*: it consumes the overlay whole and never
+/// recurses, so no rule below one can ever fire. The default merge is the
+/// absence of a rule, not a variant here.
 ///
 /// The order of the variants is the tie-break used when reporting conflicts, so
 /// that the message does not depend on the order rules were given in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Strategy {
-    /// Objects recurse per key; everything else replaces. The default.
-    Merge,
     /// Concatenate base ++ overlay. Both sides must be arrays.
     Append,
     /// Assign wholesale, no recursion, even object over object.
@@ -35,17 +34,9 @@ pub enum Strategy {
     Fail,
 }
 
-impl Strategy {
-    /// Whether this strategy stops the walk, making any deeper rule unreachable.
-    fn is_terminal(self) -> bool {
-        !matches!(self, Self::Merge)
-    }
-}
-
 impl fmt::Display for Strategy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Merge => "merge",
             Self::Append => "append",
             Self::Replace => "replace",
             Self::Fail => "fail",
@@ -65,6 +56,12 @@ pub struct Rules {
 }
 
 impl Rules {
+    /// No rules at all: the default merge everywhere.
+    pub const EMPTY: Self = Self {
+        strategy: None,
+        children: BTreeMap::new(),
+    };
+
     /// Validates a whole rule set at once and builds the trie.
     ///
     /// Validating the finished set rather than each insertion is what makes
@@ -85,12 +82,10 @@ impl Rules {
 
         let mut errors = Vec::new();
         for (path, strategies) in &by_path {
-            let mut distinct = strategies.iter().copied();
-            if let (Some(existing), Some(found)) = (distinct.next(), distinct.next()) {
+            if strategies.len() > 1 {
                 errors.push(RuleError::Conflict {
                     path: path.clone(),
-                    existing,
-                    found,
+                    strategies: strategies.clone(),
                 });
             }
             if let Some((blocked_by, blocker)) = blocking_prefix(&by_path, path) {
@@ -136,23 +131,32 @@ impl Rules {
     }
 }
 
-/// The shallowest terminal rule strictly above `path`, if any.
+/// The shallowest rule strictly above `path`, if any.
 ///
-/// Shallowest rather than nearest because that is the rule that actually stops
-/// the walk first; with `--replace a --fail a.b`, `a.b.c` is blocked by `a`.
+/// Every strategy is terminal, so any ancestor rule blocks. Shallowest rather
+/// than nearest because that is the rule that actually stops the walk first;
+/// with `--replace a --fail a.b`, `a.b.c` is blocked by `a`. A conflicted
+/// ancestor reports its lowest strategy — its conflict is a separate error.
 fn blocking_prefix(
     by_path: &BTreeMap<Vec<String>, BTreeSet<Strategy>>,
     path: &[String],
 ) -> Option<(Vec<String>, Strategy)> {
     (0..path.len()).find_map(|depth| {
         let prefix = &path[..depth];
-        let blocker = by_path
-            .get(prefix)?
-            .iter()
-            .copied()
-            .find(|strategy| strategy.is_terminal())?;
+        let blocker = *by_path.get(prefix)?.iter().next()?;
         Some((prefix.to_vec(), blocker))
     })
+}
+
+/// Renders a strategy set as a backticked list, `a`, `b` and `c` — quoted to
+/// match the `blocker` in [`RuleError::Unreachable`].
+fn render_strategies(strategies: &BTreeSet<Strategy>) -> String {
+    let quoted: Vec<String> = strategies.iter().map(|s| format!("`{s}`")).collect();
+    match quoted.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        None => String::new(),
+    }
 }
 
 /// Why a rule set was rejected.
@@ -161,18 +165,20 @@ fn blocking_prefix(
 /// caller knows what it called its flags.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RuleError {
-    /// One path, two strategies. The pair is reported in [`Strategy`] order, not
-    /// the order the rules arrived in.
+    /// One path, more than one strategy. The whole set is carried, and reported
+    /// in [`Strategy`] order rather than the order the rules arrived in: a user
+    /// given only two of three offending flags cannot tell how many to drop.
     #[error(
-        "conflicting strategies at `{}`: {existing} and {found}",
-        render_path(path)
+        "conflicting strategies at `{}`: {}",
+        render_path(path),
+        render_strategies(strategies)
     )]
     Conflict {
         path: Vec<String>,
-        existing: Strategy,
-        found: Strategy,
+        strategies: BTreeSet<Strategy>,
     },
-    /// A rule beneath a terminal rule. It could never fire.
+    /// A rule beneath another rule. Every strategy is terminal, so it could
+    /// never fire.
     #[error(
         "rule at `{}` can never fire: `{}` is `{blocker}`, which does not recurse",
         render_path(path),
@@ -268,7 +274,7 @@ mod tests {
         );
     }
 
-    /// Conflict detected from either direction, reporting the same pair in the
+    /// Conflict detected from either direction, reporting the same set in the
     /// same order both times.
     #[test]
     fn one_path_two_strategies_conflicts_in_both_orders() {
@@ -279,9 +285,24 @@ mod tests {
             forward,
             [RuleError::Conflict {
                 path: path("db"),
-                existing: Strategy::Append,
-                found: Strategy::Replace,
+                strategies: BTreeSet::from([Strategy::Append, Strategy::Replace]),
             }]
+        );
+    }
+
+    /// The whole set, not a pair: a message naming two of three flags leaves the
+    /// user to rediscover the third on the next run.
+    #[test]
+    fn a_three_way_conflict_names_every_strategy() {
+        let found = build(&[
+            ("x", Strategy::Fail),
+            ("x", Strategy::Append),
+            ("x", Strategy::Replace),
+        ])
+        .expect_err("rejected");
+        assert_eq!(
+            found.to_string(),
+            "conflicting strategies at `x`: `append`, `replace` and `fail`"
         );
     }
 
@@ -300,12 +321,6 @@ mod tests {
                 blocker: Strategy::Replace,
             }]
         );
-    }
-
-    /// `merge` is the default and does recurse, so a rule below one is fine.
-    #[test]
-    fn a_rule_under_merge_is_reachable() {
-        build(&[("db", Strategy::Merge), ("db.plugins", Strategy::Append)]).expect("valid");
     }
 
     /// A sibling is not below anything; only strict prefixes block.
@@ -356,7 +371,7 @@ mod tests {
         assert_eq!(found, build(&reversed).expect_err("rejected"));
         assert_eq!(
             found.to_string(),
-            "conflicting strategies at `a`: append and fail\n\
+            "conflicting strategies at `a`: `append` and `fail`\n\
              rule at `z.deep` can never fire: `z` is `replace`, which does not recurse"
         );
     }

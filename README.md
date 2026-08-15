@@ -87,7 +87,8 @@ point of knf. Rules stay in argv; layers stay plain config.
 Some details that follow from that:
 
 - **Rules are a set, so flag order never affects the output.** A path named by two
-  of the flags is an error, not a race.
+  or more of the flags is an error, not a race — and one error naming every flag
+  involved, not one per pair.
 - **Nothing may nest under a rule.** All three consume the whole value at their
   path, so `--replace db --append db.plugins` is rejected — before any file is
   read, since it is a mistake in the command line alone.

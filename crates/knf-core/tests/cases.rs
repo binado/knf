@@ -104,10 +104,7 @@ fn options(case: &Case) -> MergeOptions {
     });
     MergeOptions {
         strict: case.strict,
-        rules: match case.rules.is_empty() {
-            true => None,
-            false => Some(Rules::build(rules).expect(case.name)),
-        },
+        rules: Rules::build(rules).expect(case.name),
     }
 }
 
@@ -343,7 +340,7 @@ fn rule_error_messages_carry_paths_only() {
         [ir(r#"{"db":{"host":"a"}}"#), ir(r#"{"db":{"host":"b"}}"#)],
         &MergeOptions {
             strict: false,
-            rules: Some(Rules::build([(vec!["db".into(), "host".into()], Fail)]).expect("valid")),
+            rules: Rules::build([(vec!["db".into(), "host".into()], Fail)]).expect("valid"),
         },
     )
     .unwrap_err();
@@ -359,7 +356,7 @@ fn rule_error_messages_carry_paths_only() {
         ],
         &MergeOptions {
             strict: false,
-            rules: Some(Rules::build([(vec!["plugins".into()], Append)]).expect("valid")),
+            rules: Rules::build([(vec!["plugins".into()], Append)]).expect("valid"),
         },
     )
     .unwrap_err();
