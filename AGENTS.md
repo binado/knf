@@ -84,10 +84,19 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
 - **`Value::Datetime` may only ever be produced by the TOML parser.** It stores the
   source spelling and relies on `Display`/`FromStr` round-tripping; `value.rs`'s
   `to_toml_unchecked` has an `expect` that a new producer would make reachable.
-- **Provenance never enters the merge.** `SourceName` is a CLI concept; the
-  null-in-TOML error backfills filenames after the fact via
-  `NullInToml::with_origins`, by re-resolving each null path against the retained
-  layers. That is also why `run` only clones the layer list when output is TOML.
+- **No layer outlives the merge.** `run` folds a plain `Vec<Value>`; `SourceName`
+  names an input only while it is being *read*, for parse errors, which is why it has
+  no `--set` variant. The null-in-TOML error therefore carries key paths and no
+  filenames — retaining every parsed layer past the merge to attribute a rare error is
+  not worth the clone, and neither escape it offers (`-f json`, `--null-placeholder`)
+  needs to know which file the null came from.
+- **Null is rejected on the way to TOML, never dropped.** The `toml` crate's map
+  serializer silently *skips* a `None` entry, so `value.rs`'s `collect_nulls` pre-walk is
+  the only thing standing between a null and quietly-missing keys. `--null-placeholder` is
+  the one escape, and it substitutes rather than drops because a null inside an array
+  cannot be removed without shifting every index after it — `yq` and `tomlq` both fabricate
+  a string there instead, and not the same one. It applies to TOML emission only (in
+  `format::emit`): JSON holds a null fine, so there is nothing for it to rescue.
 - **Errors in the core carry key paths and nothing else** — no filenames, no layer
   indices, and no flag names: `Locked` and `AppendKind` must not say `--fail` or
   `--append`. `crates/knf/src/lib.rs` adds the `help:` line naming the flag. Same rule

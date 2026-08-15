@@ -49,13 +49,13 @@ impl fmt::Display for Format {
     }
 }
 
-/// Where a layer came from. Used only for error messages — provenance is never
-/// threaded through the merge itself.
+/// Which input a parse error came from. Names an input being *read*, so there
+/// is no variant for `--set`: a bad `--set` expression is rejected by
+/// `knf-dotted` during argument parsing, long before anything reaches here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceName {
     File(PathBuf),
     Stdin,
-    Set(String),
 }
 
 impl fmt::Display for SourceName {
@@ -63,7 +63,6 @@ impl fmt::Display for SourceName {
         match self {
             Self::File(p) => write!(f, "{}", p.display()),
             Self::Stdin => f.write_str("<stdin>"),
-            Self::Set(expr) => write!(f, "--set {expr}"),
         }
     }
 }
@@ -97,15 +96,19 @@ pub fn parse(format: Format, text: &str, source: &SourceName) -> anyhow::Result<
 
 /// Converts the merged IR into `format` and serializes it.
 ///
-/// `sources` is the layer list, used only to name the file behind a null when
-/// TOML conversion rejects one. It is the caller's, not the merge's: provenance
-/// is never threaded through the merge itself. Pass `&[]` when there is nothing
-/// to attribute.
+/// `null_placeholder` substitutes a string for every null rather than failing
+/// on one. It is honoured in the TOML arm and nowhere else: JSON can hold a
+/// null perfectly well, so there is nothing there for it to rescue and
+/// substituting anyway would corrupt a document that was never in trouble.
+///
+/// The null pre-check inside [`value::to_toml`] is then the only thing that can
+/// fail here, and it reports key paths alone — nothing about the inputs
+/// survives the merge for it to name.
 pub fn emit(
     value: Value,
     format: Format,
     pretty: bool,
-    sources: &[(SourceName, Value)],
+    null_placeholder: Option<&str>,
 ) -> anyhow::Result<String> {
     let text = match format {
         Format::Json => {
@@ -117,7 +120,11 @@ pub fn emit(
             }
         }
         Format::Toml => {
-            let native = value::to_toml(value).map_err(|e| e.with_origins(sources))?;
+            let mut value = value;
+            if let Some(placeholder) = null_placeholder {
+                value::replace_nulls(&mut value, placeholder);
+            }
+            let native = value::to_toml(value)?;
             if pretty {
                 toml::to_string_pretty(&native)?
             } else {

@@ -331,11 +331,59 @@ fn set_null_overwritten_before_toml_emit() {
 }
 
 /// §3.2: a null reaching TOML is an error wherever it came from. `--set` used
-/// to be exempt, emitting the string `"null"`; provenance names the expression.
+/// to be exempt, emitting the string `"null"`.
 #[test]
 fn set_null_on_toml_is_an_error() {
     let dir = tree(&[("f.toml", "a = 0\n")]);
     insta::assert_snapshot!(run_err(&dir, &["f.toml", "--set", "proxy=null"]));
+}
+
+// --- --null-placeholder ---------------------------------------------------
+
+/// The escape hatch from the error above: a string the *user* picked, written
+/// wherever a null would have been.
+#[test]
+fn null_placeholder_substitutes_on_toml_output() {
+    let dir = tree(&[("f.toml", "a = 0\n")]);
+    assert_eq!(
+        run(
+            &dir,
+            &[
+                "f.toml",
+                "--set",
+                "proxy=null",
+                "--null-placeholder",
+                "none"
+            ]
+        ),
+        "a = 0\nproxy = \"none\"\n"
+    );
+}
+
+/// Inside an array a null cannot be dropped without shifting every index after
+/// it — the case where `yq` and `tomlq` each silently invent a different string
+/// (`""` and `"None"`). Substituting keeps the length and the user's choice.
+#[test]
+fn null_placeholder_substitutes_inside_arrays() {
+    let dir = tree(&[("f.json", r#"{"xs":[1,null,3]}"#)]);
+    assert_eq!(
+        run(
+            &dir,
+            &["f.json", "-f", "toml", "--null-placeholder", "none"]
+        ),
+        "xs = [\n    1,\n    \"none\",\n    3,\n]\n"
+    );
+}
+
+/// JSON can hold a null, so the flag has nothing to rescue there and must not
+/// corrupt a document that was never in trouble.
+#[test]
+fn null_placeholder_leaves_json_output_alone() {
+    let dir = tree(&[("f.json", r#"{"proxy":null}"#)]);
+    assert_eq!(
+        run(&dir, &["f.json", "--null-placeholder", "none"]),
+        "{\n  \"proxy\": null\n}\n"
+    );
 }
 
 // --- exit codes -----------------------------------------------------------
@@ -379,8 +427,9 @@ fn a_non_object_root_is_rejected_by_name() {
 
 // --- multi-line error messages (snapshotted) ------------------------------
 
-/// §3.2. The paths and the originating file come from a post-hoc lookup over
-/// the parsed inputs, not from provenance threaded through the merge.
+/// §3.2. Paths into the *merged* document and nothing else: no layer survives
+/// the merge to be named, and both escapes the help line offers (`-f json`,
+/// `--null-placeholder`) work without knowing which file the null came from.
 #[test]
 fn null_in_toml_error() {
     let dir = tree(&[

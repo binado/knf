@@ -133,6 +133,29 @@ named."
     #[arg(short = 'f', long, value_name = "FORMAT")]
     pub format: Option<Format>,
 
+    /// Write this string in place of null when emitting TOML
+    #[arg(
+        long,
+        value_name = "STRING",
+        long_help = "\
+Write this string in place of null when emitting TOML.
+
+TOML has no null, so a null reaching TOML output is an error by default. This
+substitutes a value of your choosing instead:
+
+  knf base.toml override.json -f toml --null-placeholder=none
+
+It applies to TOML output only. JSON can hold a null, so under -f json the flag
+has nothing to rescue and is ignored rather than corrupting a document that was
+never in trouble.
+
+The substitution writes a value that appeared in none of the inputs, which is
+why it is opt-in and why the string is yours to pick. It also applies inside
+arrays, where a null cannot simply be dropped without shifting every index
+after it."
+    )]
+    pub null_placeholder: Option<String>,
+
     /// Error when a layer changes the type of an existing key
     #[arg(long)]
     pub strict: bool,

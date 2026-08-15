@@ -64,9 +64,7 @@ pub fn to_toml(value: Value) -> Result<toml::Value, NullInToml> {
     let mut paths = Vec::new();
     collect_nulls(&value, &mut Vec::new(), &mut paths);
     if !paths.is_empty() {
-        return Err(NullInToml {
-            entries: paths.into_iter().map(|path| (path, None)).collect(),
-        });
+        return Err(NullInToml { entries: paths });
     }
     Ok(to_toml_unchecked(value))
 }
@@ -178,63 +176,58 @@ fn collect_nulls(value: &Value, cur: &mut Vec<Seg>, out: &mut Vec<Vec<Seg>>) {
     }
 }
 
-fn resolve<'a>(value: &'a Value, path: &[Seg]) -> Option<&'a Value> {
-    let mut cur = value;
-    for seg in path {
-        cur = match (seg, cur) {
-            (Seg::Key(k), Value::Object(obj)) => obj.get(k)?,
-            (Seg::Index(i), Value::Array(items)) => items.get(*i)?,
-            _ => return None,
-        };
+/// Substitutes `placeholder` for every null in the document.
+///
+/// The alternative to [`to_toml`]'s rejection, and so only ever called on the
+/// way to TOML — JSON holds a null fine and has nothing to be rescued from. A
+/// null cannot be encoded as TOML, leaving only two honest options: fail, or
+/// write a value that was in none of the inputs. *Which* value that is has to
+/// be the user's choice rather than the tool's — `yq` and `tomlq` both drop
+/// null keys silently, and both invent a string inside arrays (`""` and
+/// `"None"` respectively, for the same input), which is the behaviour this
+/// exists to avoid.
+pub fn replace_nulls(value: &mut Value, placeholder: &str) {
+    match value {
+        Value::Null => *value = Value::String(placeholder.to_string()),
+        Value::Object(obj) => {
+            for v in obj.values_mut() {
+                replace_nulls(v, placeholder);
+            }
+        }
+        Value::Array(items) => {
+            for v in items.iter_mut() {
+                replace_nulls(v, placeholder);
+            }
+        }
+        _ => {}
     }
-    Some(cur)
 }
 
 /// Nulls survived into a document being converted to TOML.
 ///
 /// A genuine impossibility in user data, so it is an error rather than a silent
-/// drop. Provenance is filled in after the fact by looking each path up in the
-/// layers that went into the merge — not threaded through the merge.
+/// drop: the `toml` crate's map serializer *skips* a `None` entry, so emitting
+/// without this check would quietly lose keys.
+///
+/// Carries paths and nothing else. Naming the layer each null came from would
+/// mean retaining every parsed layer past the merge purely for an error path;
+/// the paths alone locate the value in the merged document, and the usual fix
+/// (`-f json`, or `--null-placeholder`) does not depend on knowing the file.
 #[derive(Debug)]
 pub struct NullInToml {
-    /// Path segments, and the last source that wrote null there (once attached).
-    entries: Vec<(Vec<Seg>, Option<String>)>,
-}
-
-impl NullInToml {
-    /// Look each null path up in `sources` and name the last layer that wrote it.
-    pub fn with_origins<S: fmt::Display>(mut self, sources: &[(S, Value)]) -> Self {
-        for (path, origin) in &mut self.entries {
-            *origin = sources
-                .iter()
-                .rev()
-                .find(|(_, v)| resolve(v, path) == Some(&Value::Null))
-                .map(|(name, _)| name.to_string());
-        }
-        self
-    }
+    entries: Vec<Vec<Seg>>,
 }
 
 impl fmt::Display for NullInToml {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "cannot serialize null to TOML")?;
-        let rendered: Vec<(String, &Option<String>)> = self
-            .entries
-            .iter()
-            .map(|(path, origin)| (render_path(path), origin))
-            .collect();
-        let width = rendered
-            .iter()
-            .map(|(path, _)| path.len())
-            .max()
-            .unwrap_or(0);
-        for (path, origin) in &rendered {
-            match origin {
-                Some(origin) => writeln!(f, "  --> {path:<width$}   (from {origin})")?,
-                None => writeln!(f, "  --> {path}")?,
-            }
+        for path in &self.entries {
+            writeln!(f, "  --> {}", render_path(path))?;
         }
-        write!(f, "help: emit JSON with -f json, or remove the null")
+        write!(
+            f,
+            "help: emit JSON with -f json, substitute with --null-placeholder, or remove the null"
+        )
     }
 }
 
@@ -284,7 +277,7 @@ time = 07:32:00.5
     #[test]
     fn to_toml_rejects_nulls_with_array_indices() {
         let err = to_toml(ir(json!({"a": {"b": null}, "c": [1, null], "d": 2}))).unwrap_err();
-        let rendered: Vec<_> = err.entries.iter().map(|(p, _)| render_path(p)).collect();
+        let rendered: Vec<_> = err.entries.iter().map(|p| render_path(p)).collect();
         assert_eq!(rendered, vec!["a.b", "c[1]"]);
     }
 
@@ -309,16 +302,28 @@ time = 07:32:00.5
         assert_eq!(to_json(ir(src.clone())), src);
     }
 
+    /// The array case is the one both `yq` and `tomlq` fabricate a value for,
+    /// since a null cannot be dropped from an array without shifting every
+    /// index after it. Substituting preserves the length and lets the user name
+    /// the value that lands there.
     #[test]
-    fn with_origins_names_the_last_writer() {
-        let err = to_toml(ir(json!({"proxy": null}))).unwrap_err();
-        let sources = [
-            ("base.json", ir(json!({"proxy": null}))),
-            ("over.json", ir(json!({"proxy": null}))),
-        ];
-        let err = err.with_origins(&sources);
-        let msg = err.to_string();
-        assert!(msg.contains("from over.json"), "{msg}");
-        assert!(!msg.contains("from base.json"), "{msg}");
+    fn replace_nulls_substitutes_everywhere_and_unblocks_toml() {
+        let mut v = ir(json!({"a": {"b": null}, "c": [1, null, 3], "d": 2}));
+        replace_nulls(&mut v, "none");
+        assert_eq!(
+            to_json(v.clone()),
+            json!({"a": {"b": "none"}, "c": [1, "none", 3], "d": 2})
+        );
+        to_toml(v).expect("the substitution left no nulls");
+    }
+
+    /// A document without nulls is untouched, so the flag cannot perturb a
+    /// merge that never needed it.
+    #[test]
+    fn replace_nulls_is_the_identity_without_nulls() {
+        let src = json!({"a": 1, "xs": [1, 2], "nested": {"k": "v"}});
+        let mut v = ir(src.clone());
+        replace_nulls(&mut v, "none");
+        assert_eq!(to_json(v), src);
     }
 }

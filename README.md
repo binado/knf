@@ -92,15 +92,32 @@ including `--set` on top. It becomes a plain string only under `-f json`, where
 there is nothing else it could be.
 
 TOML cannot represent null, so emitting TOML from a document containing one is
-an error that names the paths and where each came from:
+an error that names every path:
 
 ```
 $ knf base.toml override.json -f toml
 error: cannot serialize null to TOML
-  --> servers.primary.proxy   (from override.json)
-  --> logging.sink            (from override.json)
-help: emit JSON with -f json, or remove the null
+  --> servers.primary.proxy
+  --> logging.sink
+help: emit JSON with -f json, substitute with --null-placeholder, or remove the null
 ```
+
+Failing is deliberate. `yq` and `tomlq` both drop the key and exit 0, and inside
+an array — where a null cannot be dropped without shifting every index after it
+— they each invent a string instead, `""` and `"None"` respectively for the same
+input. That is a value nobody wrote, which is the same reason arrays are never
+index-merged.
+
+Usually the null means you wanted JSON out, so `-f json` is the fix. When you do
+want TOML, `--null-placeholder` writes a string *you* choose in place of every
+null, arrays included:
+
+```bash
+knf base.toml override.json -f toml --null-placeholder=none
+```
+
+It applies to TOML output only; JSON can hold a null, so under `-f json` there is
+nothing for it to rescue and it is ignored.
 
 ## Testing
 
