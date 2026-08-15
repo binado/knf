@@ -183,8 +183,43 @@ fn merge_at(
             }
             Ok(())
         }
-        (base, over) => replace(base, over, opts, path),
+        (base, over) => {
+            if let Some(rules) = rules
+                && let Some(locked) = locked_path(base, rules)
+            {
+                let mut path = path.clone();
+                path.extend(locked);
+                return Err(MergeError::Locked { path });
+            }
+            replace(base, over, opts, path)
+        }
     }
+}
+
+/// The path to a [`Fail`](Strategy::Fail)-protected key that `base` already
+/// holds a value at, if any is nested under `rules`.
+///
+/// This is the ancestor-replacement counterpart to the direct check in
+/// [`apply`]: `merge_at` only recurses key-by-key on an `(Object, Object)`
+/// pair, so a layer that replaces an *ancestor* of a locked path wholesale
+/// (`db.host` pinned, a later layer sets `db` itself to a string) never
+/// visits `db.host` and so never consults its rule. Without this, `--fail`
+/// would silently stop meaning "pinned" the moment a layer reached far enough
+/// up the tree. `--append`'s protection does not need the same treatment: an
+/// ancestor replacement leaves no array on either side to concatenate, so
+/// there is nothing for it to protect there.
+fn locked_path(base: &Value, rules: &Rules) -> Option<Vec<String>> {
+    if rules.strategy() == Some(Strategy::Fail) {
+        return Some(Vec::new());
+    }
+    let Value::Object(map) = base else {
+        return None;
+    };
+    rules.children().find_map(|(key, child)| {
+        let mut rest = locked_path(map.get(key)?, child)?;
+        rest.insert(0, key.to_string());
+        Some(rest)
+    })
 }
 
 fn replace(

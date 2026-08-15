@@ -192,6 +192,13 @@ const CASES: &[Case] = &[
     ruled("fail rejects the second layer", &[r#"{"a":1}"#, r#"{"a":2}"#], &[("a", Fail)], Error(Locked, "a")),
     ruled("fail rejects an identical value too", &[r#"{"a":1}"#, r#"{"a":1}"#], &[("a", Fail)], Error(Locked, "a")),
     ruled("fail reports a nested path", &[r#"{"a":{"b":1}}"#, r#"{"a":{"b":2}}"#], &[("a.b", Fail)], Error(Locked, "a.b")),
+    // A later layer can also lose the pinned value by replacing an *ancestor*
+    // wholesale, since that never visits `a.b` to consult its rule directly.
+    // Without threading rules through that fallback, this silently dropped a.b.
+    ruled("fail catches an ancestor replacing it wholesale", &[r#"{"a":{"b":1}}"#, r#"{"a":"oops"}"#], &[("a.b", Fail)], Error(Locked, "a.b")),
+    // Append has no equivalent protection: an ancestor replacement leaves no
+    // array on either side to concatenate, so there is nothing to error about.
+    ruled("append has no array left to protect once an ancestor is replaced", &[r#"{"a":{"b":[1]}}"#, r#"{"a":"oops"}"#], &[("a.b", Append)], Doc(r#"{"a":"oops"}"#)),
 
     // A rule is exact: siblings and parents merge as usual.
     ruled("a rule at a.b leaves a.c alone", &[r#"{"a":{"b":[1],"c":[1]}}"#, r#"{"a":{"b":[2],"c":[2]}}"#], &[("a.b", Append)], Doc(r#"{"a":{"b":[1,2],"c":[2]}}"#)),

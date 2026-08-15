@@ -125,6 +125,13 @@ impl Rules {
         self.children.get(key)
     }
 
+    /// Every direct child, keyed by segment, in the same order the trie
+    /// itself is ordered — so a caller walking multiple children picks a
+    /// deterministic one regardless of rule arrival order.
+    pub(crate) fn children(&self) -> impl Iterator<Item = (&str, &Self)> {
+        self.children.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
     /// The strategy at this node, if a rule names it exactly.
     pub(crate) fn strategy(&self) -> Option<Strategy> {
         self.strategy

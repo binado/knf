@@ -418,6 +418,29 @@ fn fail_locked_path_error() {
     ));
 }
 
+/// `--fail` must also catch a later layer that replaces an *ancestor* of the
+/// locked path wholesale, not just one that sets the path directly: `db`
+/// becoming a string never visits `db.host` to consult its rule on its own.
+#[test]
+fn fail_catches_an_ancestor_replacing_it_wholesale() {
+    let dir = tree(&[
+        ("a.json", r#"{"db":{"host":"local"}}"#),
+        ("b.json", r#"{"db":"oops"}"#),
+    ]);
+    insta::assert_snapshot!(run_err(&dir, &["a.json", "b.json", "--fail", "db.host"]));
+}
+
+/// `--set` is an ordinary terminal layer, so it can trip the same lock a
+/// positional file would.
+#[test]
+fn fail_locks_a_set_layer_too() {
+    let dir = tree(&[("base.toml", BASE)]);
+    insta::assert_snapshot!(run_err(
+        &dir,
+        &["base.toml", "--fail", "db.host", "--set", "db.host=x"]
+    ));
+}
+
 #[test]
 fn append_over_a_non_array_error() {
     let dir = tree(&[
