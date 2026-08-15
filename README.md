@@ -61,16 +61,14 @@ $ knf a.json b.json --strict
 error: type conflict at `server`: object would be replaced by number
 ```
 
-### Per-path strategies
+### Override merge behavior on specific paths
 
-Most documents have one array that should accumulate and another that should be
-overridden, so the choice is per key, not per run. Three repeatable flags name a
-path and change what happens *there*:
-
+What if a document has one array that should be appended to, and not replaced? 
+`knf` understands how to override the merge behavior on a specifc path: 
 ```bash
 knf base.toml prod.toml --append plugins    # concatenate, base ++ prod
 knf base.toml prod.toml --replace db        # take prod's [db] whole
-knf base.toml prod.toml --fail db.host      # error if prod sets it again
+knf base.toml prod.toml --fail db.host      # error if prod overrides db.host
 ```
 
 | Flag | At that path |
@@ -79,29 +77,7 @@ knf base.toml prod.toml --fail db.host      # error if prod sets it again
 | `--replace` | assign wholesale, no recursion, even object over object |
 | `--fail` | error; the first layer to define the path pins it |
 
-The rules live on the command line rather than in the data, deliberately. In-data
-markers (`plugins+ = [...]`, Kubernetes' `$patch: replace`) mean a layer is no
-longer a file your app, editor and linter can read — and that portability is the
-point of knf. Rules stay in argv; layers stay plain config.
-
-Some details that follow from that:
-
-- **Rules are a set, so flag order never affects the output.** A path named by two
-  or more of the flags is an error, not a race — and one error naming every flag
-  involved, not one per pair.
-- **Nothing may nest under a rule.** All three consume the whole value at their
-  path, so `--replace db --append db.plugins` is rejected — before any file is
-  read, since it is a mistake in the command line alone.
-- **A path with no existing value is inserted, whatever the rule says.** That is
-  what keeps `--fail` meaning "the first layer to set this pins it" rather than
-  "this key may never exist", and what keeps `--append` from doubling a lone
-  layer's array.
-- **`--set` is an ordinary layer**, so rules apply to it too: `--replace db --set
-  db.host=x` leaves `db` with nothing but `host`.
-- **Paths are dotted**, so a key containing a literal dot cannot be named.
-- `--strict` is orthogonal, and still kind-checks the assignment `--replace` makes.
-
-### Caveats with formats
+## Caveats with formats
 
 JSON and TOML, inferred from the file extension. `--input-format` overrides it
 for every input and is required for `-` (stdin).
