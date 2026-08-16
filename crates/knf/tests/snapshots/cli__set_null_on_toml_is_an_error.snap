@@ -4,4 +4,4 @@ expression: "run_err(&dir, &[\"f.toml\", \"--set\", \"proxy=null\"])"
 ---
 error: cannot serialize null to TOML
   --> proxy
-help: emit JSON with -f json, substitute with --null-placeholder, or remove the null
+help: emit JSON with -f json, substitute with --null-as, or remove the null

@@ -78,6 +78,7 @@ Dotted paths nest, so keys containing a literal dot are not addressable from
     #[arg(
         long,
         value_name = "KEY.PATH",
+        help_heading = "Merge rules",
         long_help = "\
 Concatenate arrays at this path instead of replacing them. Repeatable.
 
@@ -96,6 +97,7 @@ named."
     #[arg(
         long,
         value_name = "KEY.PATH",
+        help_heading = "Merge rules",
         long_help = "\
 Replace the value at this path wholesale, without merging into it. Repeatable.
 
@@ -116,6 +118,7 @@ named."
     #[arg(
         long,
         value_name = "KEY.PATH",
+        help_heading = "Merge rules",
         long_help = "\
 Error if a later layer sets this path again. Repeatable.
 
@@ -143,7 +146,7 @@ Write this string in place of null when emitting TOML.
 TOML has no null, so a null reaching TOML output is an error by default. This
 substitutes a value of your choosing instead:
 
-  knf base.toml override.json -f toml --null-placeholder=none
+  knf base.toml override.json -f toml --null-as=none
 
 It applies to TOML output only. JSON can hold a null, so under -f json the flag
 has nothing to rescue and is ignored rather than corrupting a document that was
@@ -154,7 +157,7 @@ why it is opt-in and why the string is yours to pick. It also applies inside
 arrays, where a null cannot simply be dropped without shifting every index
 after it."
     )]
-    pub null_placeholder: Option<String>,
+    pub null_as: Option<String>,
 
     /// Error when a layer changes the type of an existing key
     #[arg(long)]

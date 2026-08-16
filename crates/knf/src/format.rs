@@ -96,10 +96,10 @@ pub fn parse(format: Format, text: &str, source: &SourceName) -> anyhow::Result<
 
 /// Converts the merged IR into `format` and serializes it.
 ///
-/// `null_placeholder` substitutes a string for every null rather than failing
-/// on one. It is honoured in the TOML arm and nowhere else: JSON can hold a
-/// null perfectly well, so there is nothing there for it to rescue and
-/// substituting anyway would corrupt a document that was never in trouble.
+/// `null_as` substitutes a string for every null rather than failing on one.
+/// It is honoured in the TOML arm and nowhere else: JSON can hold a null
+/// perfectly well, so there is nothing there for it to rescue and substituting
+/// anyway would corrupt a document that was never in trouble.
 ///
 /// The null pre-check inside [`value::to_toml`] is then the only thing that can
 /// fail here, and it reports key paths alone — nothing about the inputs
@@ -108,7 +108,7 @@ pub fn emit(
     value: Value,
     format: Format,
     pretty: bool,
-    null_placeholder: Option<&str>,
+    null_as: Option<&str>,
 ) -> anyhow::Result<String> {
     let text = match format {
         Format::Json => {
@@ -121,7 +121,7 @@ pub fn emit(
         }
         Format::Toml => {
             let mut value = value;
-            if let Some(placeholder) = null_placeholder {
+            if let Some(placeholder) = null_as {
                 value::replace_nulls(&mut value, placeholder);
             }
             let native = value::to_toml(value)?;
