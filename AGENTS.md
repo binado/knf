@@ -88,11 +88,11 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
   names an input only while it is being *read*, for parse errors, which is why it has
   no `--set` variant. The null-in-TOML error therefore carries key paths and no
   filenames — retaining every parsed layer past the merge to attribute a rare error is
-  not worth the clone, and neither escape it offers (`-f json`, `--null-placeholder`)
+  not worth the clone, and neither escape it offers (`-f json`, `--null-as`)
   needs to know which file the null came from.
 - **Null is rejected on the way to TOML, never dropped.** The `toml` crate's map
   serializer silently *skips* a `None` entry, so `value.rs`'s `collect_nulls` pre-walk is
-  the only thing standing between a null and quietly-missing keys. `--null-placeholder` is
+  the only thing standing between a null and quietly-missing keys. `--null-as` is
   the one escape, and it substitutes rather than drops because a null inside an array
   cannot be removed without shifting every index after it — `yq` and `tomlq` both fabricate
   a string there instead, and not the same one. It applies to TOML emission only (in

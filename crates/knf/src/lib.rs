@@ -49,12 +49,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
     let out_format = resolve_output_format(cli.format, &input_formats)?;
 
     let merged = merge_with(layers, &opts).map_err(name_the_flag)?;
-    let text = format::emit(
-        merged,
-        out_format,
-        !cli.compact,
-        cli.null_placeholder.as_deref(),
-    )?;
+    let text = format::emit(merged, out_format, !cli.compact, cli.null_as.as_deref())?;
     write_stdout(&text)
 }
 

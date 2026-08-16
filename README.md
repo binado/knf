@@ -99,13 +99,13 @@ $ knf base.toml override.json -f toml
 error: cannot serialize null to TOML
   --> servers.primary.proxy
   --> logging.sink
-help: emit JSON with -f json, substitute with --null-placeholder, or remove the null
+help: emit JSON with -f json, substitute with --null-as, or remove the null
 ```
 
-Alternatively, you may use the `--null-placeholder <string>` to parse nulls into a custom value:
+Alternatively, you may use `--null-as <string>` to parse nulls into a custom value:
 
 ```bash
-knf base.toml override.json -f toml --null-placeholder=none
+knf base.toml override.json -f toml --null-as=none
 ```
 The option is a no-op for JSON output. 
 

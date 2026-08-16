@@ -338,23 +338,17 @@ fn set_null_on_toml_is_an_error() {
     insta::assert_snapshot!(run_err(&dir, &["f.toml", "--set", "proxy=null"]));
 }
 
-// --- --null-placeholder ---------------------------------------------------
+// --- --null-as ------------------------------------------------------------
 
 /// The escape hatch from the error above: a string the *user* picked, written
 /// wherever a null would have been.
 #[test]
-fn null_placeholder_substitutes_on_toml_output() {
+fn null_as_substitutes_on_toml_output() {
     let dir = tree(&[("f.toml", "a = 0\n")]);
     assert_eq!(
         run(
             &dir,
-            &[
-                "f.toml",
-                "--set",
-                "proxy=null",
-                "--null-placeholder",
-                "none"
-            ]
+            &["f.toml", "--set", "proxy=null", "--null-as", "none"]
         ),
         "a = 0\nproxy = \"none\"\n"
     );
@@ -364,13 +358,10 @@ fn null_placeholder_substitutes_on_toml_output() {
 /// it — the case where `yq` and `tomlq` each silently invent a different string
 /// (`""` and `"None"`). Substituting keeps the length and the user's choice.
 #[test]
-fn null_placeholder_substitutes_inside_arrays() {
+fn null_as_substitutes_inside_arrays() {
     let dir = tree(&[("f.json", r#"{"xs":[1,null,3]}"#)]);
     assert_eq!(
-        run(
-            &dir,
-            &["f.json", "-f", "toml", "--null-placeholder", "none"]
-        ),
+        run(&dir, &["f.json", "-f", "toml", "--null-as", "none"]),
         "xs = [\n    1,\n    \"none\",\n    3,\n]\n"
     );
 }
@@ -378,10 +369,10 @@ fn null_placeholder_substitutes_inside_arrays() {
 /// JSON can hold a null, so the flag has nothing to rescue there and must not
 /// corrupt a document that was never in trouble.
 #[test]
-fn null_placeholder_leaves_json_output_alone() {
+fn null_as_leaves_json_output_alone() {
     let dir = tree(&[("f.json", r#"{"proxy":null}"#)]);
     assert_eq!(
-        run(&dir, &["f.json", "--null-placeholder", "none"]),
+        run(&dir, &["f.json", "--null-as", "none"]),
         "{\n  \"proxy\": null\n}\n"
     );
 }
@@ -429,7 +420,7 @@ fn a_non_object_root_is_rejected_by_name() {
 
 /// §3.2. Paths into the *merged* document and nothing else: no layer survives
 /// the merge to be named, and both escapes the help line offers (`-f json`,
-/// `--null-placeholder`) work without knowing which file the null came from.
+/// `--null-as`) work without knowing which file the null came from.
 #[test]
 fn null_in_toml_error() {
     let dir = tree(&[
