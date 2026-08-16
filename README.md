@@ -102,22 +102,12 @@ error: cannot serialize null to TOML
 help: emit JSON with -f json, substitute with --null-placeholder, or remove the null
 ```
 
-Failing is deliberate. `yq` and `tomlq` both drop the key and exit 0, and inside
-an array — where a null cannot be dropped without shifting every index after it
-— they each invent a string instead, `""` and `"None"` respectively for the same
-input. That is a value nobody wrote, which is the same reason arrays are never
-index-merged.
-
-Usually the null means you wanted JSON out, so `-f json` is the fix. When you do
-want TOML, `--null-placeholder` writes a string *you* choose in place of every
-null, arrays included:
+Alternatively, you may use the `--null-placeholder <string>` to parse nulls into a custom value:
 
 ```bash
 knf base.toml override.json -f toml --null-placeholder=none
 ```
-
-It applies to TOML output only; JSON can hold a null, so under `-f json` there is
-nothing for it to rescue and it is ignored.
+The option is a no-op for JSON output. 
 
 ## Testing
 
