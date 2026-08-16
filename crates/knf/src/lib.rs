@@ -29,36 +29,32 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
     // line, and saying so must not wait on the files existing or parsing.
     let opts = merge_options(&cli)?;
 
-    let mut layers: Vec<(SourceName, Value)> = Vec::new();
+    let mut layers: Vec<Value> = Vec::new();
     let mut input_formats: Vec<Format> = Vec::new();
 
     for path in &cli.files {
         let (name, format, text) = read_input(path, cli.input_format)?;
         let value = format::parse(format, &text, &name)?;
         input_formats.push(format);
-        layers.push((name, value));
+        layers.push(value);
     }
 
     // --set layers are terminal: appended after every file. The RHS parses as
     // JSON with a string fallback, which is knf-dotted's job.
     for path_leaf in &cli.set {
-        let name = SourceName::Set(path_leaf.to_string());
         let json = serde_json::Value::from(PathLeaf::<serde_json::Value>::from(path_leaf.clone()));
-        layers.push((name, value::from_json(json)));
+        layers.push(value::from_json(json));
     }
 
     let out_format = resolve_output_format(cli.format, &input_formats)?;
 
-    // Provenance is only ever read by the null-in-TOML error, so JSON output
-    // does not pay for the clone.
-    let sources: Vec<(SourceName, Value)> = match out_format {
-        Format::Toml => layers.clone(),
-        Format::Json => Vec::new(),
-    };
-
-    let merged =
-        merge_with(layers.into_iter().map(|(_, value)| value), &opts).map_err(name_the_flag)?;
-    let text = format::emit(merged, out_format, !cli.compact, &sources)?;
+    let merged = merge_with(layers, &opts).map_err(name_the_flag)?;
+    let text = format::emit(
+        merged,
+        out_format,
+        !cli.compact,
+        cli.null_placeholder.as_deref(),
+    )?;
     write_stdout(&text)
 }
 

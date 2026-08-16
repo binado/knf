@@ -92,15 +92,22 @@ including `--set` on top. It becomes a plain string only under `-f json`, where
 there is nothing else it could be.
 
 TOML cannot represent null, so emitting TOML from a document containing one is
-an error that names the paths and where each came from:
+an error that names every path:
 
 ```
 $ knf base.toml override.json -f toml
 error: cannot serialize null to TOML
-  --> servers.primary.proxy   (from override.json)
-  --> logging.sink            (from override.json)
-help: emit JSON with -f json, or remove the null
+  --> servers.primary.proxy
+  --> logging.sink
+help: emit JSON with -f json, substitute with --null-placeholder, or remove the null
 ```
+
+Alternatively, you may use the `--null-placeholder <string>` to parse nulls into a custom value:
+
+```bash
+knf base.toml override.json -f toml --null-placeholder=none
+```
+The option is a no-op for JSON output. 
 
 ## Testing
 

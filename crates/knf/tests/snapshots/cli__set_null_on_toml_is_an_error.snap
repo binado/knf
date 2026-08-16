@@ -3,5 +3,5 @@ source: crates/knf/tests/cli.rs
 expression: "run_err(&dir, &[\"f.toml\", \"--set\", \"proxy=null\"])"
 ---
 error: cannot serialize null to TOML
-  --> proxy   (from --set proxy=null)
-help: emit JSON with -f json, or remove the null
+  --> proxy
+help: emit JSON with -f json, substitute with --null-placeholder, or remove the null
