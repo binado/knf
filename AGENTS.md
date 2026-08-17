@@ -15,6 +15,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 prek run --all-files                    # both of the above, per prek.toml
 
 cargo tree -p knf-core --depth 1        # verify the core's dependency boundary
+cargo tree -p knf-interp --depth 1      # knf-core, knf-dotted, thiserror — no serde_json
 ```
 
 Snapshot tests use `insta` (`crates/knf/tests/snapshots/`). Review changes with
@@ -23,18 +24,30 @@ is the thing under test, so read a diff rather than accepting it blindly.
 
 ## Architecture
 
-Three crates, and the dependency direction is the design:
+Four crates, and the dependency direction is the design:
 
 ```
 knf-core/     the merge core + its value type — indexmap + thiserror, nothing else
 knf-dotted/   the `key.path=value` parser behind --set — thiserror, serde_json behind `json`
+knf-interp/   `${key.path}` / `${env:VAR}` resolution behind --interpolate —
+              knf-core, knf-dotted (KeyPath only), thiserror
 knf/          CLI crate, published as knf-cli (binary `knf`)
 ```
 
-`knf-core` and `knf-dotted` are separate crates for **compiler-enforced separation**.
-A `use clap::…` or `use toml::…` added to the core is meant to be a build error, not
-a slow leak. Do not add dependencies to either without a deliberate reason — the
-manifests document the rule and `cargo tree` checks it.
+The library crates are separate for **compiler-enforced separation**. A `use clap::…`
+or `use toml::…` added to the core is meant to be a build error, not a slow leak. Do
+not add dependencies to any of them without a deliberate reason — the manifests
+document the rule and `cargo tree` checks it.
+
+`knf-interp` takes `knf-dotted` with `default-features = false`, set on the
+*workspace* dependency because a member cannot turn a workspace default back off.
+That keeps `serde_json` out of its tree: `KeyPath` is unconditional in
+`knf-dotted/src/lib.rs`, only `json.rs` is gated. It also contains **no `std::env`** —
+the environment arrives through the `Env` trait, which is what keeps it deterministic
+and testable without touching process state, and what keeps the JSON-or-string typing
+rule out of it. `ProcessEnv` (`crates/knf/src/interp.rs`) is the workspace's only
+`std::env::var`, and it calls `knf_dotted::json_or_string` so `${env:PORT}` types
+exactly as `--set port=…` does.
 
 **One IR for every format.** `knf_core::Value` is a deliberate *superset* of JSON and
 TOML: `Null` is JSON-only, `Datetime` is TOML-only. Every layer parses into it before
@@ -44,7 +57,15 @@ crates appear only at the two boundaries, and the conversions live only in
 
 Pipeline (`crates/knf/src/lib.rs::run`): build `MergeOptions` (so a bad rule set fails
 before any I/O) → read each positional → `format::parse` into `Value` → append `--set`
-layers → `merge_with` over the flat list → `format::emit`.
+layers → `merge_with` over the flat list → `knf_interp::interpolate` if `--interpolate`
+→ `format::emit`.
+
+**Interpolation runs once, on the merged document, never per layer.** Several
+consequences fall out of that placement and need no code: `--set` layers interpolate
+like any other layer; `--strict` validates types *before* substitution, so a `"${port}"`
+was a string when it looked; `--null-as` is not interpolated (it runs later, and is a
+literal from argv); and a reference resolving to `Null` meets the existing TOML-null
+error and its existing escape.
 
 **Per-path strategies** (`knf-core/src/rules.rs`) live in the core because `merge_at`
 already threads the key path and the rule trie narrows on the same descent — pure data,
@@ -81,9 +102,13 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
 - **`Number::U64` is only for values that do not fit an `i64`.** Construct via
   `Number::from_u64`, which demotes; derived `PartialEq` would otherwise make
   `I64(1) != U64(1)` and equality would depend on which parser produced the value.
-- **`Value::Datetime` may only ever be produced by the TOML parser.** It stores the
+- **`Value::Datetime` may only ever *originate* in the TOML parser.** It stores the
   source spelling and relies on `Display`/`FromStr` round-tripping; `value.rs`'s
   `to_toml_unchecked` has an `expect` that a new producer would make reachable.
+  Interpolation may **copy** one (`d2 = "${d}"` takes the referent's type) — sound,
+  since the string still round-trips — but nothing may ever **synthesize** one from
+  text. That is a second reason `${env:...}` types through JSON, which has no datetime
+  and so structurally cannot fabricate one.
 - **No layer outlives the merge.** `run` folds a plain `Vec<Value>`; `SourceName`
   names an input only while it is being *read*, for parse errors, which is why it has
   no `--set` variant. The null-in-TOML error therefore carries key paths and no
@@ -97,10 +122,34 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
   cannot be removed without shifting every index after it — `yq` and `tomlq` both fabricate
   a string there instead, and not the same one. It applies to TOML emission only (in
   `format::emit`): JSON holds a null fine, so there is nothing for it to rescue.
+- **Interpolation is opt-in, and that is load-bearing rather than a preference.**
+  `knf a.json` is documented and proptested as a byte-level no-op, and knf sits directly
+  upstream of tools whose own syntax is `${...}` — compose files, Actions workflows, Helm
+  charts, systemd units. Eating those by default would be silent corruption. Opt-in also
+  keeps "output is a function of the inputs alone" a guarantee rather than a default,
+  which matters once `${env:}` makes stdout depend on the ambient environment. The
+  identity property lives in `crates/knf-interp/tests/props.rs`.
+- **Environment values are terminal.** A variable is never re-scanned, so it cannot
+  reach back into the document; only document references resolve transitively. Embedded,
+  a variable splices its **raw** text — parsing it and re-rendering it could only corrupt
+  it — while whole-string it is typed by the caller's rule.
+- **A container reference is whole-string only.** `alias = "${db}"` aliases the (fully
+  resolved) subtree; `url = "x/${db}"` is an error. There is no format-independent answer
+  to how an object renders inside a string — `{host = "x"}` under `-f toml`,
+  `{"host":"x"}` under `-f json` — and answering it would make `knf-interp` know the
+  output format and pull in a format crate, a third place they appear. Rejecting is the
+  loosenable direction.
+- **`env:` is a literal prefix match, not a split on the first `:`.** So `${a:b}` is the
+  key `a:b` and works, and `${db.host:port}` does not produce a baffling "unknown
+  namespace `db.host`". The only unaddressable keys are those literally beginning `env:`.
+  A second namespace added later would change meaning for such a document; accepted
+  knowingly.
 - **Errors in the core carry key paths and nothing else** — no filenames, no layer
   indices, and no flag names: `Locked` and `AppendKind` must not say `--fail` or
   `--append`. `crates/knf/src/lib.rs` adds the `help:` line naming the flag. Same rule
-  in `knf-dotted`: no `--set` in its messages.
+  in `knf-dotted` (no `--set`) and in `knf-interp` (no `--interpolate`; `explain_interp`
+  sits next to `explain_rules` and `name_the_flag`). `knf-interp` cannot name a file even
+  if it wanted to — it runs after the merge, and no layer outlives the merge.
 - Every input must be an object at the top level (`format::parse`).
 - Output format is never guessed for mixed inputs — `-f` is required, so reordering
   arguments can never silently change the encoding.
@@ -114,8 +163,15 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
   `MergeOptions`, so the table stays `const` and one line per case.
 - `crates/knf-core/tests/props.rs` holds the proptest invariants above. Its value
   strategy excludes floats deliberately, so equality stays total.
+- `crates/knf-interp/tests/props.rs` holds the identity property, over its own small
+  `arb_value` — test-only generators do not cross crates, so it duplicates the shape of
+  the one above (and the same float exclusion) on purpose.
+- `crates/knf-interp` unit tests run against a `HashMap`-backed stub `Env`, never the
+  process environment.
 - `crates/knf/tests/cli.rs` runs the real binary in a tempdir with `current_dir` set
-  to the fixture, so paths in output stay relative and snapshots stay stable.
+  to the fixture, so paths in output stay relative and snapshots stay stable. Anything
+  touching `${env:...}` sets its variables explicitly through the `with_env` helper
+  (`Command::env`/`env_remove`), so no test reads the ambient environment.
 
 `README.md` documents the user-facing semantics; keep it in step with any change to
-merge behaviour, `--set` typing, or error text.
+merge behaviour, `--set` typing, interpolation, or error text.

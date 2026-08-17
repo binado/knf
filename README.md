@@ -1,7 +1,7 @@
 # knf
 
 Merges layered configuration files and prints the result. One job, no query
-language, no templating.
+language, no template engine.
 
 ```bash
 # Print the output to stdout
@@ -76,6 +76,75 @@ knf base.toml prod.toml --fail db.host      # error if prod overrides db.host
 | `--append` | concatenate; both sides must be arrays |
 | `--replace` | assign wholesale, no recursion, even object over object |
 | `--fail` | error; the first layer to define the path pins it |
+
+### Variable and environment references
+
+A merged config often wants to refer to itself, or to the environment.
+`--interpolate` resolves `${key.path}` and `${env:VAR}` in string values, in one
+pass over the merged document:
+
+```toml
+# base.toml
+root     = "/srv"
+data_dir = "${root}/data"
+port     = "${env:PORT}"
+url      = "http://localhost:${env:PORT}/health"
+literal  = "$${NOT_A_REF}"
+```
+
+```console
+$ PORT=8080 knf base.toml --interpolate
+root = "/srv"
+data_dir = "/srv/data"
+port = 8080
+url = "http://localhost:8080/health"
+literal = "${NOT_A_REF}"
+```
+
+**It is opt-in, and off by default.** knf sits directly upstream of tools whose
+own syntax is `${...}` — compose files, GitHub Actions workflows, Helm charts,
+systemd units. Eating those without being asked would be silent corruption, so
+without the flag the output is byte for byte what it is today.
+
+Where the reference sits decides what it yields:
+
+| Position | Behaviour |
+| --- | --- |
+| whole string — `port = "${p}"` | takes the referent's **value and type**; `port` above is a number, and `"${db}"` is the whole table |
+| embedded — `url = "x/${p}"` | stringifies; an object or array has no format-independent spelling here, so it is an error |
+
+An environment variable is typed by the same rule as `--set`'s right-hand side
+when it is the whole string, and spliced as raw text when it is embedded —
+parsing it only to print it again could only lose something.
+
+`$$` is a literal `$`. A `$` followed by anything else is ordinary text, so
+`USD $5` needs no escaping.
+
+Document references resolve transitively and in any order; environment values
+are terminal and are never re-scanned. Cycles are an error, and so is a
+reference that names nothing:
+
+```
+$ knf base.toml --interpolate
+error: unresolved reference
+  --> server.url: `db.hostname`
+  --> tags[0]: `env:REGION`
+help: `${key.path}` names a key in the merged document, `${env:NAME}` an environment variable
+help: drop --interpolate to pass `${...}` through untouched
+```
+
+Two limits worth knowing:
+
+- **`env:` is a reserved prefix**, matched literally rather than by splitting on
+  the first `:`. So `${a:b}` is the ordinary key `a:b`, and only keys that
+  literally begin `env:` are unaddressable.
+- **References address object keys**, so there is no `${servers[0]}` — the same
+  dotted-path vocabulary `--set` and the merge rules use. A reference may
+  perfectly well *live* inside an array.
+
+`--set` layers interpolate like any other layer. `--strict` runs during the
+merge, before any substitution, so it compares the types values had when they
+were written.
 
 ## Caveats with formats
 

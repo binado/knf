@@ -77,12 +77,14 @@ fn to_toml_unchecked(value: Value) -> toml::Value {
         Value::Bool(b) => toml::Value::Boolean(b),
         Value::Number(n) => number_to_toml(n),
         Value::String(s) => toml::Value::String(s),
-        // Infallible by construction: the only producers of IR values are the
-        // TOML parser, the JSON parser and `--set` (a JSON-parsed RHS), and only
-        // the first ever emits `Datetime` — from a string `toml` itself printed.
+        // Infallible by construction: every `Datetime` *originates* in the TOML
+        // parser, from a string `toml` itself printed. Interpolation may copy
+        // one (`d2 = "${d}"` takes the referent's type), but nothing anywhere
+        // synthesizes one from text — `${env:...}` types through JSON, which has
+        // no datetime and so structurally cannot.
         Value::Datetime(s) => toml::Value::Datetime(
             s.parse()
-                .expect("a Datetime is only ever produced by the TOML parser, so it re-parses"),
+                .expect("a Datetime always originates in the TOML parser, so it re-parses"),
         ),
         Value::Array(items) => {
             toml::Value::Array(items.into_iter().map(to_toml_unchecked).collect())

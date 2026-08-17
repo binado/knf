@@ -1,0 +1,9 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "err_stderr(with_env(&mut knf(&dir), &[(\"KNF_TEST_REGION\", None)]).args(args),\n&args,)"
+---
+error: unresolved reference
+  --> server.url: `db.hostname`
+  --> tags[0]: `env:KNF_TEST_REGION`
+help: `${key.path}` names a key in the merged document, `${env:NAME}` an environment variable
+help: drop --interpolate to pass `${...}` through untouched

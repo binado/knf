@@ -2,6 +2,7 @@
 
 pub mod cli;
 pub mod format;
+pub mod interp;
 pub mod value;
 
 use std::io::{Read, Write};
@@ -12,9 +13,11 @@ use knf_core::{
     MergeError, MergeOptions, RuleError, RuleErrors, Rules, Strategy, Value, merge_with,
 };
 use knf_dotted::PathLeaf;
+use knf_interp::{InterpError, Problem};
 
 use cli::Cli;
 use format::{Format, SourceName};
+use interp::ProcessEnv;
 
 /// The positional that means "read stdin".
 const STDIN: &str = "-";
@@ -49,6 +52,16 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
     let out_format = resolve_output_format(cli.format, &input_formats)?;
 
     let merged = merge_with(layers, &opts).map_err(name_the_flag)?;
+    // After the merge, before the emit, and never per layer: a reference reads
+    // the document the user is actually going to get. `--set` layers therefore
+    // interpolate like any other layer, and `--strict` has already run — it
+    // compares the types values had when they were *written*, so a `"${port}"`
+    // was a string when it looked.
+    let merged = if cli.interpolate {
+        knf_interp::interpolate(merged, &ProcessEnv).map_err(explain_interp)?
+    } else {
+        merged
+    };
     let text = format::emit(merged, out_format, !cli.compact, cli.null_as.as_deref())?;
     write_stdout(&text)
 }
@@ -187,6 +200,46 @@ fn name_the_flag(err: MergeError) -> anyhow::Error {
         MergeError::TypeConflict { .. } => return err.into(),
     };
     anyhow!("{err}\n{help}")
+}
+
+/// The same division of labour for interpolation.
+///
+/// `knf-interp` names key paths and reference spellings; it has never heard of
+/// `--interpolate`, so the flag only appears here.
+fn explain_interp(err: InterpError) -> anyhow::Error {
+    let mut help = String::new();
+    match &err {
+        InterpError::Cycle(_) => {
+            help.push_str("\nhelp: a reference may not resolve, directly or indirectly, to itself")
+        }
+        InterpError::Problems(problems) => {
+            // One help line per kind present, in the order the message lists
+            // them, then the escape that applies to a document whose `${...}`
+            // was never meant for knf in the first place.
+            let has = |f: fn(&Problem) -> bool| problems.iter().any(f);
+            let syntax = has(|p| matches!(p, Problem::Syntax { .. }));
+            let unresolved = has(|p| matches!(p, Problem::Unresolved { .. }));
+            if syntax {
+                help.push_str(
+                    "\nhelp: a reference is `${key.path}` or `${env:NAME}`; write `$$` for a literal `$`",
+                );
+            }
+            if unresolved {
+                help.push_str(
+                    "\nhelp: `${key.path}` names a key in the merged document, `${env:NAME}` an environment variable",
+                );
+            }
+            if has(|p| matches!(p, Problem::NotStringifiable { .. })) {
+                help.push_str(
+                    "\nhelp: an object or array reference must be the whole string, not embedded in one",
+                );
+            }
+            if syntax || unresolved {
+                help.push_str("\nhelp: drop --interpolate to pass `${...}` through untouched");
+            }
+        }
+    }
+    anyhow!("{err}{help}")
 }
 
 /// Writes to stdout, treating a closed pipe as success so `knf big.json | head`

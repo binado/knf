@@ -28,7 +28,12 @@ serde = "1"
 # version is required so `cargo publish` can rewrite the path dep to a crates.io
 # requirement. Keep it equal to [workspace.package].version.
 knf-core = { path = "crates/knf-core", version = "0.1.2" }
-knf-dotted = { path = "crates/knf-dotted", version = "0.1.2" }
+# `default-features = false` here rather than at a member: knf-interp wants
+# `KeyPath` alone and must not pull serde_json in, and a member cannot turn a
+# workspace dependency's default features back off. The CLI opts into `json`
+# explicitly, which is the only place the RHS typing rule is wanted.
+knf-dotted = { path = "crates/knf-dotted", version = "0.1.2", default-features = false }
+knf-interp = { path = "crates/knf-interp", version = "0.1.2" }
 
 [profile.release]
 lto = "thin"

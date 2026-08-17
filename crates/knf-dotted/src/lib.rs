@@ -3,7 +3,8 @@
 //! [`PathLeaf`] parses `key.path=value`. The path is always typed; the leaf
 //! type `V` is chosen by the caller. [`FromStr`] for [`PathLeaf<String>`] keeps
 //! the RHS raw. The `json` feature parses that RHS as JSON into
-//! [`serde_json::Value`], falling back to a string.
+//! [`serde_json::Value`], falling back to a string — a rule exported on its own
+//! as [`json_or_string`], for callers that need the same typing without a path.
 //!
 //! [`KeyPath`] is the same path with no `=value` half, for callers that address
 //! a location rather than assign to one.
@@ -192,6 +193,9 @@ fn split_key(key: &str) -> Result<Vec<String>, ParseError> {
 
 #[cfg(feature = "json")]
 mod json;
+
+#[cfg(feature = "json")]
+pub use json::json_or_string;
 
 #[cfg(test)]
 mod tests {

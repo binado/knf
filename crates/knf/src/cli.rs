@@ -159,6 +159,47 @@ after it."
     )]
     pub null_as: Option<String>,
 
+    /// Resolve ${key.path} and ${env:VAR} references in the merged document
+    #[arg(
+        long,
+        long_help = "\
+Resolve ${key.path} and ${env:VAR} references in the merged document.
+
+Opt-in, and off by default. knf sits upstream of tools whose own syntax is
+${...} — compose files, GitHub Actions workflows, Helm charts, systemd units —
+so eating those without being asked would be silent corruption. Off, the output
+is exactly what it is today.
+
+The pass runs once, on the merged document, never per layer:
+
+  root     = \"/srv\"
+  data_dir = \"${root}/data\"    -> \"/srv/data\"
+  port     = \"${env:PORT}\"     -> 8080  (a number, not a string)
+  url      = \"x:${env:PORT}\"   -> \"x:8080\"
+  literal  = \"$${NOT_A_REF}\"   -> \"${NOT_A_REF}\"
+
+A reference that is the *whole* string takes the referent's value and type, so
+${port} can yield a number, an array or a table. A reference *embedded* in text
+stringifies; an object or array has no format-independent spelling there, so it
+is an error rather than a guess. An environment variable is spliced as raw text
+when embedded and typed like --set's right-hand side when it is the whole
+string.
+
+$$ is a literal $. A $ followed by anything else is ordinary text, so `USD $5`
+needs no escaping.
+
+Document references resolve transitively and in any order; environment values
+are terminal and are never re-scanned. Cycles are an error.
+
+`env:` is a reserved prefix, matched literally: ${a:b} is the ordinary key
+`a:b`, and only keys that literally begin `env:` are unaddressable. References
+address object keys, so there is no ${list[0]}.
+
+An unset variable or a missing key is an error naming every offender, never
+passed through as literal text."
+    )]
+    pub interpolate: bool,
+
     /// Error when a layer changes the type of an existing key
     #[arg(long)]
     pub strict: bool,
