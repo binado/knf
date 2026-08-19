@@ -410,7 +410,7 @@ fn an_empty_variable_name_is_syntax_not_a_lookup() {
 
 // --- shape ----------------------------------------------------------------
 
-/// References may live inside arrays even though they can never point into one.
+/// References may live inside arrays…
 #[test]
 fn references_resolve_inside_arrays() {
     let doc = obj(vec![
@@ -437,4 +437,136 @@ fn key_order_survives_a_pass() {
         panic!("expected an object");
     };
     assert_eq!(map.keys().collect::<Vec<_>>(), ["zebra", "apple", "middle"]);
+}
+
+// --- indexed references ---------------------------------------------------
+
+/// …and may point into one. A whole-string reference to an element types like
+/// the element, exactly as a key reference types like the value it names.
+#[test]
+fn a_whole_string_indexed_reference_takes_the_elements_type() {
+    let doc = obj(vec![
+        ("tags", Value::Array(vec![n(8080)])),
+        ("port", s("${tags[0]}")),
+    ]);
+    assert_eq!(
+        interp(doc).unwrap(),
+        obj(vec![
+            ("tags", Value::Array(vec![n(8080)])),
+            ("port", n(8080))
+        ])
+    );
+}
+
+#[test]
+fn an_index_chain_reads_through_arrays() {
+    let doc = obj(vec![
+        (
+            "servers",
+            Value::Array(vec![obj(vec![("host", s("a")), ("port", n(1))])]),
+        ),
+        ("url", s("http://${servers[0].host}:${servers[0].port}")),
+    ]);
+    let out = interp(doc).unwrap();
+    let Value::Object(map) = &out else {
+        panic!("expected an object");
+    };
+    assert_eq!(map["url"], s("http://a:1"));
+}
+
+/// Whole-string, an element that is a container aliases the *resolved*
+/// subtree — the same rule as for a plain key reference.
+#[test]
+fn a_whole_string_element_reference_aliases_a_resolved_subtree() {
+    let doc = obj(vec![
+        ("host", s("db.internal")),
+        (
+            "servers",
+            Value::Array(vec![obj(vec![("host", s("${host}")), ("port", n(5432))])]),
+        ),
+        ("primary", s("${servers[0]}")),
+    ]);
+    let out = interp(doc).unwrap();
+    let Value::Object(map) = &out else {
+        panic!("expected an object");
+    };
+    let expected = obj(vec![("host", s("db.internal")), ("port", n(5432))]);
+    assert_eq!(map["primary"], expected);
+}
+
+/// Embedded, an element that is a container has no spelling — the same rule
+/// as for a plain key reference.
+#[test]
+fn an_embedded_element_container_is_rejected() {
+    let doc = obj(vec![
+        ("servers", Value::Array(vec![obj(vec![("host", s("x"))])])),
+        ("url", s("http://${servers[0]}/")),
+    ]);
+    assert_eq!(
+        err(doc),
+        "reference cannot be rendered into a string\n  --> url: `servers[0]` is an object"
+    );
+}
+
+/// An element that is a datetime copies whole-string — the same copy rule as
+/// for a key, so the datetime never reaches an emitter as fabricated text.
+#[test]
+fn an_indexed_datetime_copies_whole_string() {
+    let doc = obj(vec![
+        (
+            "dates",
+            Value::Array(vec![Value::Datetime("1979-05-27T07:32:00Z".into())]),
+        ),
+        ("stamp", s("${dates[0]}")),
+    ]);
+    let out = interp(doc).unwrap();
+    let Value::Object(map) = &out else {
+        panic!("expected an object");
+    };
+    assert_eq!(map["stamp"], Value::Datetime("1979-05-27T07:32:00Z".into()));
+}
+
+#[test]
+fn an_out_of_range_index_is_unresolved() {
+    let doc = obj(vec![
+        ("tags", Value::Array(vec![n(1)])),
+        ("t", s("${tags[9]}")),
+    ]);
+    assert_eq!(err(doc), "unresolved reference\n  --> t: `tags[9]`");
+}
+
+#[test]
+fn a_malformed_index_is_a_syntax_problem() {
+    let doc = obj(vec![("a", s("${tags[x]}")), ("b", s("${tags[]}"))]);
+    assert_eq!(
+        err(doc),
+        "invalid reference\n\
+         \x20 --> a: malformed index in reference `${tags[x]}`\n\
+         \x20 --> b: malformed index in reference `${tags[]}`"
+    );
+}
+
+#[test]
+fn a_cycle_through_an_array_names_the_index() {
+    let doc = obj(vec![
+        ("a", s("${b[0]}")),
+        ("b", Value::Array(vec![s("${a}")])),
+    ]);
+    assert_eq!(err(doc), "reference cycle: `a` -> `b[0]` -> `a`");
+}
+
+/// A key literally spelled `a[0]` exists and a `--set` can still write one,
+/// but the reference grammar now reads brackets: it resolves as the index.
+#[test]
+fn a_bracket_body_reads_as_an_index_not_a_weird_key() {
+    let doc = obj(vec![
+        ("a", Value::Array(vec![s("elem")])),
+        ("a[0]", s("weird key")),
+        ("v", s("${a[0]}")),
+    ]);
+    let out = interp(doc).unwrap();
+    let Value::Object(map) = &out else {
+        panic!("expected an object");
+    };
+    assert_eq!(map["v"], s("elem"));
 }

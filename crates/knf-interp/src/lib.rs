@@ -20,8 +20,9 @@
 //! what keeps the JSON-or-string typing rule out of this crate: the caller
 //! parses and hands over a [`Value`].
 //!
-//! `knf-core`, `knf-dotted` (for [`KeyPath`] alone, so `serde_json` stays out)
-//! and `thiserror`. No format crate, no I/O.
+//! `knf-core`, `knf-dotted` (with `default-features = false`, so `serde_json`
+//! stays out — the path vocabulary is unconditional there) and `thiserror`.
+//! No format crate, no I/O.
 //! `cargo tree -p knf-interp --depth 1` is the enforcement.
 
 mod error;
@@ -32,10 +33,10 @@ mod scan;
 use std::collections::HashMap;
 
 use knf_core::{Map, Value};
-use knf_dotted::KeyPath;
+use knf_dotted::{RefError, RefPath};
 
 pub use error::{Cycle, InterpError, Problem};
-pub use path::{Seg, render_path};
+pub use knf_dotted::{Seg, render_path};
 pub use scan::Syntax;
 
 use path::lookup;
@@ -141,7 +142,7 @@ impl<'a> Resolver<'a> {
         let resolved = self.resolve_value(raw, path)?;
         self.visiting.pop();
 
-        // The root is skipped: no reference can name it (a `KeyPath` is never
+        // The root is skipped: no reference can name it (a `RefPath` is never
         // empty) and it is resolved exactly once, so caching it would only
         // clone the whole document for nobody.
         if !path.is_empty() {
@@ -272,19 +273,33 @@ impl<'a> Resolver<'a> {
     /// The document path a reference names, recording a problem and returning
     /// `None` if it is malformed or names nothing.
     ///
-    /// References address objects only: `KeyPath` has no bracket syntax, so
-    /// there is no `${servers[0]}` and every segment is a key.
+    /// A reference may *read* an array element — `${servers[0]}` parses through
+    /// `RefPath`, where the merge-side grammars stay keys-only — and memoization,
+    /// cycle detection and the whole-string/embedded split all run on `Vec<Seg>`
+    /// already, so nothing downstream of this parse changes.
     fn target(&mut self, body: &str, path: &[Seg]) -> Option<Vec<Seg>> {
-        let Ok(key) = body.parse::<KeyPath>() else {
-            self.problems.push(Problem::Syntax {
-                path: path.to_vec(),
-                error: Syntax::EmptySegment {
-                    body: body.to_string(),
-                },
-            });
-            return None;
+        let target: Vec<Seg> = match body.parse::<RefPath>() {
+            Ok(parsed) => parsed.into_segs(),
+            Err(RefError::BadIndex { .. }) => {
+                self.problems.push(Problem::Syntax {
+                    path: path.to_vec(),
+                    error: Syntax::BadIndex {
+                        body: body.to_string(),
+                    },
+                });
+                return None;
+            }
+            // `EmptyKey` is unreachable: the scanner rejects `${}` first.
+            Err(RefError::EmptySegment { .. } | RefError::EmptyKey) => {
+                self.problems.push(Problem::Syntax {
+                    path: path.to_vec(),
+                    error: Syntax::EmptySegment {
+                        body: body.to_string(),
+                    },
+                });
+                return None;
+            }
         };
-        let target: Vec<Seg> = key.into_segments().into_iter().map(Seg::Key).collect();
         if lookup(self.doc, &target).is_none() {
             self.problems.push(Problem::Unresolved {
                 path: path.to_vec(),

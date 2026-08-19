@@ -12,7 +12,7 @@ use std::fmt;
 /// One span of a scanned string.
 ///
 /// A `Ref` body is deliberately left unparsed: the `env:` prefix and the
-/// [`KeyPath`](knf_dotted::KeyPath) split are resolution's business, not the
+/// [`RefPath`](knf_dotted::RefPath) split are resolution's business, not the
 /// scanner's, and keeping them apart is what makes this a `find` loop rather
 /// than a grammar.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,9 +42,13 @@ pub enum Syntax {
     #[error("empty variable name in `${{env:}}`")]
     EmptyEnvName,
     /// `${a..b}` — a dotted path with an empty segment. Also raised downstream,
-    /// where the body is parsed as a key path.
+    /// where the body is parsed as a reference path.
     #[error("empty segment in reference `${{{body}}}`")]
     EmptySegment { body: String },
+    /// `${servers[x]}` — a bracket step that is not an array index: empty,
+    /// non-numeric, too big, or unclosed. Also raised downstream.
+    #[error("malformed index in reference `${{{body}}}`")]
+    BadIndex { body: String },
 }
 
 /// Splits `s` into literals and reference bodies.

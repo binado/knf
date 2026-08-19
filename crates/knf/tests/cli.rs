@@ -459,6 +459,21 @@ fn whole_string_references_keep_the_referents_type() {
     );
 }
 
+/// Brackets let a reference read an array element, whole-string or chained —
+/// typed exactly as a key reference would be.
+#[test]
+fn references_read_array_elements() {
+    let dir = tree(&[(
+        "f.json",
+        r#"{"servers":[{"host":"a","port":5432}],"url":"http://${servers[0].host}:${servers[0].port}","primary":"${servers[0]}"}"#,
+    )]);
+    assert_eq!(
+        run(&dir, &["f.json", "--interpolate", "--compact"]),
+        "{\"servers\":[{\"host\":\"a\",\"port\":5432}],\
+         \"url\":\"http://a:5432\",\"primary\":{\"host\":\"a\",\"port\":5432}}\n"
+    );
+}
+
 /// The pass runs on the *merged* document, so a reference sees the value the
 /// last layer actually left there, not the one in the file it was written in.
 #[test]
@@ -531,8 +546,7 @@ fn a_null_referent_meets_the_existing_toml_null_error() {
 // --- --interpolate errors (snapshotted) -----------------------------------
 
 /// Every offender in one run, with paths into the merged document — array
-/// indices included, since a reference may live inside an array even though it
-/// can never point into one.
+/// indices included, since a reference may live inside an array.
 #[test]
 fn unresolved_reference_error() {
     let dir = tree(&[(
@@ -561,6 +575,12 @@ fn malformed_reference_error() {
         "f.json",
         r#"{"a":"${b","c":"${}","d":"${env:}","e":"${x..y}"}"#,
     )]);
+    insta::assert_snapshot!(run_err(&dir, &["f.json", "--interpolate"]));
+}
+
+#[test]
+fn malformed_index_error() {
+    let dir = tree(&[("f.json", r#"{"tags":["a"],"t":"${tags[x]}"}"#)]);
     insta::assert_snapshot!(run_err(&dir, &["f.json", "--interpolate"]));
 }
 

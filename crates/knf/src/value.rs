@@ -9,6 +9,7 @@
 use std::fmt;
 
 use knf_core::{Number, Value};
+use knf_dotted::{Seg, render_path};
 
 /// JSON → IR. Total: every JSON value has an IR counterpart.
 pub fn from_json(value: serde_json::Value) -> Value {
@@ -133,29 +134,6 @@ fn number_to_toml(n: Number) -> toml::Value {
 }
 
 // --- nulls in TOML --------------------------------------------------------
-
-/// One step of a path into a value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Seg {
-    Key(String),
-    Index(usize),
-}
-
-fn render_path(path: &[Seg]) -> String {
-    let mut out = String::new();
-    for seg in path {
-        match seg {
-            Seg::Key(k) => {
-                if !out.is_empty() {
-                    out.push('.');
-                }
-                out.push_str(k);
-            }
-            Seg::Index(i) => out.push_str(&format!("[{i}]")),
-        }
-    }
-    out
-}
 
 fn collect_nulls(value: &Value, cur: &mut Vec<Seg>, out: &mut Vec<Vec<Seg>>) {
     match value {

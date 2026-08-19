@@ -28,9 +28,10 @@ Four crates, and the dependency direction is the design:
 
 ```
 knf-core/     the merge core + its value type — indexmap + thiserror, nothing else
-knf-dotted/   the `key.path=value` parser behind --set — thiserror, serde_json behind `json`
-knf-interp/   `${key.path}` / `${env:VAR}` resolution behind --interpolate —
-              knf-core, knf-dotted (KeyPath only), thiserror
+knf-dotted/   the path vocabulary (Seg/KeyPath/RefPath) + the `key.path=value`
+              parser behind --set — thiserror, serde_json behind `json`
+knf-interp/   `${key.path}` / `${servers[0]}` / `${env:VAR}` resolution behind
+              --interpolate — knf-core, knf-dotted (paths only), thiserror
 knf/          CLI crate, published as knf-cli (binary `knf`)
 ```
 
@@ -41,13 +42,22 @@ document the rule and `cargo tree` checks it.
 
 `knf-interp` takes `knf-dotted` with `default-features = false`, set on the
 *workspace* dependency because a member cannot turn a workspace default back off.
-That keeps `serde_json` out of its tree: `KeyPath` is unconditional in
-`knf-dotted/src/lib.rs`, only `json.rs` is gated. It also contains **no `std::env`** —
-the environment arrives through the `Env` trait, which is what keeps it deterministic
-and testable without touching process state, and what keeps the JSON-or-string typing
-rule out of it. `ProcessEnv` (`crates/knf/src/interp.rs`) is the workspace's only
-`std::env::var`, and it calls `knf_dotted::json_or_string` so `${env:PORT}` types
-exactly as `--set port=…` does.
+That keeps `serde_json` out of its tree: `Seg`, `KeyPath` and `RefPath` are
+unconditional in `knf-dotted/src/lib.rs`, only `json.rs` is gated. It also
+contains **no `std::env`** — the environment arrives through the `Env` trait,
+which is what keeps it deterministic and testable without touching process
+state, and what keeps the JSON-or-string typing rule out of it. `ProcessEnv`
+(`crates/knf/src/interp.rs`) is the workspace's only `std::env::var`, and it
+calls `knf_dotted::json_or_string` so `${env:PORT}` types exactly as
+`--set port=…` does.
+
+**Path types: one vocabulary, two predicates.** `Seg` is the single step type.
+`KeyPath` is a newtype over `Vec<Seg>` whose only constructors keep it all-key —
+merge-side paths (`--set`, the rule flags) can *never* be indexed, by
+construction rather than discipline. A bare `Vec<Seg>` is the witness a walker
+builds; `RefPath` is the one bracket-accepting spelling, for a consumer that
+only reads. `lookup` stays out of `knf-dotted` because it needs
+`knf_core::Value`, and `knf-dotted` must not.
 
 **One IR for every format.** `knf_core::Value` is a deliberate *superset* of JSON and
 TOML: `Null` is JSON-only, `Datetime` is TOML-only. Every layer parses into it before

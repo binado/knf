@@ -192,8 +192,13 @@ Document references resolve transitively and in any order; environment values
 are terminal and are never re-scanned. Cycles are an error.
 
 `env:` is a reserved prefix, matched literally: ${a:b} is the ordinary key
-`a:b`, and only keys that literally begin `env:` are unaddressable. References
-address object keys, so there is no ${list[0]}.
+`a:b`, and only keys that literally begin `env:` are unaddressable.
+
+A reference may read an array element — ${servers[0].host} — with all the same
+rules: whole-string it takes the element's value and type, embedded it
+stringifies. Brackets are part of the grammar now, so a key literally spelled
+`a[0]` is no longer addressable by a reference, exactly as a key containing a
+literal dot never was; a file or --set can still write one.
 
 An unset variable or a missing key is an error naming every offender, never
 passed through as literal text."

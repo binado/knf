@@ -1,41 +1,16 @@
-//! Indexed paths into a document.
+//! Indexed lookups into a document.
 //!
-//! A near-copy of the `Seg`/`render_path` pair in `crates/knf/src/value.rs`,
-//! duplicated on purpose rather than promoted: `knf-core`'s own paths are
-//! `Vec<String>` because merge only ever descends through object keys, and
-//! moving an indexed path type there would make the core carry something it
-//! never uses. The same trade `crates/knf-core/tests/common/mod.rs` already
-//! makes.
+//! [`Seg`] itself lives in `knf-dotted` with the rest of the path vocabulary;
+//! only [`lookup`] is here, because it is the one piece that needs
+//! `knf_core::Value` — and `knf-dotted` must not.
 //!
-//! Indices exist because references may *live* inside an array even though they
-//! can never *point* into one — `KeyPath` has no bracket syntax, so there is no
-//! `${servers[0]}`.
+//! Indices serve both directions of a reference: where one *lives* — inside an
+//! array, if that is where the string sits — and where one *points*, since a
+//! `${servers[0]}` body parses to a path with an [`Seg::Index`] in it. The
+//! merge-side grammars stay keys-only; only this crate's readers index.
 
 use knf_core::Value;
-
-/// One step of a path into a value.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Seg {
-    Key(String),
-    Index(usize),
-}
-
-/// Renders a path for display: `servers.primary.host`, `tags[0]`.
-pub fn render_path(path: &[Seg]) -> String {
-    let mut out = String::new();
-    for seg in path {
-        match seg {
-            Seg::Key(k) => {
-                if !out.is_empty() {
-                    out.push('.');
-                }
-                out.push_str(k);
-            }
-            Seg::Index(i) => out.push_str(&format!("[{i}]")),
-        }
-    }
-    out
-}
+use knf_dotted::Seg;
 
 /// The node at `path`, or `None` if nothing lives there.
 pub fn lookup<'a>(root: &'a Value, path: &[Seg]) -> Option<&'a Value> {
@@ -65,19 +40,6 @@ mod tests {
             Value::Array(vec![Value::Number(Number::I64(1))]),
         );
         Value::Object(root)
-    }
-
-    #[test]
-    fn rendering_mixes_keys_and_indices() {
-        assert_eq!(render_path(&[]), "");
-        assert_eq!(
-            render_path(&[Seg::Key("a".into()), Seg::Key("b".into())]),
-            "a.b"
-        );
-        assert_eq!(
-            render_path(&[Seg::Key("tags".into()), Seg::Index(0)]),
-            "tags[0]"
-        );
     }
 
     #[test]

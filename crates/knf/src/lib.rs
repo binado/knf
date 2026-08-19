@@ -152,7 +152,7 @@ pub fn merge_options(cli: &Cli) -> anyhow::Result<MergeOptions> {
         .flat_map(|(paths, strategy)| {
             paths
                 .iter()
-                .map(move |path| (path.segments().to_vec(), strategy))
+                .map(move |path| (path.keys().map(str::to_owned).collect(), strategy))
         })
         .collect();
 
@@ -221,7 +221,7 @@ fn explain_interp(err: InterpError) -> anyhow::Error {
             let unresolved = has(|p| matches!(p, Problem::Unresolved { .. }));
             if syntax {
                 help.push_str(
-                    "\nhelp: a reference is `${key.path}` or `${env:NAME}`; write `$$` for a literal `$`",
+                    "\nhelp: a reference is `${key.path}` (with `[n]` for array elements) or `${env:NAME}`; write `$$` for a literal `$`",
                 );
             }
             if unresolved {

@@ -133,14 +133,19 @@ help: `${key.path}` names a key in the merged document, `${env:NAME}` an environ
 help: drop --interpolate to pass `${...}` through untouched
 ```
 
+A reference may also read an array element — `${servers[0].host}` — with the
+same two-position rules: whole-string it takes the element's value and type,
+embedded it stringifies.
+
 Two limits worth knowing:
 
 - **`env:` is a reserved prefix**, matched literally rather than by splitting on
   the first `:`. So `${a:b}` is the ordinary key `a:b`, and only keys that
   literally begin `env:` are unaddressable.
-- **References address object keys**, so there is no `${servers[0]}` — the same
-  dotted-path vocabulary `--set` and the merge rules use. A reference may
-  perfectly well *live* inside an array.
+- **A key spelled with brackets is unaddressable** — `${a[0]}` now reads as *the
+  first element of `a`*, never as a key literally named `a[0]`, even though a
+  file or `--set 'a[0]=1'` can still write one. The same accepted loss as keys
+  containing a literal dot, which the dotted grammars have always excluded.
 
 `--set` layers interpolate like any other layer. `--strict` runs during the
 merge, before any substitution, so it compares the types values had when they
