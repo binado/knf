@@ -15,12 +15,22 @@ impl FromStr for PathLeaf<Value> {
     }
 }
 
+/// Parses text as JSON, falling back to the string itself.
+///
+/// `8080` is a number, `true` is a bool, `foo` is the string `"foo"` because it
+/// is not valid JSON, and `[a,b]` is the string `"[a,b]"` for the same reason.
+///
+/// Public because more than one caller needs *this* rule rather than a rule like
+/// it: `--set`'s RHS and `${env:VAR}` in a whole-string position must type
+/// identically, and two matching implementations would only agree until one of
+/// them was edited.
+pub fn json_or_string(text: String) -> Value {
+    serde_json::from_str(&text).unwrap_or_else(|_| Value::String(text))
+}
+
 impl From<PathLeaf<String>> for PathLeaf<Value> {
     fn from(path_leaf: PathLeaf<String>) -> Self {
-        // JSON first, string as the fallback. `port=8080` is a number, `name=foo`
-        // is a string because it is not valid JSON, and `tags=[a,b]` is the string
-        // "[a,b]" for the same reason.
-        path_leaf.map_leaf(|rhs| serde_json::from_str(&rhs).unwrap_or_else(|_| Value::String(rhs)))
+        path_leaf.map_leaf(json_or_string)
     }
 }
 

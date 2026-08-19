@@ -9,6 +9,7 @@
 use std::fmt;
 
 use knf_core::{Number, Value};
+use knf_dotted::{Seg, render_path};
 
 /// JSON → IR. Total: every JSON value has an IR counterpart.
 pub fn from_json(value: serde_json::Value) -> Value {
@@ -77,12 +78,14 @@ fn to_toml_unchecked(value: Value) -> toml::Value {
         Value::Bool(b) => toml::Value::Boolean(b),
         Value::Number(n) => number_to_toml(n),
         Value::String(s) => toml::Value::String(s),
-        // Infallible by construction: the only producers of IR values are the
-        // TOML parser, the JSON parser and `--set` (a JSON-parsed RHS), and only
-        // the first ever emits `Datetime` — from a string `toml` itself printed.
+        // Infallible by construction: every `Datetime` *originates* in the TOML
+        // parser, from a string `toml` itself printed. Interpolation may copy
+        // one (`d2 = "${d}"` takes the referent's type), but nothing anywhere
+        // synthesizes one from text — `${env:...}` types through JSON, which has
+        // no datetime and so structurally cannot.
         Value::Datetime(s) => toml::Value::Datetime(
             s.parse()
-                .expect("a Datetime is only ever produced by the TOML parser, so it re-parses"),
+                .expect("a Datetime always originates in the TOML parser, so it re-parses"),
         ),
         Value::Array(items) => {
             toml::Value::Array(items.into_iter().map(to_toml_unchecked).collect())
@@ -131,29 +134,6 @@ fn number_to_toml(n: Number) -> toml::Value {
 }
 
 // --- nulls in TOML --------------------------------------------------------
-
-/// One step of a path into a value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Seg {
-    Key(String),
-    Index(usize),
-}
-
-fn render_path(path: &[Seg]) -> String {
-    let mut out = String::new();
-    for seg in path {
-        match seg {
-            Seg::Key(k) => {
-                if !out.is_empty() {
-                    out.push('.');
-                }
-                out.push_str(k);
-            }
-            Seg::Index(i) => out.push_str(&format!("[{i}]")),
-        }
-    }
-    out
-}
 
 fn collect_nulls(value: &Value, cur: &mut Vec<Seg>, out: &mut Vec<Vec<Seg>>) {
     match value {

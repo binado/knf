@@ -1,0 +1,21 @@
+[package]
+name = "knf-interp"
+description = "${key.path} and ${env:VAR} reference resolution over the knf merge IR"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# knf-dotted for `KeyPath` alone, which is unconditional; the workspace takes it
+# with `default-features = false`, so the `json` feature's serde_json stays out
+# of this tree. There is no format crate and no `std::env` here — environment
+# access is injected through the `Env` trait, which is what keeps this crate
+# deterministic and testable without touching process state.
+# `cargo tree -p knf-interp --depth 1` is the enforcement.
+[dependencies]
+knf-core.workspace = true
+knf-dotted.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest = "1"

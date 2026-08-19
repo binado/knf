@@ -25,7 +25,16 @@ fn knf(dir: &TempDir) -> Command {
 
 /// stdout of a run that must succeed.
 fn run(dir: &TempDir, args: &[&str]) -> String {
-    let out = knf(dir).args(args).output().expect("spawn");
+    ok_stdout(knf(dir).args(args), args)
+}
+
+/// stderr of a run that must fail with exit code 1.
+fn run_err(dir: &TempDir, args: &[&str]) -> String {
+    err_stderr(knf(dir).args(args), args)
+}
+
+fn ok_stdout(cmd: &mut Command, args: &[&str]) -> String {
+    let out = cmd.output().expect("spawn");
     assert!(
         out.status.success(),
         "`knf {}` failed:\n{}",
@@ -35,9 +44,8 @@ fn run(dir: &TempDir, args: &[&str]) -> String {
     String::from_utf8(out.stdout).expect("utf-8 stdout")
 }
 
-/// stderr of a run that must fail with exit code 1.
-fn run_err(dir: &TempDir, args: &[&str]) -> String {
-    let out = knf(dir).args(args).output().expect("spawn");
+fn err_stderr(cmd: &mut Command, args: &[&str]) -> String {
+    let out = cmd.output().expect("spawn");
     assert_eq!(
         out.status.code(),
         Some(1),
@@ -46,6 +54,18 @@ fn run_err(dir: &TempDir, args: &[&str]) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8(out.stderr).expect("utf-8 stderr")
+}
+
+/// Sets or unsets named variables, so a `${env:...}` test never depends on the
+/// environment the suite happens to run in. `None` removes.
+fn with_env<'a>(cmd: &'a mut Command, vars: &[(&str, Option<&str>)]) -> &'a mut Command {
+    for (name, value) in vars {
+        match value {
+            Some(value) => cmd.env(name, value),
+            None => cmd.env_remove(name),
+        };
+    }
+    cmd
 }
 
 // --- round-trips ----------------------------------------------------------
@@ -375,6 +395,199 @@ fn null_as_leaves_json_output_alone() {
         run(&dir, &["f.json", "--null-as", "none"]),
         "{\n  \"proxy\": null\n}\n"
     );
+}
+
+// --- --interpolate --------------------------------------------------------
+
+/// A document that is nothing but references, for the tests that must show it
+/// passing through untouched.
+const REFS: &str = "\
+root = \"/srv\"
+data_dir = \"${root}/data\"
+port = \"${env:KNF_TEST_PORT}\"
+url = \"http://localhost:${env:KNF_TEST_PORT}/health\"
+literal = \"$${NOT_A_REF}\"
+";
+
+/// The reason the flag is opt-in. knf sits upstream of compose files, Actions
+/// workflows and Helm charts, whose own syntax is `${...}`; eating those by
+/// default would be silent corruption, so without the flag the document is
+/// byte-identical — even with the variable set.
+#[test]
+fn references_pass_through_untouched_without_the_flag() {
+    let dir = tree(&[("f.toml", REFS)]);
+    let out = ok_stdout(
+        with_env(&mut knf(&dir), &[("KNF_TEST_PORT", Some("8080"))]).args(["f.toml"]),
+        &["f.toml"],
+    );
+    assert_eq!(out, REFS);
+}
+
+/// The plan's worked example, end to end: a document reference, an environment
+/// reference in both positions, and the escape.
+#[test]
+fn interpolate_resolves_documents_and_the_environment() {
+    let dir = tree(&[("f.toml", REFS)]);
+    let args = ["f.toml", "--interpolate"];
+    let out = ok_stdout(
+        with_env(&mut knf(&dir), &[("KNF_TEST_PORT", Some("8080"))]).args(args),
+        &args,
+    );
+    assert_eq!(
+        out,
+        "root = \"/srv\"\n\
+         data_dir = \"/srv/data\"\n\
+         port = 8080\n\
+         url = \"http://localhost:8080/health\"\n\
+         literal = \"${NOT_A_REF}\"\n"
+    );
+}
+
+/// A whole-string reference takes the referent's *type*, so `"${p}"` emits an
+/// unquoted number and `"${db}"` a whole table — while the same reference
+/// inside text stringifies.
+#[test]
+fn whole_string_references_keep_the_referents_type() {
+    let dir = tree(&[(
+        "f.json",
+        r#"{"p":8080,"db":{"host":"local"},"port":"${p}","alias":"${db}","label":"port ${p}"}"#,
+    )]);
+    assert_eq!(
+        run(&dir, &["f.json", "--interpolate", "--compact"]),
+        "{\"p\":8080,\"db\":{\"host\":\"local\"},\"port\":8080,\
+         \"alias\":{\"host\":\"local\"},\"label\":\"port 8080\"}\n"
+    );
+}
+
+/// Brackets let a reference read an array element, whole-string or chained —
+/// typed exactly as a key reference would be.
+#[test]
+fn references_read_array_elements() {
+    let dir = tree(&[(
+        "f.json",
+        r#"{"servers":[{"host":"a","port":5432}],"url":"http://${servers[0].host}:${servers[0].port}","primary":"${servers[0]}"}"#,
+    )]);
+    assert_eq!(
+        run(&dir, &["f.json", "--interpolate", "--compact"]),
+        "{\"servers\":[{\"host\":\"a\",\"port\":5432}],\
+         \"url\":\"http://a:5432\",\"primary\":{\"host\":\"a\",\"port\":5432}}\n"
+    );
+}
+
+/// The pass runs on the *merged* document, so a reference sees the value the
+/// last layer actually left there, not the one in the file it was written in.
+#[test]
+fn references_read_the_merged_document() {
+    let dir = tree(&[
+        ("base.json", r#"{"host":"local","url":"http://${host}/"}"#),
+        ("prod.json", r#"{"host":"prod"}"#),
+    ]);
+    assert_eq!(
+        run(
+            &dir,
+            &["base.json", "prod.json", "--interpolate", "--compact"]
+        ),
+        "{\"host\":\"prod\",\"url\":\"http://prod/\"}\n"
+    );
+}
+
+/// `--set` is an ordinary layer, so its values interpolate like any other.
+#[test]
+fn set_layers_interpolate_too() {
+    let dir = tree(&[("f.json", r#"{"root":"/srv"}"#)]);
+    assert_eq!(
+        run(
+            &dir,
+            &[
+                "f.json",
+                "--set",
+                "data=${root}/data",
+                "--interpolate",
+                "--compact"
+            ]
+        ),
+        "{\"root\":\"/srv\",\"data\":\"/srv/data\"}\n"
+    );
+}
+
+/// `--strict` runs during the merge, before any substitution, so it compares
+/// the types values had when they were *written*: a `"${p}"` was a string when
+/// it looked, whatever it is about to become.
+#[test]
+fn strict_sees_types_as_written_not_as_resolved() {
+    let dir = tree(&[
+        ("a.json", r#"{"p":8080,"port":80}"#),
+        ("b.json", r#"{"port":"${p}"}"#),
+    ]);
+    let err = run_err(&dir, &["a.json", "b.json", "--strict", "--interpolate"]);
+    assert!(
+        err.contains("type conflict at `port`: number would be replaced by string"),
+        "{err}"
+    );
+}
+
+/// A reference resolving to null is an ordinary null: it meets the existing
+/// TOML error, and the existing escape rescues it.
+#[test]
+fn a_null_referent_meets_the_existing_toml_null_error() {
+    let dir = tree(&[("f.json", r#"{"n":null,"copy":"${n}"}"#)]);
+    let err = run_err(&dir, &["f.json", "-f", "toml", "--interpolate"]);
+    assert!(err.contains("cannot serialize null to TOML"), "{err}");
+    assert!(err.contains("--> copy"), "{err}");
+    assert_eq!(
+        run(
+            &dir,
+            &["f.json", "-f", "toml", "--interpolate", "--null-as", "none"]
+        ),
+        "n = \"none\"\ncopy = \"none\"\n"
+    );
+}
+
+// --- --interpolate errors (snapshotted) -----------------------------------
+
+/// Every offender in one run, with paths into the merged document — array
+/// indices included, since a reference may live inside an array.
+#[test]
+fn unresolved_reference_error() {
+    let dir = tree(&[(
+        "f.json",
+        r#"{"server":{"url":"${db.hostname}"},"tags":["${env:KNF_TEST_REGION}"]}"#,
+    )]);
+    let args = ["f.json", "--interpolate"];
+    insta::assert_snapshot!(err_stderr(
+        with_env(&mut knf(&dir), &[("KNF_TEST_REGION", None)]).args(args),
+        &args,
+    ));
+}
+
+#[test]
+fn embedded_container_reference_error() {
+    let dir = tree(&[(
+        "f.json",
+        r#"{"db":{"host":"x"},"xs":[1],"url":"http://${db}/","tag":"<${xs}>"}"#,
+    )]);
+    insta::assert_snapshot!(run_err(&dir, &["f.json", "--interpolate"]));
+}
+
+#[test]
+fn malformed_reference_error() {
+    let dir = tree(&[(
+        "f.json",
+        r#"{"a":"${b","c":"${}","d":"${env:}","e":"${x..y}"}"#,
+    )]);
+    insta::assert_snapshot!(run_err(&dir, &["f.json", "--interpolate"]));
+}
+
+#[test]
+fn malformed_index_error() {
+    let dir = tree(&[("f.json", r#"{"tags":["a"],"t":"${tags[x]}"}"#)]);
+    insta::assert_snapshot!(run_err(&dir, &["f.json", "--interpolate"]));
+}
+
+#[test]
+fn reference_cycle_error() {
+    let dir = tree(&[("f.json", r#"{"a":"${b}","b":"${c}","c":"${a}"}"#)]);
+    insta::assert_snapshot!(run_err(&dir, &["f.json", "--interpolate"]));
 }
 
 // --- exit codes -----------------------------------------------------------

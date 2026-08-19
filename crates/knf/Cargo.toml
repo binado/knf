@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 knf-core.workspace = true
 knf-dotted = { workspace = true, features = ["json"] }
+knf-interp.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 clap.workspace = true

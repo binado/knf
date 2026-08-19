@@ -1,0 +1,11 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"f.json\", \"--interpolate\"])"
+---
+error: invalid reference
+  --> a: unterminated `${` at offset 0
+  --> c: empty reference `${}`
+  --> d: empty variable name in `${env:}`
+  --> e: empty segment in reference `${x..y}`
+help: a reference is `${key.path}` (with `[n]` for array elements) or `${env:NAME}`; write `$$` for a literal `$`
+help: drop --interpolate to pass `${...}` through untouched

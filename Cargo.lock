@@ -293,6 +293,7 @@ dependencies = [
  "insta",
  "knf-core",
  "knf-dotted",
+ "knf-interp",
  "serde_json",
  "tempfile",
  "toml",
@@ -313,6 +314,16 @@ name = "knf-dotted"
 version = "0.1.2"
 dependencies = [
  "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "knf-interp"
+version = "0.1.2"
+dependencies = [
+ "knf-core",
+ "knf-dotted",
+ "proptest",
  "thiserror",
 ]
 
