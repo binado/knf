@@ -12,7 +12,7 @@ use anyhow::{Context, anyhow, bail};
 use knf_core::{
     MergeError, MergeOptions, RuleError, RuleErrors, Rules, Strategy, Value, merge_with,
 };
-use knf_dotted::PathLeaf;
+use knf_dotted::{PathError, PathLeaf};
 use knf_interp::{InterpError, Problem};
 
 use cli::Cli;
@@ -32,6 +32,17 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
     // line, and saying so must not wait on the files existing or parsing.
     let opts = merge_options(&cli)?;
 
+    // --set layers are terminal: appended after every file. The RHS parses as
+    // JSON with a string fallback, which is knf-dotted's job. The conversion
+    // is also where a bracketed path is rejected, so it runs with the rule
+    // set above: up front, not after the files exist or parse.
+    let mut set_layers: Vec<Value> = Vec::with_capacity(cli.set.len());
+    for path_leaf in &cli.set {
+        let typed = PathLeaf::<serde_json::Value>::from(path_leaf.clone());
+        let json = serde_json::Value::try_from(typed).map_err(name_the_set_flag)?;
+        set_layers.push(value::from_json(json));
+    }
+
     let mut layers: Vec<Value> = Vec::new();
     let mut input_formats: Vec<Format> = Vec::new();
 
@@ -41,13 +52,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         input_formats.push(format);
         layers.push(value);
     }
-
-    // --set layers are terminal: appended after every file. The RHS parses as
-    // JSON with a string fallback, which is knf-dotted's job.
-    for path_leaf in &cli.set {
-        let json = serde_json::Value::from(PathLeaf::<serde_json::Value>::from(path_leaf.clone()));
-        layers.push(value::from_json(json));
-    }
+    layers.extend(set_layers);
 
     let out_format = resolve_output_format(cli.format, &input_formats)?;
 
@@ -143,23 +148,49 @@ pub fn resolve_output_format(
 /// alone, so nothing about the files can change whether they are legal.
 pub fn merge_options(cli: &Cli) -> anyhow::Result<MergeOptions> {
     let flags = [
-        (&cli.append, Strategy::Append),
-        (&cli.replace, Strategy::Replace),
-        (&cli.fail, Strategy::Fail),
+        ("--append", &cli.append, Strategy::Append),
+        ("--replace", &cli.replace, Strategy::Replace),
+        ("--fail", &cli.fail, Strategy::Fail),
     ];
-    let rules: Vec<(Vec<String>, Strategy)> = flags
-        .into_iter()
-        .flat_map(|(paths, strategy)| {
-            paths
-                .iter()
-                .map(move |path| (path.keys().map(str::to_owned).collect(), strategy))
-        })
-        .collect();
+    let mut rules: Vec<(Vec<String>, Strategy)> = Vec::new();
+    for (flag, paths, strategy) in flags {
+        for path in paths {
+            // The one write-side predicate, run per flag so the error can
+            // name it: rules name keys, never array elements.
+            let keys = path
+                .clone()
+                .try_into_keys()
+                .map_err(|err| name_the_rule_flag(err, flag))?;
+            rules.push((keys, strategy));
+        }
+    }
 
     Ok(MergeOptions {
         strict: cli.strict,
         rules: Rules::build(rules).map_err(explain_rules)?,
     })
+}
+
+/// The established division of labour: `knf-dotted` renders the path and
+/// stays provenance-free, the help line names the flag that carried it.
+fn name_the_rule_flag(err: PathError, flag: &str) -> anyhow::Error {
+    match err {
+        PathError::IndexInKeyPath { .. } => {
+            anyhow!("{err}\nhelp: {flag} takes a key path; a rule cannot name an array element")
+        }
+        other => other.into(),
+    }
+}
+
+/// Same division of labour for `--set`: its paths feed the same conversion.
+fn name_the_set_flag(err: PathError) -> anyhow::Error {
+    match err {
+        PathError::IndexInKeyPath { .. } => anyhow!(
+            "{err}\nhelp: --set takes KEY.PATH=VALUE; an index like servers[0] can be read\n\
+             by a ${{...}} reference but never written — put the value in a file instead"
+        ),
+        other => other.into(),
+    }
 }
 
 /// Turns a rule-set rejection into the flags the user actually typed.

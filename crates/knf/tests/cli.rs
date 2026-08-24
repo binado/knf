@@ -742,6 +742,35 @@ fn unreachable_rule_error_precedes_file_io() {
     insta::assert_snapshot!(err);
 }
 
+/// A bracketed `--set` parses (a reference may read an element) but cannot
+/// write, and saying so must not depend on reading anything either: the
+/// file here does not exist.
+#[test]
+fn set_with_an_array_index_errors_before_file_io() {
+    let dir = tree(&[]);
+    let err = run_err(&dir, &["missing.toml", "--set", "servers[0]=1"]);
+    assert!(
+        !err.contains("missing.toml"),
+        "the --set path should be rejected before the file is read:\n{err}"
+    );
+    insta::assert_snapshot!(err);
+}
+
+/// The same rejection, naming each rule flag that carries the path.
+#[test]
+fn rule_flags_reject_array_indices() {
+    let dir = tree(&[("base.toml", "a = 1\n")]);
+    for flag in ["--append", "--replace", "--fail"] {
+        let err = run_err(&dir, &["base.toml", flag, "xs[0]"]);
+        assert!(
+            err.contains("merge paths take keys only")
+                && err.contains(&format!("help: {flag} takes a key path"))
+                && !err.contains("base.toml"),
+            "{flag} should reject xs[0] before any I/O:\n{err}"
+        );
+    }
+}
+
 #[test]
 fn strict_type_conflict_error() {
     let dir = tree(&[

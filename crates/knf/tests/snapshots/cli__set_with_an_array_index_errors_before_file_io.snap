@@ -1,0 +1,7 @@
+---
+source: crates/knf/tests/cli.rs
+expression: err
+---
+error: `servers[0]` contains an array index; merge paths take keys only
+help: --set takes KEY.PATH=VALUE; an index like servers[0] can be read
+by a ${...} reference but never written — put the value in a file instead

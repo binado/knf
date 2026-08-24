@@ -33,7 +33,7 @@ mod scan;
 use std::collections::HashMap;
 
 use knf_core::{Map, Value};
-use knf_dotted::{RefError, RefPath};
+use knf_dotted::{PathError, RefPath};
 
 pub use error::{Cycle, InterpError, Problem};
 pub use knf_dotted::{Seg, render_path};
@@ -273,13 +273,14 @@ impl<'a> Resolver<'a> {
     /// `None` if it is malformed or names nothing.
     ///
     /// A reference may *read* an array element — `${servers[0]}` parses through
-    /// `RefPath`, where the merge-side grammars stay keys-only — and memoization,
+    /// the one `RefPath` spelling, where write-side callers run
+    /// `try_into_keys` to reject indices instead — and memoization,
     /// cycle detection and the whole-string/embedded split all run on `Vec<Seg>`
     /// already, so nothing downstream of this parse changes.
     fn target(&mut self, body: &str, path: &[Seg]) -> Option<Vec<Seg>> {
         let target: Vec<Seg> = match body.parse::<RefPath>() {
             Ok(parsed) => parsed.into_segs(),
-            Err(RefError::BadIndex { .. }) => {
+            Err(PathError::BadIndex { .. }) => {
                 self.problems.push(Problem::Syntax {
                     path: path.to_vec(),
                     error: Syntax::BadIndex {
@@ -288,8 +289,8 @@ impl<'a> Resolver<'a> {
                 });
                 return None;
             }
-            // `EmptyKey` is unreachable: the scanner rejects `${}` first.
-            Err(RefError::EmptySegment { .. } | RefError::EmptyKey) => {
+            // `EmptyPath` is unreachable: the scanner rejects `${}` first.
+            Err(PathError::EmptySegment { .. } | PathError::EmptyPath) => {
                 self.problems.push(Problem::Syntax {
                     path: path.to_vec(),
                     error: Syntax::EmptySegment {
@@ -297,6 +298,12 @@ impl<'a> Resolver<'a> {
                     },
                 });
                 return None;
+            }
+            // Neither can come out of `FromStr`: a reference body has no `=`
+            // to miss, and index rejection lives in `try_into_keys`, which
+            // only write-side callers run.
+            Err(PathError::MissingEquals | PathError::IndexInKeyPath { .. }) => {
+                unreachable!("parsing a reference body never reports these")
             }
         };
         if lookup(self.doc, &target).is_none() {

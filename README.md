@@ -143,9 +143,10 @@ Two limits worth knowing:
   the first `:`. So `${a:b}` is the ordinary key `a:b`, and only keys that
   literally begin `env:` are unaddressable.
 - **A key spelled with brackets is unaddressable** — `${a[0]}` now reads as *the
-  first element of `a`*, never as a key literally named `a[0]`, even though a
-  file or `--set 'a[0]=1'` can still write one. The same accepted loss as keys
-  containing a literal dot, which the dotted grammars have always excluded.
+  first element of `a`*, never as a key literally named `a[0]`, and
+  `--set 'a[0]=1'` is an error rather than a write into an array. Only a file
+  can carry such a key. The same accepted loss as keys containing a literal
+  dot, which the dotted grammars have always excluded.
 
 `--set` layers interpolate like any other layer. `--strict` runs during the
 merge, before any substitution, so it compares the types values had when they

@@ -28,7 +28,7 @@ Four crates, and the dependency direction is the design:
 
 ```
 knf-core/     the merge core + its value type — indexmap + thiserror, nothing else
-knf-dotted/   the path vocabulary (Seg/KeyPath/RefPath) + the `key.path=value`
+knf-dotted/   the path vocabulary (Seg/RefPath) + the `key.path=value`
               parser behind --set — thiserror, serde_json behind `json`
 knf-interp/   `${key.path}` / `${servers[0]}` / `${env:VAR}` resolution behind
               --interpolate — knf-core, knf-dotted (paths only), thiserror
@@ -42,7 +42,7 @@ document the rule and `cargo tree` checks it.
 
 `knf-interp` takes `knf-dotted` with `default-features = false`, set on the
 *workspace* dependency because a member cannot turn a workspace default back off.
-That keeps `serde_json` out of its tree: `Seg`, `KeyPath` and `RefPath` are
+That keeps `serde_json` out of its tree: `Seg` and `RefPath` are
 unconditional in `knf-dotted/src/lib.rs`, only `json.rs` is gated. It also
 contains **no `std::env`** — the environment arrives through the `Env` trait,
 which is what keeps it deterministic and testable without touching process
@@ -51,13 +51,18 @@ state, and what keeps the JSON-or-string typing rule out of it. `ProcessEnv`
 calls `knf_dotted::json_or_string` so `${env:PORT}` types exactly as
 `--set port=…` does.
 
-**Path types: one vocabulary, two predicates.** `Seg` is the single step type.
-`KeyPath` is a newtype over `Vec<Seg>` whose only constructors keep it all-key —
-merge-side paths (`--set`, the rule flags) can *never* be indexed, by
-construction rather than discipline. A bare `Vec<Seg>` is the witness a walker
-builds; `RefPath` is the one bracket-accepting spelling, for a consumer that
-only reads. `lookup` stays out of `knf-dotted` because it needs
-`knf_core::Value`, and `knf-dotted` must not.
+**Path types: one vocabulary, one spelling, one predicate.** `Seg` is the single
+step type. `RefPath` is the one parsed spelling (`a.b[2].c`) — references and
+the write-side flags share the grammar, since reading an array element and
+malformed-bracket rejection want the same parser. A bare `Vec<Seg>` is the
+witness a walker builds. Writers take keys only — arrays replace wholesale, so
+an index can never *write* — and that one predicate lives in
+`RefPath::try_into_keys`, run once per flag at the boundary (`--set` expansion,
+`merge_options`), before any I/O, rather than being carried by a separate type.
+A key literally spelled `a[0]` is consequently unwritable from the command line
+and unreferenceable from `${...}`; only a file can carry one. `lookup` stays
+out of `knf-dotted` because it needs `knf_core::Value`, and `knf-dotted` must
+not.
 
 **One IR for every format.** `knf_core::Value` is a deliberate *superset* of JSON and
 TOML: `Null` is JSON-only, `Datetime` is TOML-only. Every layer parses into it before

@@ -1,19 +1,26 @@
-//! The path vocabulary: one step type, several spellings.
+//! The path vocabulary: one step type, one parsed spelling, one witness.
 //!
 //! [`Seg`] is the single step every path in the workspace is built from —
 //! an object key or an array index — and [`render_path`] the one display for
-//! a chain of them. Two spellings and one witness are built over `Vec<Seg>`,
-//! each with its own constructor and its own predicate:
+//! a chain of them. Over `Vec<Seg>` there is one parsed spelling and one
+//! witness:
 //!
-//! - [`KeyPath`] is the *merge-side* spelling: a `Vec<Seg>` that is all
-//!   [`Key`](Seg::Key), built only from text or key strings. It is the only
-//!   path a user can write for a dotted grammar (`--set`, rule flags), so an
-//!   index can never reach a consumer that takes one.
-//! - [`RefPath`] is the *reference* spelling: dotted keys plus `[n]` steps,
-//!   for a consumer that only reads a document.
+//! - [`RefPath`] parses `a.b[2].c` — dotted keys plus `[n]` steps. It is the
+//!   only spelling a `${...}` reference uses, and the only grammar the
+//!   command-line path flags parse.
 //! - A bare `Vec<Seg>` is the *witness*: built by walking a document, never
 //!   parsed, and free to hold [`Index`](Seg::Index) — a value can live inside
 //!   an array, and an error must still be able to say so.
+//!
+//! Writers take keys only. Reading an array element has one obvious meaning;
+//! writing one conflicts with arrays replacing wholesale on the merge side,
+//! so an [`Index`](Seg::Index) step can never address a merge location. That
+//! predicate is enforced once, at the boundary, by
+//! [`RefPath::try_into_keys`] — a path that reaches a writer has been through
+//! it, and [`IndexInKeyPath`](PathError::IndexInKeyPath) is the failure. A
+//! key literally spelled `a[0]` is consequently unwritable from the command
+//! line and unreferenceable from `${...}` — the same accepted loss as keys
+//! containing a literal dot, which the dotted grammar has always split.
 //!
 //! [`PathLeaf`] parses `key.path=value`. The path is always typed; the leaf
 //! type `V` is chosen by the caller. [`FromStr`] for [`PathLeaf<String>`] keeps
@@ -21,69 +28,88 @@
 //! [`serde_json::Value`], falling back to a string — a rule exported on its own
 //! as [`json_or_string`], for callers that need the same typing without a path.
 //!
-//! [`KeyPath`] is the same path with no `=value` half, for callers that address
-//! a location rather than assign to one.
-//!
 //! This crate knows nothing about files, the command line, or the document
 //! being addressed — it never sees `knf_core::Value`, which is what keeps
 //! lookups with the walkers. Provenance (`--set`, filenames) is the caller's
 //! job.
 //!
-//! [`From<PathLeaf<V>>`](From) expands to a nested object: `server.port=8080` →
-//! `{"server":{"port":8080}}`. There are deliberately no `Serialize`/
-//! `Deserialize` impls — a `PathLeaf` is an expression, and serializing one
-//! could reasonably mean either the string or the object, so callers pick
-//! explicitly via [`Display`](fmt::Display) or the conversion.
+//! [`TryFrom<PathLeaf<V>>`](TryFrom) expands to a nested object:
+//! `server.port=8080` → `{"server":{"port":8080}}`. There are deliberately no
+//! `Serialize`/`Deserialize` impls — a `PathLeaf` is an expression, and
+//! serializing one could reasonably mean either the string or the object, so
+//! callers pick explicitly via [`Display`](fmt::Display) or the conversion.
 
 use std::fmt;
 use std::str::FromStr;
 
-/// A leaf value addressed by a dotted path.
+/// A leaf value addressed by a parsed path.
 ///
-/// [`FromStr`] for [`PathLeaf<String>`] splits `key.path=value` and stores the
-/// RHS as-is. The typed [`FromStr`] impl (behind `json`) parses that RHS as
-/// JSON, falling back to a string: `port=8080` is a number, `name=foo` is a
-/// string.
+/// [`FromStr`] for [`PathLeaf<String>] splits `key.path=value`, parses the LHS
+/// as a [`RefPath`], and stores the RHS as-is. The typed [`FromStr`] impl
+/// (behind `json`) parses that RHS as JSON, falling back to a string:
+/// `port=8080` is a number, `name=foo` is a string.
 ///
-/// `Display` of a typed leaf is canonical — dotted path, `=`, compact JSON of
-/// the leaf — so `name=foo` displays as `name="foo"`. [`FromStr`] ∘ [`Display`](fmt::Display)
+/// The grammar accepts bracket steps — `a[0]=1` parses — because it is the
+/// one spelling references also use. Whether such a path may *write* is
+/// [`RefPath::try_into_keys`]' question, asked at conversion time.
+///
+/// `Display` of a typed leaf is canonical — path, `=`, compact JSON of the
+/// leaf — so `name=foo` displays as `name="foo"`. [`FromStr`] ∘ [`Display`](fmt::Display)
 /// preserves path and leaf, not the original spelling. [`PathLeaf<String>`]
 /// displays the raw RHS.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PathLeaf<V> {
-    path: KeyPath,
+    path: RefPath,
     leaf: V,
 }
 
-/// Why a `key.path=value` expression (or a programmatic constructor) was rejected.
+/// Why a path expression was rejected.
 ///
-/// Carries the dotted key when a segment is empty, and nothing else — no
-/// `--set`, no filenames. Provenance is the caller's job.
+/// Carries the path text and nothing else — no `--set`, no `--interpolate`,
+/// no filenames. Provenance is the caller's job.
+///
+/// [`MissingEquals`](PathError::MissingEquals) is only reachable from
+/// [`PathLeaf`]'s parser — a bare [`RefPath`] has no `=` to miss — and
+/// [`IndexInKeyPath`](PathError::IndexInKeyPath) only from
+/// [`RefPath::try_into_keys`], never from parsing.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum ParseError {
-    /// No `=` in the expression.
+pub enum PathError {
+    /// No `=` in a `key.path=value` expression.
     #[error("expected KEY.PATH=VALUE")]
     MissingEquals,
-    /// The path is empty (`=1`, or `new` with an empty vec).
-    #[error("empty key")]
-    EmptyKey,
-    /// A path segment is empty (`a..b=1`, `.a=1`, `a.=1`).
-    #[error("empty segment in key `{key}`")]
+    /// The path is empty (`=1`, an empty `${...}` body, an empty vec).
+    #[error("empty path")]
+    EmptyPath,
+    /// A path segment is empty (`a..b`, `.a`, `a.`).
+    #[error("empty segment in path `{path}`")]
     EmptySegment {
-        /// The dotted path that contained an empty segment.
-        key: String,
+        /// The path that contained an empty segment.
+        path: String,
+    },
+    /// A bracket step is malformed: empty, not a number, too big, or unclosed.
+    #[error("malformed index in path `{path}`")]
+    BadIndex {
+        /// The path that contained the bad bracket.
+        path: String,
+    },
+    /// A path that arrived at a writer contained an array index.
+    ///
+    /// Raised by [`RefPath::try_into_keys`] only, never by parsing: writers
+    /// take keys one per segment because arrays replace wholesale on the
+    /// merge side, so there is no meaning to writing element `n`.
+    #[error("`{path}` contains an array index; merge paths take keys only")]
+    IndexInKeyPath {
+        /// The full path, rendered.
+        path: String,
     },
 }
 
 /// One step of a path into a document.
 ///
-/// The single step vocabulary every path in the workspace is built from. Two
-/// predicates are enforced over it, by two kinds of construction: [`KeyPath`]
-/// wraps a `Vec<Seg>` that is by construction all [`Key`](Seg::Key) — the only
-/// path dot-spelling grammars accept, so an index can never reach a consumer
-/// that takes one — while a bare `Vec<Seg>` is the witness a walker builds by
-/// descending a document, free to hold [`Index`](Seg::Index) because a value
-/// can live inside an array.
+/// The single step vocabulary every path in the workspace is built from.
+/// [`RefPath`] parses a chain of these from text; a bare `Vec<Seg>` is the
+/// witness a walker builds by descending a document, free to hold
+/// [`Index`](Seg::Index) because a value can live inside an array.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Seg {
     /// An object key.
@@ -92,7 +118,7 @@ pub enum Seg {
     Index(usize),
 }
 
-/// Renders a witness path for display: `servers.primary.host`, `tags[0]`.
+/// Renders a path for display: `servers.primary.host`, `tags[0]`.
 pub fn render_path(path: &[Seg]) -> String {
     let mut out = String::new();
     for seg in path {
@@ -109,135 +135,40 @@ pub fn render_path(path: &[Seg]) -> String {
     out
 }
 
-/// A validated dotted path, with no `=value` half.
+/// A parsed path: dotted keys plus bracket array indices, `a.b[2].c`.
 ///
-/// A newtype over `Vec<Seg>` whose only constructors — [`new`](KeyPath::new)
-/// from key strings and [`FromStr`] from dotted text — guarantee every segment
-/// is a [`Seg::Key`]. No constructor accepts a ready-made `Vec<Seg>`, so an
-/// [`Seg::Index`] is unrepresentable here: the all-key shape is a fact the
-/// compiler carries, not a rule callers re-check.
-///
-/// The same path [`PathLeaf`] carries, for callers that address a location
-/// rather than assign to one. [`PathLeaf::new`] is defined in terms of it, so
-/// the empty-key and empty-segment rules exist in exactly one place.
-///
-/// [`ParseError::MissingEquals`] is shared but unreachable from
-/// [`FromStr::from_str`]: there is no `=` to miss.
-///
-/// Dots separate segments, so a key containing a literal dot is not addressable
-/// by a `KeyPath`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct KeyPath {
-    path: Vec<Seg>,
-}
-
-impl KeyPath {
-    /// Build from key strings. Rejects an empty path or any empty segment.
-    pub fn new(path: Vec<String>) -> Result<Self, ParseError> {
-        if path.is_empty() {
-            return Err(ParseError::EmptyKey);
-        }
-        if path.iter().any(|k| k.is_empty()) {
-            return Err(ParseError::EmptySegment {
-                key: path.join("."),
-            });
-        }
-        Ok(Self {
-            path: path.into_iter().map(Seg::Key).collect(),
-        })
-    }
-
-    /// The segments as steps. Always all [`Seg::Key`], by construction.
-    pub fn segs(&self) -> &[Seg] {
-        &self.path
-    }
-
-    /// The segments as steps, zero-copy. Always all [`Seg::Key`], by construction.
-    pub fn into_segs(self) -> Vec<Seg> {
-        self.path
-    }
-
-    /// The key strings, in order. `server.port` yields `"server"`, `"port"`.
-    pub fn keys(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.path.iter().map(|seg| match seg {
-            Seg::Key(key) => key.as_str(),
-            Seg::Index(_) => unreachable!("a KeyPath holds no Index segments"),
-        })
-    }
-
-    /// The owned key strings, for consumers whose grammar is still strings —
-    /// `knf-core`'s merge paths, the nested-object expansion in `json.rs`.
-    pub(crate) fn into_keys(self) -> Vec<String> {
-        self.path
-            .into_iter()
-            .map(|seg| match seg {
-                Seg::Key(key) => key,
-                Seg::Index(_) => unreachable!("a KeyPath holds no Index segments"),
-            })
-            .collect()
-    }
-}
-
-impl FromStr for KeyPath {
-    type Err = ParseError;
-
-    fn from_str(key: &str) -> Result<Self, Self::Err> {
-        Self::new(split_key(key)?)
-    }
-}
-
-impl fmt::Display for KeyPath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, key) in self.keys().enumerate() {
-            if i > 0 {
-                f.write_str(".")?;
-            }
-            f.write_str(key)?;
-        }
-        Ok(())
-    }
-}
-
-/// Why a reference body was rejected.
-///
-/// Carries the body text and nothing else — no `${...}`, no `--interpolate`,
-/// no filenames. Provenance is the caller's job.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum RefError {
-    /// The reference is empty.
-    #[error("empty key")]
-    EmptyKey,
-    /// A key segment is empty (`a..b`, `.a`, `[0].a` — no key before the step).
-    #[error("empty segment in reference `{reference}`")]
-    EmptySegment {
-        /// The reference body that contained the empty segment.
-        reference: String,
-    },
-    /// A bracket step is malformed: empty, not a number, too big, or unclosed.
-    #[error("malformed index in reference `{reference}`")]
-    BadIndex {
-        /// The reference body that contained the bad bracket.
-        reference: String,
-    },
-}
-
-/// A reference target: dotted keys plus bracket array indices, `a.b[2].c`.
-///
-/// The second spelling over [`Seg`], for a consumer that only *reads* a
-/// document: a `${...}` body may name an array element, where indexing into a
-/// merge is a different question entirely — [`KeyPath`] stays keys-only for
-/// exactly that split. Built only from text; there is no bulk constructor, so
-/// an empty path or an empty key segment is unrepresentable.
+/// The one spelling over [`Seg`]. References parse it directly; the
+/// command-line path flags parse it too, and their write-side callers then
+/// run [`try_into_keys`](RefPath::try_into_keys), which rejects any
+/// [`Index`](Seg::Index) step — reading an array element has one obvious
+/// meaning, writing one does not. Empty paths and empty segments are
+/// unrepresentable: both [`from_str`](RefPath::from_str) and
+/// [`from_keys`](RefPath::from_keys) reject them.
 ///
 /// `Display` is [`render_path`]. Not injective with respect to document keys:
-/// a key literally spelled `a[0]` exists, but a reference can no longer name
-/// it — the same accepted loss as keys containing a literal dot.
+/// a key literally spelled `a[0]` exists, but this grammar reads it as a key
+/// and an index — the same accepted loss as keys containing a literal dot.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RefPath {
     path: Vec<Seg>,
 }
 
 impl RefPath {
+    /// Build from key strings. Rejects an empty path or any empty segment.
+    pub fn from_keys(keys: Vec<String>) -> Result<Self, PathError> {
+        if keys.is_empty() {
+            return Err(PathError::EmptyPath);
+        }
+        if keys.iter().any(|k| k.is_empty()) {
+            return Err(PathError::EmptySegment {
+                path: keys.join("."),
+            });
+        }
+        Ok(Self {
+            path: keys.into_iter().map(Seg::Key).collect(),
+        })
+    }
+
     /// The segments as steps.
     pub fn segs(&self) -> &[Seg] {
         &self.path
@@ -247,22 +178,44 @@ impl RefPath {
     pub fn into_segs(self) -> Vec<Seg> {
         self.path
     }
+
+    /// The owned key strings, checked all-key.
+    ///
+    /// The one write-side predicate: a caller that assigns into a document
+    /// takes keys one per segment, so an [`Index`](Seg::Index) step fails
+    /// here rather than at the merge — before any file is read, and with the
+    /// whole path rendered into the error.
+    pub fn try_into_keys(self) -> Result<Vec<String>, PathError> {
+        if self.path.iter().any(|seg| matches!(seg, Seg::Index(_))) {
+            return Err(PathError::IndexInKeyPath {
+                path: render_path(&self.path),
+            });
+        }
+        Ok(self
+            .path
+            .into_iter()
+            .map(|seg| match seg {
+                Seg::Key(key) => key,
+                Seg::Index(_) => unreachable!("index steps were rejected above"),
+            })
+            .collect())
+    }
 }
 
 impl FromStr for RefPath {
-    type Err = RefError;
+    type Err = PathError;
 
     /// Grammar: a leading key, then any mix of `.key` and `[N]` steps, where
     /// a key is a run of anything but `.[]` and `N` a bare `usize`.
     fn from_str(body: &str) -> Result<Self, Self::Err> {
         if body.is_empty() {
-            return Err(RefError::EmptyKey);
+            return Err(PathError::EmptyPath);
         }
-        let bad_index = || RefError::BadIndex {
-            reference: body.to_string(),
+        let bad_index = || PathError::BadIndex {
+            path: body.to_string(),
         };
-        let empty_segment = || RefError::EmptySegment {
-            reference: body.to_string(),
+        let empty_segment = || PathError::EmptySegment {
+            path: body.to_string(),
         };
 
         let bytes = body.as_bytes();
@@ -333,21 +286,18 @@ impl fmt::Display for RefPath {
 
 impl<V> PathLeaf<V> {
     /// Build from path segments and a leaf. Rejects an empty path or any empty segment.
-    pub fn new(path: Vec<String>, leaf: V) -> Result<Self, ParseError> {
+    pub fn new(path: Vec<String>, leaf: V) -> Result<Self, PathError> {
         Ok(Self {
-            path: KeyPath::new(path)?,
+            path: RefPath::from_keys(path)?,
             leaf,
         })
     }
 
-    /// The path as steps: all [`Seg::Key`], like the [`KeyPath`] it wraps.
+    /// The path as steps. May hold [`Index`](Seg::Index) steps from the
+    /// grammar — consumers that write run
+    /// [`try_into_keys`](RefPath::try_into_keys).
     pub fn path(&self) -> &[Seg] {
         self.path.segs()
-    }
-
-    /// The key strings, in order. `server.port` yields `"server"`, `"port"`.
-    pub fn keys(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.path.keys()
     }
 
     /// The RHS value, not yet wrapped in nested objects.
@@ -373,21 +323,27 @@ impl<V> PathLeaf<V> {
     }
 
     #[cfg(feature = "json")]
-    fn into_nested(self, nest: impl Fn(String, V) -> V) -> V {
-        self.path
-            .into_keys()
+    pub(crate) fn try_into_nested(self, nest: impl Fn(String, V) -> V) -> Result<V, PathError> {
+        let keys = self.path.try_into_keys()?;
+        Ok(keys
             .into_iter()
             .rev()
-            .fold(self.leaf, |acc, key| nest(key, acc))
+            .fold(self.leaf, |acc, key| nest(key, acc)))
     }
 }
 
 impl FromStr for PathLeaf<String> {
-    type Err = ParseError;
+    type Err = PathError;
 
     fn from_str(expr: &str) -> Result<Self, Self::Err> {
-        let (path, rhs) = split_expr(expr)?;
-        Self::new(path, rhs.to_string())
+        // Split on the first `=` so the RHS may contain more of them.
+        let Some((lhs, rhs)) = expr.split_once('=') else {
+            return Err(PathError::MissingEquals);
+        };
+        Ok(Self {
+            path: lhs.parse()?,
+            leaf: rhs.to_string(),
+        })
     }
 }
 
@@ -395,23 +351,6 @@ impl fmt::Display for PathLeaf<String> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}={}", self.path, self.leaf)
     }
-}
-
-fn split_expr(expr: &str) -> Result<(Vec<String>, &str), ParseError> {
-    // Split on the first `=` so the RHS may contain more of them.
-    let Some((lhs, rhs)) = expr.split_once('=') else {
-        return Err(ParseError::MissingEquals);
-    };
-    Ok((split_key(lhs)?, rhs))
-}
-
-/// Splits a dotted key into segments. `""` is an empty key rather than one
-/// empty segment, which is the more useful of the two messages.
-fn split_key(key: &str) -> Result<Vec<String>, ParseError> {
-    if key.is_empty() {
-        return Err(ParseError::EmptyKey);
-    }
-    Ok(key.split('.').map(str::to_string).collect())
 }
 
 #[cfg(feature = "json")]
@@ -427,11 +366,17 @@ mod tests {
     #[test]
     fn rejects_malformed_expressions() {
         for (bad, want) in [
-            ("noequals", ParseError::MissingEquals),
-            ("=1", ParseError::EmptyKey),
-            ("a..b=1", ParseError::EmptySegment { key: "a..b".into() }),
-            (".a=1", ParseError::EmptySegment { key: ".a".into() }),
-            ("a.=1", ParseError::EmptySegment { key: "a.".into() }),
+            ("noequals", PathError::MissingEquals),
+            ("=1", PathError::EmptyPath),
+            (
+                "a..b=1",
+                PathError::EmptySegment {
+                    path: "a..b".into(),
+                },
+            ),
+            (".a=1", PathError::EmptySegment { path: ".a".into() }),
+            ("a.=1", PathError::EmptySegment { path: "a.".into() }),
+            ("a[]=1", PathError::BadIndex { path: "a[]".into() }),
         ] {
             assert_eq!(bad.parse::<PathLeaf<String>>().unwrap_err(), want, "{bad}");
         }
@@ -441,15 +386,15 @@ mod tests {
     fn new_rejects_empty_path_and_empty_segments() {
         assert_eq!(
             PathLeaf::<String>::new(vec![], "1".into()).unwrap_err(),
-            ParseError::EmptyKey
+            PathError::EmptyPath
         );
         assert_eq!(
             PathLeaf::<String>::new(vec!["".into()], "1".into()).unwrap_err(),
-            ParseError::EmptySegment { key: "".into() }
+            PathError::EmptySegment { path: "".into() }
         );
         assert_eq!(
             PathLeaf::<String>::new(vec!["a".into(), "".into()], "1".into()).unwrap_err(),
-            ParseError::EmptySegment { key: "a.".into() }
+            PathError::EmptySegment { path: "a.".into() }
         );
     }
 
@@ -457,49 +402,19 @@ mod tests {
     fn raw_fromstr_keeps_the_rhs_unparsed() {
         let path_leaf: PathLeaf<String> = "port=8080".parse().unwrap();
         assert_eq!(path_leaf.path(), [Seg::Key("port".into())]);
-        assert!(path_leaf.keys().eq(["port"]));
         assert_eq!(path_leaf.leaf(), "8080");
         assert_eq!(path_leaf.to_string(), "port=8080");
     }
 
-    /// The rules live in `KeyPath::new`, so both types reject the same spellings.
+    /// The grammar accepts bracket steps; only writers reject them.
     #[test]
-    fn key_path_rejects_what_path_leaf_rejects() {
-        for (bad, want) in [
-            ("", ParseError::EmptyKey),
-            ("a..b", ParseError::EmptySegment { key: "a..b".into() }),
-            (".a", ParseError::EmptySegment { key: ".a".into() }),
-            ("a.", ParseError::EmptySegment { key: "a.".into() }),
-        ] {
-            assert_eq!(bad.parse::<KeyPath>().unwrap_err(), want, "{bad}");
-        }
-        assert_eq!(KeyPath::new(vec![]).unwrap_err(), ParseError::EmptyKey);
+    fn path_leaf_accepts_brackets_its_writers_reject() {
+        let parsed: PathLeaf<String> = "a[0]=1".parse().unwrap();
+        assert_eq!(parsed.path(), [Seg::Key("a".into()), Seg::Index(0)]);
+        assert_eq!(parsed.to_string(), "a[0]=1");
     }
 
-    #[test]
-    fn key_path_round_trips_through_display() {
-        let key: KeyPath = "db.plugins".parse().unwrap();
-        assert_eq!(
-            key.segs(),
-            [Seg::Key("db".into()), Seg::Key("plugins".into())]
-        );
-        assert!(key.keys().eq(["db", "plugins"]));
-        assert_eq!(key.to_string(), "db.plugins");
-        assert_eq!(
-            key.into_segs(),
-            [Seg::Key("db".into()), Seg::Key("plugins".into())]
-        );
-    }
-
-    /// A `=` has no special meaning without a leaf to assign, so it is just part
-    /// of a (weird) key rather than a `MissingEquals`-shaped hole.
-    #[test]
-    fn key_path_has_no_equals_half() {
-        let key: KeyPath = "a=b".parse().unwrap();
-        assert!(key.keys().eq(["a=b"]));
-    }
-
-    /// A witness may mix keys and indices; a `KeyPath` never can.
+    /// A witness may mix keys and indices.
     #[test]
     fn render_path_mixes_keys_and_indices() {
         assert_eq!(render_path(&[]), "");
@@ -536,46 +451,96 @@ mod tests {
 
     #[test]
     fn ref_path_rejects_malformed_bodies() {
-        let empty = RefError::EmptySegment {
-            reference: String::new(),
-        };
-        let bad = RefError::BadIndex {
-            reference: String::new(),
-        };
-        let cases: &[(&str, &str)] = &[
-            (".a", "empty"),
-            ("a..b", "empty"),
-            ("a[0]..b", "empty"),
-            ("[0].a", "empty"),
-            ("a[]", "bad"),
-            ("a[x]", "bad"),
-            ("a[1", "bad"),
-            ("a[-1]", "bad"),
-            ("a]", "bad"),
-            ("a[99999999999999999999999999]", "bad"),
+        let cases: &[(&str, PathError)] = &[
+            (".a", empty_segment(".a")),
+            ("a..b", empty_segment("a..b")),
+            ("a[0]..b", empty_segment("a[0]..b")),
+            ("[0].a", empty_segment("[0].a")),
+            ("a[]", bad_index("a[]")),
+            ("a[x]", bad_index("a[x]")),
+            ("a[1", bad_index("a[1")),
+            ("a[-1]", bad_index("a[-1]")),
+            ("a]", bad_index("a]")),
+            (
+                "a[99999999999999999999999999]",
+                bad_index("a[99999999999999999999999999]"),
+            ),
         ];
-        for (body, kind) in cases {
-            let err = body.parse::<RefPath>().unwrap_err();
-            match (*kind, err) {
-                ("empty", RefError::EmptySegment { reference }) => {
-                    assert_eq!(reference, *body, "{body}")
-                }
-                ("bad", RefError::BadIndex { reference }) => {
-                    assert_eq!(reference, *body, "{body}")
-                }
-                other => panic!("{body}: expected {empty:?}/{bad:?} shape, got {other:?}"),
-            }
+        for (body, want) in cases {
+            assert_eq!(&body.parse::<RefPath>().unwrap_err(), want, "{body}");
         }
-        assert_eq!("".parse::<RefPath>().unwrap_err(), RefError::EmptyKey);
-        let _ = (empty, bad); // shapes documented above
+        assert_eq!("".parse::<RefPath>().unwrap_err(), PathError::EmptyPath);
+    }
+
+    fn empty_segment(path: &str) -> PathError {
+        PathError::EmptySegment { path: path.into() }
+    }
+
+    fn bad_index(path: &str) -> PathError {
+        PathError::BadIndex { path: path.into() }
     }
 
     #[test]
     fn ref_path_displays_as_rendered_witness() {
         let parsed: RefPath = "a.b[2].c".parse().unwrap();
         assert_eq!(parsed.to_string(), "a.b[2].c");
-        // The all-key subset displays exactly as a KeyPath would.
         assert_eq!("a.b".parse::<RefPath>().unwrap().to_string(), "a.b");
+    }
+
+    #[test]
+    fn from_keys_rejects_empty_path_and_empty_segments() {
+        assert_eq!(
+            RefPath::from_keys(vec![]).unwrap_err(),
+            PathError::EmptyPath
+        );
+        assert_eq!(
+            RefPath::from_keys(vec!["".into()]).unwrap_err(),
+            PathError::EmptySegment { path: "".into() }
+        );
+        assert_eq!(
+            RefPath::from_keys(vec!["a".into(), "".into()]).unwrap_err(),
+            PathError::EmptySegment { path: "a.".into() }
+        );
+        // from_keys and parsing agree on the dotted all-key grammar.
+        assert_eq!(
+            RefPath::from_keys(vec!["db".into(), "plugins".into()]).unwrap(),
+            "db.plugins".parse().unwrap()
+        );
+    }
+
+    #[test]
+    fn try_into_keys_passes_all_key_paths_whole() {
+        let parsed: RefPath = "db.plugins".parse().unwrap();
+        assert_eq!(parsed.try_into_keys().unwrap(), ["db", "plugins"]);
+    }
+
+    #[test]
+    fn try_into_keys_rejects_index_steps_with_the_full_path() {
+        for (indexed, want) in [("a[0]", "a[0]"), ("a.b[2].c", "a.b[2].c")] {
+            let err = indexed
+                .parse::<RefPath>()
+                .unwrap()
+                .try_into_keys()
+                .unwrap_err();
+            assert_eq!(err, PathError::IndexInKeyPath { path: want.into() });
+        }
+        let err = "a[0]"
+            .parse::<RefPath>()
+            .unwrap()
+            .try_into_keys()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "`a[0]` contains an array index; merge paths take keys only"
+        );
+    }
+
+    /// A `=` has no special meaning in a bare path: just part of a (weird)
+    /// key rather than a `MissingEquals`-shaped hole.
+    #[test]
+    fn equals_is_an_ordinary_key_character() {
+        let parsed: RefPath = "a=b".parse().unwrap();
+        assert_eq!(parsed.try_into_keys().unwrap(), ["a=b"]);
     }
 
     #[test]
@@ -583,7 +548,7 @@ mod tests {
         let path_leaf = PathLeaf::new(vec!["a".into()], "xy".to_string())
             .unwrap()
             .map_leaf(|s| s.len());
-        assert!(path_leaf.keys().eq(["a"]));
+        assert_eq!(path_leaf.path(), [Seg::Key("a".into())]);
         assert_eq!(*path_leaf.leaf(), 2);
     }
 }
