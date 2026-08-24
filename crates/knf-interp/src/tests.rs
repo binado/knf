@@ -385,6 +385,21 @@ fn every_kind_of_problem_is_reported_in_one_run() {
     );
 }
 
+/// A scanner-level syntax error must not hide valid references elsewhere in
+/// the same string: the collection contract is per document, not per leaf.
+#[test]
+fn problems_in_one_string_are_collected() {
+    let doc = obj(vec![("value", s("${before} ${} ${after}"))]);
+    assert_eq!(
+        err(doc),
+        "invalid reference\n\
+         \x20 --> value: empty reference `${}`\n\
+         unresolved reference\n\
+         \x20 --> value: `before`\n\
+         \x20 --> value: `after`"
+    );
+}
+
 /// Several references to one broken key report once per *site*, not once per
 /// visit: memoization is what keeps a widely-referenced value from flooding the
 /// report.

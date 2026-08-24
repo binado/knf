@@ -177,33 +177,32 @@ impl<'a> Resolver<'a> {
     }
 
     fn resolve_string(&mut self, text: &str, path: &[Seg]) -> Result<Value, Cycle> {
-        let pieces = match scan(text) {
-            Ok(pieces) => pieces,
-            Err(error) => {
-                self.problems.push(Problem::Syntax {
-                    path: path.to_vec(),
-                    error,
-                });
-                return Ok(Value::String(text.to_string()));
-            }
-        };
+        let pieces = scan(text);
 
-        match pieces.as_slice() {
-            // No `$` anywhere — the common case, and the reason `scan` reports
-            // it as emptiness rather than a list of one literal.
-            [] => Ok(Value::String(text.to_string())),
-            [Piece::Ref(body)] => self.substitute(body, path),
-            embedded => {
-                let mut out = String::new();
-                for piece in embedded {
-                    match piece {
-                        Piece::Literal(literal) => out.push_str(literal),
-                        Piece::Ref(body) => out.push_str(&self.splice(body, path)?),
-                    }
+        // No `$` anywhere — the common case, and the reason `scan` reports it
+        // as emptiness rather than a list of one literal.
+        if pieces.is_empty() {
+            return Ok(Value::String(text.to_string()));
+        }
+        if let [Piece::Ref(body)] = pieces.as_slice() {
+            return self.substitute(body, path);
+        }
+
+        let mut out = String::new();
+        for piece in pieces {
+            match piece {
+                Piece::Literal(literal) => out.push_str(literal),
+                Piece::Ref(body) => out.push_str(&self.splice(body, path)?),
+                Piece::Malformed { spelling, error } => {
+                    self.problems.push(Problem::Syntax {
+                        path: path.to_vec(),
+                        error,
+                    });
+                    out.push_str(spelling);
                 }
-                Ok(Value::String(out))
             }
         }
+        Ok(Value::String(out))
     }
 
     /// Whole-string position: the reference *is* the value, so it takes the

@@ -19,6 +19,7 @@ use std::fmt;
 pub enum Piece<'a> {
     Literal(&'a str),
     Ref(&'a str),
+    Malformed { spelling: &'a str, error: Syntax },
 }
 
 /// A malformed reference.
@@ -59,9 +60,13 @@ pub enum Syntax {
 ///
 /// `$$` yields a literal `$`; a `$` followed by anything else is ordinary text,
 /// so `USD $5` needs no escaping.
-pub fn scan(s: &str) -> Result<Vec<Piece<'_>>, Syntax> {
+///
+/// Malformed references are returned as pieces rather than aborting the scan.
+/// A delimited malformed reference is recoverable, so later references are
+/// still found; an unterminated reference consumes the remainder of the string.
+pub fn scan(s: &str) -> Vec<Piece<'_>> {
     if !s.contains('$') {
-        return Ok(Vec::new());
+        return Vec::new();
     }
 
     let mut pieces = Vec::new();
@@ -82,20 +87,42 @@ pub fn scan(s: &str) -> Result<Vec<Piece<'_>>, Syntax> {
             Some(b'{') => {
                 let body_start = at + 2;
                 let Some(rel_end) = s[body_start..].find('}') else {
-                    return Err(Syntax::Unterminated { offset: at });
+                    push_literal(&mut pieces, &s[literal..at]);
+                    pieces.push(Piece::Malformed {
+                        spelling: &s[at..],
+                        error: Syntax::Unterminated { offset: at },
+                    });
+                    cursor = s.len();
+                    literal = cursor;
+                    break;
                 };
                 let body = &s[body_start..body_start + rel_end];
+                let after = body_start + rel_end + 1;
                 if body.is_empty() {
-                    return Err(Syntax::EmptyRef);
+                    push_literal(&mut pieces, &s[literal..at]);
+                    pieces.push(Piece::Malformed {
+                        spelling: &s[at..after],
+                        error: Syntax::EmptyRef,
+                    });
+                    cursor = after;
+                    literal = cursor;
+                    continue;
                 }
                 if body.contains("${") {
-                    return Err(Syntax::Nested {
-                        body: body.to_string(),
+                    push_literal(&mut pieces, &s[literal..at]);
+                    pieces.push(Piece::Malformed {
+                        spelling: &s[at..after],
+                        error: Syntax::Nested {
+                            body: body.to_string(),
+                        },
                     });
+                    cursor = after;
+                    literal = cursor;
+                    continue;
                 }
                 push_literal(&mut pieces, &s[literal..at]);
                 pieces.push(Piece::Ref(body));
-                cursor = body_start + rel_end + 1;
+                cursor = after;
                 literal = cursor;
             }
             // A bare `$`: ordinary text, and part of the pending literal.
@@ -103,7 +130,7 @@ pub fn scan(s: &str) -> Result<Vec<Piece<'_>>, Syntax> {
         }
     }
     push_literal(&mut pieces, &s[literal..]);
-    Ok(pieces)
+    pieces
 }
 
 fn push_literal<'a>(pieces: &mut Vec<Piece<'a>>, text: &'a str) {
@@ -134,24 +161,28 @@ mod tests {
         Piece::Ref(s)
     }
 
+    fn malformed(spelling: &str, error: Syntax) -> Piece<'_> {
+        Piece::Malformed { spelling, error }
+    }
+
     /// The empty result is load-bearing: it is how the resolver tells "nothing
     /// to do" from "all literal, rebuild it".
     #[test]
     fn a_string_without_a_dollar_scans_to_nothing() {
-        assert_eq!(scan("plain text").unwrap(), []);
-        assert_eq!(scan("").unwrap(), []);
+        assert_eq!(scan("plain text"), []);
+        assert_eq!(scan(""), []);
     }
 
     #[test]
     fn a_whole_string_reference_is_one_piece() {
-        assert_eq!(scan("${db.host}").unwrap(), [re("db.host")]);
-        assert_eq!(scan("${env:PORT}").unwrap(), [re("env:PORT")]);
+        assert_eq!(scan("${db.host}"), [re("db.host")]);
+        assert_eq!(scan("${env:PORT}"), [re("env:PORT")]);
     }
 
     #[test]
     fn embedded_references_keep_their_surroundings() {
         assert_eq!(
-            scan("http://${host}:${port}/health").unwrap(),
+            scan("http://${host}:${port}/health"),
             [
                 lit("http://"),
                 re("host"),
@@ -166,37 +197,68 @@ mod tests {
     /// case an off-by-one in the cursor would corrupt.
     #[test]
     fn adjacent_references_have_no_literal_between_them() {
-        assert_eq!(scan("${a}${b}").unwrap(), [re("a"), re("b")]);
+        assert_eq!(scan("${a}${b}"), [re("a"), re("b")]);
     }
 
     #[test]
     fn dollar_dollar_is_a_literal_dollar() {
-        assert_eq!(scan("$$").unwrap(), [lit("$")]);
-        assert_eq!(scan("$${a}").unwrap(), [lit("$"), lit("{a}")]);
-        assert_eq!(scan("a$$b").unwrap(), [lit("a"), lit("$"), lit("b")]);
+        assert_eq!(scan("$$"), [lit("$")]);
+        assert_eq!(scan("$${a}"), [lit("$"), lit("{a}")]);
+        assert_eq!(scan("a$$b"), [lit("a"), lit("$"), lit("b")]);
     }
 
     /// Only `${` starts a reference, so prose and prices need no escaping.
     #[test]
     fn a_bare_dollar_is_ordinary_text() {
-        assert_eq!(scan("USD $5").unwrap(), [lit("USD $5")]);
-        assert_eq!(scan("$").unwrap(), [lit("$")]);
-        assert_eq!(scan("$ {a}").unwrap(), [lit("$ {a}")]);
-        assert_eq!(scan("a$").unwrap(), [lit("a$")]);
+        assert_eq!(scan("USD $5"), [lit("USD $5")]);
+        assert_eq!(scan("$"), [lit("$")]);
+        assert_eq!(scan("$ {a}"), [lit("$ {a}")]);
+        assert_eq!(scan("a$"), [lit("a$")]);
     }
 
     #[test]
-    fn malformed_references_are_rejected() {
+    fn malformed_references_are_returned_as_pieces() {
         assert_eq!(
-            scan("a ${b").unwrap_err(),
-            Syntax::Unterminated { offset: 2 }
+            scan("a ${b"),
+            [
+                lit("a "),
+                malformed("${b", Syntax::Unterminated { offset: 2 })
+            ]
         );
-        assert_eq!(scan("${}").unwrap_err(), Syntax::EmptyRef);
+        assert_eq!(scan("${}"), [malformed("${}", Syntax::EmptyRef)]);
         assert_eq!(
-            scan("${a${b}}").unwrap_err(),
-            Syntax::Nested {
-                body: "a${b".to_string()
-            }
+            scan("${a${b}}"),
+            [
+                malformed(
+                    "${a${b}",
+                    Syntax::Nested {
+                        body: "a${b".to_string()
+                    }
+                ),
+                lit("}")
+            ]
+        );
+    }
+
+    #[test]
+    fn scanning_continues_around_malformed_references() {
+        assert_eq!(
+            scan("${before} ${} ${after}"),
+            [
+                re("before"),
+                lit(" "),
+                malformed("${}", Syntax::EmptyRef),
+                lit(" "),
+                re("after"),
+            ]
+        );
+        assert_eq!(
+            scan("${before} ${after"),
+            [
+                re("before"),
+                lit(" "),
+                malformed("${after", Syntax::Unterminated { offset: 10 }),
+            ]
         );
     }
 
@@ -204,7 +266,7 @@ mod tests {
     #[test]
     fn non_ascii_literals_survive() {
         assert_eq!(
-            scan("héllo ${who} ☃").unwrap(),
+            scan("héllo ${who} ☃"),
             [lit("héllo "), re("who"), lit(" ☃")]
         );
     }

@@ -7,5 +7,8 @@ error: invalid reference
   --> c: empty reference `${}`
   --> d: empty variable name in `${env:}`
   --> e: empty segment in reference `${x..y}`
+unresolved reference
+  --> c: `missing`
 help: a reference is `${key.path}` (with `[n]` for array elements) or `${env:NAME}`; write `$$` for a literal `$`
+help: `${key.path}` names a key in the merged document, `${env:NAME}` an environment variable
 help: drop --interpolate to pass `${...}` through untouched

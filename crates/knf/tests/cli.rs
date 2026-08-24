@@ -573,7 +573,7 @@ fn embedded_container_reference_error() {
 fn malformed_reference_error() {
     let dir = tree(&[(
         "f.json",
-        r#"{"a":"${b","c":"${}","d":"${env:}","e":"${x..y}"}"#,
+        r#"{"a":"${b","c":"${missing} ${}","d":"${env:}","e":"${x..y}"}"#,
     )]);
     insta::assert_snapshot!(run_err(&dir, &["f.json", "--interpolate"]));
 }
