@@ -186,7 +186,7 @@ fn name_the_rule_flag(err: PathError, flag: &str) -> anyhow::Error {
 fn name_the_set_flag(err: PathError) -> anyhow::Error {
     match err {
         PathError::IndexInKeyPath { .. } => anyhow!(
-            "{err}\nhelp: --set takes KEY.PATH=VALUE; an index like servers[0] can be read\n\
+            "{err}\nhelp: --set takes KEY.PATH=VALUE; an index like servers[0] can be read\n      \
              by a ${{...}} reference but never written — put the value in a file instead"
         ),
         other => other.into(),

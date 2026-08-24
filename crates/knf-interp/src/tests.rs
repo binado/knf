@@ -570,8 +570,9 @@ fn a_cycle_through_an_array_names_the_index() {
     assert_eq!(err(doc), "reference cycle: `a` -> `b[0]` -> `a`");
 }
 
-/// A key literally spelled `a[0]` exists and a `--set` can still write one,
-/// but the reference grammar now reads brackets: it resolves as the index.
+/// A key literally spelled `a[0]` can exist — only a file can carry one,
+/// since `--set` rejects indices — and the reference grammar reads brackets
+/// as the index, so `${a[0]}` resolves into the array rather than the key.
 #[test]
 fn a_bracket_body_reads_as_an_index_not_a_weird_key() {
     let doc = obj(vec![
