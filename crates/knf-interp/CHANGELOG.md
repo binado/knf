@@ -7,14 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.3](https://github.com/binado/knf/compare/knf-core-v0.1.2...knf-core-v0.1.3) - 2026-08-24
+## [0.1.3](https://github.com/binado/knf/compare/knf-interp-v0.1.2...knf-interp-v0.1.3) - 2026-08-24
 
 ### Added
 
 - --interpolate, variable and environment references ([#15](https://github.com/binado/knf/pull/15))
-
-## [0.1.1](https://github.com/binado/knf/compare/knf-core-v0.1.0...knf-core-v0.1.1) - 2026-08-16
-
-### Added
-
-- per-path merge strategies (--append, --replace, --fail) ([#10](https://github.com/binado/knf/pull/10))
