@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use knf_dotted::{KeyPath, PathLeaf};
+use knf_dotted::{PathLeaf, RefPath};
 
 use crate::format::Format;
 
@@ -70,7 +70,9 @@ Sharp edge: version=1.0 is the number 1.0, not the string \"1.0\". Force a strin
 by quoting into JSON: --set version='\"1.0\"'.
 
 Dotted paths nest, so keys containing a literal dot are not addressable from
---set; use a file."
+--set; use a file. Brackets name array elements only in ${...} references, so
+--set 'a[0]=1' is an error rather than a write into an array or to a key
+literally spelled a[0]; only a file can carry either."
     )]
     pub set: Vec<PathLeaf<String>>,
 
@@ -89,9 +91,10 @@ as-is rather than doubled:
   knf base.toml prod.toml --append plugins    # base's plugins ++ prod's
 
 Dotted paths address nested keys, so a key containing a literal dot cannot be
-named."
+named. An index like xs[0] cannot appear either: a rule names keys, never an
+array element."
     )]
-    pub append: Vec<KeyPath>,
+    pub append: Vec<RefPath>,
 
     /// Replace the value at this path wholesale, without merging into it
     #[arg(
@@ -110,9 +113,10 @@ This applies to --set layers too, which are ordinary layers: --replace db
 --set db.host=x leaves db with nothing but host.
 
 Dotted paths address nested keys, so a key containing a literal dot cannot be
-named."
+named. An index like xs[0] cannot appear either: a rule names keys, never an
+array element."
     )]
-    pub replace: Vec<KeyPath>,
+    pub replace: Vec<RefPath>,
 
     /// Error if a later layer sets this path again
     #[arg(
@@ -128,9 +132,10 @@ every layer. Use it to protect a value that later layers must not override:
   knf base.toml prod.toml --fail db.host
 
 Dotted paths address nested keys, so a key containing a literal dot cannot be
-named."
+named. An index like xs[0] cannot appear either: a rule names keys, never an
+array element."
     )]
-    pub fail: Vec<KeyPath>,
+    pub fail: Vec<RefPath>,
 
     /// Output format; required when inputs are mixed
     #[arg(short = 'f', long, value_name = "FORMAT")]
@@ -158,6 +163,52 @@ arrays, where a null cannot simply be dropped without shifting every index
 after it."
     )]
     pub null_as: Option<String>,
+
+    /// Resolve ${key.path} and ${env:VAR} references in the merged document
+    #[arg(
+        long,
+        long_help = "\
+Resolve ${key.path} and ${env:VAR} references in the merged document.
+
+Opt-in, and off by default. knf sits upstream of tools whose own syntax is
+${...} — compose files, GitHub Actions workflows, Helm charts, systemd units —
+so eating those without being asked would be silent corruption. Off, the output
+is exactly what it is today.
+
+The pass runs once, on the merged document, never per layer:
+
+  root     = \"/srv\"
+  data_dir = \"${root}/data\"    -> \"/srv/data\"
+  port     = \"${env:PORT}\"     -> 8080  (a number, not a string)
+  url      = \"x:${env:PORT}\"   -> \"x:8080\"
+  literal  = \"$${NOT_A_REF}\"   -> \"${NOT_A_REF}\"
+
+A reference that is the *whole* string takes the referent's value and type, so
+${port} can yield a number, an array or a table. A reference *embedded* in text
+stringifies; an object or array has no format-independent spelling there, so it
+is an error rather than a guess. An environment variable is spliced as raw text
+when embedded and typed like --set's right-hand side when it is the whole
+string.
+
+$$ is a literal $. A $ followed by anything else is ordinary text, so `USD $5`
+needs no escaping.
+
+Document references resolve transitively and in any order; environment values
+are terminal and are never re-scanned. Cycles are an error.
+
+`env:` is a reserved prefix, matched literally: ${a:b} is the ordinary key
+`a:b`, and only keys that literally begin `env:` are unaddressable.
+
+A reference may read an array element — ${servers[0].host} — with all the same
+rules: whole-string it takes the element's value and type, embedded it
+stringifies. Brackets are part of the grammar, so a key literally spelled
+`a[0]` cannot be addressed by a reference or written by --set, exactly as a
+key containing a literal dot never could; only a file can carry one.
+
+An unset variable or a missing key is an error naming every offender, never
+passed through as literal text."
+    )]
+    pub interpolate: bool,
 
     /// Error when a layer changes the type of an existing key
     #[arg(long)]

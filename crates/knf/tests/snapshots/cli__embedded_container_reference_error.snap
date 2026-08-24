@@ -1,0 +1,8 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"f.json\", \"--interpolate\"])"
+---
+error: reference cannot be rendered into a string
+  --> url: `db` is an object
+  --> tag: `xs` is an array
+help: an object or array reference must be the whole string, not embedded in one

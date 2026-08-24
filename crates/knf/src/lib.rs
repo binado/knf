@@ -2,6 +2,7 @@
 
 pub mod cli;
 pub mod format;
+pub mod interp;
 pub mod value;
 
 use std::io::{Read, Write};
@@ -11,10 +12,12 @@ use anyhow::{Context, anyhow, bail};
 use knf_core::{
     MergeError, MergeOptions, RuleError, RuleErrors, Rules, Strategy, Value, merge_with,
 };
-use knf_dotted::PathLeaf;
+use knf_dotted::{PathError, PathLeaf};
+use knf_interp::{InterpError, Problem};
 
 use cli::Cli;
 use format::{Format, SourceName};
+use interp::ProcessEnv;
 
 /// The positional that means "read stdin".
 const STDIN: &str = "-";
@@ -29,6 +32,17 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
     // line, and saying so must not wait on the files existing or parsing.
     let opts = merge_options(&cli)?;
 
+    // --set layers are terminal: appended after every file. The RHS parses as
+    // JSON with a string fallback, which is knf-dotted's job. The conversion
+    // is also where a bracketed path is rejected, so it runs with the rule
+    // set above: up front, not after the files exist or parse.
+    let mut set_layers: Vec<Value> = Vec::with_capacity(cli.set.len());
+    for path_leaf in &cli.set {
+        let typed = PathLeaf::<serde_json::Value>::from(path_leaf.clone());
+        let json = serde_json::Value::try_from(typed).map_err(name_the_set_flag)?;
+        set_layers.push(value::from_json(json));
+    }
+
     let mut layers: Vec<Value> = Vec::new();
     let mut input_formats: Vec<Format> = Vec::new();
 
@@ -38,17 +52,21 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         input_formats.push(format);
         layers.push(value);
     }
-
-    // --set layers are terminal: appended after every file. The RHS parses as
-    // JSON with a string fallback, which is knf-dotted's job.
-    for path_leaf in &cli.set {
-        let json = serde_json::Value::from(PathLeaf::<serde_json::Value>::from(path_leaf.clone()));
-        layers.push(value::from_json(json));
-    }
+    layers.extend(set_layers);
 
     let out_format = resolve_output_format(cli.format, &input_formats)?;
 
     let merged = merge_with(layers, &opts).map_err(name_the_flag)?;
+    // After the merge, before the emit, and never per layer: a reference reads
+    // the document the user is actually going to get. `--set` layers therefore
+    // interpolate like any other layer, and `--strict` has already run — it
+    // compares the types values had when they were *written*, so a `"${port}"`
+    // was a string when it looked.
+    let merged = if cli.interpolate {
+        knf_interp::interpolate(merged, &ProcessEnv).map_err(explain_interp)?
+    } else {
+        merged
+    };
     let text = format::emit(merged, out_format, !cli.compact, cli.null_as.as_deref())?;
     write_stdout(&text)
 }
@@ -130,23 +148,49 @@ pub fn resolve_output_format(
 /// alone, so nothing about the files can change whether they are legal.
 pub fn merge_options(cli: &Cli) -> anyhow::Result<MergeOptions> {
     let flags = [
-        (&cli.append, Strategy::Append),
-        (&cli.replace, Strategy::Replace),
-        (&cli.fail, Strategy::Fail),
+        ("--append", &cli.append, Strategy::Append),
+        ("--replace", &cli.replace, Strategy::Replace),
+        ("--fail", &cli.fail, Strategy::Fail),
     ];
-    let rules: Vec<(Vec<String>, Strategy)> = flags
-        .into_iter()
-        .flat_map(|(paths, strategy)| {
-            paths
-                .iter()
-                .map(move |path| (path.segments().to_vec(), strategy))
-        })
-        .collect();
+    let mut rules: Vec<(Vec<String>, Strategy)> = Vec::new();
+    for (flag, paths, strategy) in flags {
+        for path in paths {
+            // The one write-side predicate, run per flag so the error can
+            // name it: rules name keys, never array elements.
+            let keys = path
+                .clone()
+                .try_into_keys()
+                .map_err(|err| name_the_rule_flag(err, flag))?;
+            rules.push((keys, strategy));
+        }
+    }
 
     Ok(MergeOptions {
         strict: cli.strict,
         rules: Rules::build(rules).map_err(explain_rules)?,
     })
+}
+
+/// The established division of labour: `knf-dotted` renders the path and
+/// stays provenance-free, the help line names the flag that carried it.
+fn name_the_rule_flag(err: PathError, flag: &str) -> anyhow::Error {
+    match err {
+        PathError::IndexInKeyPath { .. } => {
+            anyhow!("{err}\nhelp: {flag} takes a key path; a rule cannot name an array element")
+        }
+        other => other.into(),
+    }
+}
+
+/// Same division of labour for `--set`: its paths feed the same conversion.
+fn name_the_set_flag(err: PathError) -> anyhow::Error {
+    match err {
+        PathError::IndexInKeyPath { .. } => anyhow!(
+            "{err}\nhelp: --set takes KEY.PATH=VALUE; an index like servers[0] can be read\n      \
+             by a ${{...}} reference but never written — put the value in a file instead"
+        ),
+        other => other.into(),
+    }
 }
 
 /// Turns a rule-set rejection into the flags the user actually typed.
@@ -187,6 +231,46 @@ fn name_the_flag(err: MergeError) -> anyhow::Error {
         MergeError::TypeConflict { .. } => return err.into(),
     };
     anyhow!("{err}\n{help}")
+}
+
+/// The same division of labour for interpolation.
+///
+/// `knf-interp` names key paths and reference spellings; it has never heard of
+/// `--interpolate`, so the flag only appears here.
+fn explain_interp(err: InterpError) -> anyhow::Error {
+    let mut help = String::new();
+    match &err {
+        InterpError::Cycle(_) => {
+            help.push_str("\nhelp: a reference may not resolve, directly or indirectly, to itself")
+        }
+        InterpError::Problems(problems) => {
+            // One help line per kind present, in the order the message lists
+            // them, then the escape that applies to a document whose `${...}`
+            // was never meant for knf in the first place.
+            let has = |f: fn(&Problem) -> bool| problems.iter().any(f);
+            let syntax = has(|p| matches!(p, Problem::Syntax { .. }));
+            let unresolved = has(|p| matches!(p, Problem::Unresolved { .. }));
+            if syntax {
+                help.push_str(
+                    "\nhelp: a reference is `${key.path}` (with `[n]` for array elements) or `${env:NAME}`; write `$$` for a literal `$`",
+                );
+            }
+            if unresolved {
+                help.push_str(
+                    "\nhelp: `${key.path}` names a key in the merged document, `${env:NAME}` an environment variable",
+                );
+            }
+            if has(|p| matches!(p, Problem::NotStringifiable { .. })) {
+                help.push_str(
+                    "\nhelp: an object or array reference must be the whole string, not embedded in one",
+                );
+            }
+            if syntax || unresolved {
+                help.push_str("\nhelp: drop --interpolate to pass `${...}` through untouched");
+            }
+        }
+    }
+    anyhow!("{err}{help}")
 }
 
 /// Writes to stdout, treating a closed pipe as success so `knf big.json | head`

@@ -6,6 +6,6 @@ semver_check = false
 
 [[package]]
 name = "knf-cli"
-# Merge-core and --set parser live in sibling crates; their commits belong
-# in the CLI changelog.
-changelog_include = ["knf-core", "knf-dotted"]
+# Merge-core, --set parser and reference resolution live in sibling crates;
+# their commits belong in the CLI changelog.
+changelog_include = ["knf-core", "knf-dotted", "knf-interp"]

@@ -5,22 +5,32 @@ use std::str::FromStr;
 
 use serde_json::{Map, Value};
 
-use crate::{ParseError, PathLeaf};
+use crate::{PathError, PathLeaf};
 
 impl FromStr for PathLeaf<Value> {
-    type Err = ParseError;
+    type Err = PathError;
 
     fn from_str(expr: &str) -> Result<Self, Self::Err> {
         Ok(PathLeaf::<String>::from_str(expr)?.into())
     }
 }
 
+/// Parses text as JSON, falling back to the string itself.
+///
+/// `8080` is a number, `true` is a bool, `foo` is the string `"foo"` because it
+/// is not valid JSON, and `[a,b]` is the string `"[a,b]"` for the same reason.
+///
+/// Public because more than one caller needs *this* rule rather than a rule like
+/// it: `--set`'s RHS and `${env:VAR}` in a whole-string position must type
+/// identically, and two matching implementations would only agree until one of
+/// them was edited.
+pub fn json_or_string(text: String) -> Value {
+    serde_json::from_str(&text).unwrap_or_else(|_| Value::String(text))
+}
+
 impl From<PathLeaf<String>> for PathLeaf<Value> {
     fn from(path_leaf: PathLeaf<String>) -> Self {
-        // JSON first, string as the fallback. `port=8080` is a number, `name=foo`
-        // is a string because it is not valid JSON, and `tags=[a,b]` is the string
-        // "[a,b]" for the same reason.
-        path_leaf.map_leaf(|rhs| serde_json::from_str(&rhs).unwrap_or_else(|_| Value::String(rhs)))
+        path_leaf.map_leaf(json_or_string)
     }
 }
 
@@ -33,9 +43,14 @@ impl fmt::Display for PathLeaf<Value> {
     }
 }
 
-impl From<PathLeaf<Value>> for Value {
-    fn from(path_leaf: PathLeaf<Value>) -> Self {
-        path_leaf.into_nested(|key, acc| {
+impl TryFrom<PathLeaf<Value>> for Value {
+    type Error = PathError;
+
+    /// Expands to a nested object. Fallible because the grammar accepts
+    /// bracket steps (`a[0]=1` parses) that a writer cannot use: an index
+    /// never reaches the nested-object expansion.
+    fn try_from(path_leaf: PathLeaf<Value>) -> Result<Self, Self::Error> {
+        path_leaf.try_into_nested(|key, acc| {
             let mut obj = Map::new();
             obj.insert(key, acc);
             Value::Object(obj)
@@ -54,7 +69,7 @@ mod tests {
     }
 
     fn nested(expr: &str) -> Value {
-        Value::from(parse(expr))
+        Value::try_from(parse(expr)).expect("all-key path")
     }
 
     /// The §4.2 table, verbatim.
@@ -123,6 +138,26 @@ mod tests {
     fn from_raw_path_leaf_parses_the_rhs() {
         let raw: PathLeaf<String> = "server.port=8080".parse().unwrap();
         let typed = PathLeaf::<Value>::from(raw);
-        assert_eq!(Value::from(typed), json!({"server": {"port": 8080}}));
+        assert_eq!(
+            Value::try_from(typed).unwrap(),
+            json!({"server": {"port": 8080}})
+        );
+    }
+
+    /// Brackets parse — a reference may read an element — but a `--set`-shaped
+    /// expression can never expand one into a writer's nested object.
+    #[test]
+    fn bracketed_paths_parse_but_cannot_write() {
+        let err = Value::try_from(parse("servers[0].host=x")).unwrap_err();
+        assert_eq!(
+            err,
+            PathError::IndexInKeyPath {
+                path: "servers[0].host".into()
+            }
+        );
+        assert_eq!(
+            err.to_string(),
+            "`servers[0].host` contains an array index; merge paths take keys only"
+        );
     }
 }

@@ -21,7 +21,7 @@ pub enum Value {
     String(String),
     /// An RFC 3339-ish TOML datetime, kept as its source spelling.
     ///
-    /// Only the TOML parser produces this. It round-trips exactly through
+    /// Every datetime originates in the TOML parser. It round-trips exactly through
     /// `Display`/`FromStr` for all four TOML forms (offset datetime, local
     /// datetime, local date, local time), so a string is enough to carry it
     /// across a merge without pulling `toml` into this crate. JSON has no

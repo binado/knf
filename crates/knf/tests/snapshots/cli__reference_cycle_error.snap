@@ -1,0 +1,6 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"f.json\", \"--interpolate\"])"
+---
+error: reference cycle: `a` -> `b` -> `c` -> `a`
+help: a reference may not resolve, directly or indirectly, to itself
