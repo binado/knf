@@ -50,9 +50,13 @@ let merged = merge(&["base.toml", "prod.toml"], MergeOpts::default())?;
 ```
 
 `MergeOpts` also accepts strict mode, per-path rules, in-memory terminal
-overlays, an input-format override, and opt-in interpolation. The result is the
-format-independent `knf_core::Value`, ready for a native adapter or language
-binding to convert without parsing rendered stdout.
+overlays, an input-format override, and opt-in interpolation. An overlay is a
+`knf::Map` rather than a value, for the reason a file layer must be an object at
+the top level: a scalar layer would replace the whole document instead of
+shadowing a key. The result is the format-independent `knf::Value`, ready for a
+native adapter or language binding to convert without parsing rendered stdout.
+`Map`, `Value`, `Rules`, `Strategy` and `MergeError` are re-exported from
+`knf`, so a consumer needs no direct dependency on `knf-core`.
 
 For merging values that are already in memory, use the smaller core crate:
 

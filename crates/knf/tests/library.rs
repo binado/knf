@@ -1,7 +1,6 @@
 use std::path::Path;
 
-use knf::{MergeOpts, format::Format};
-use knf_core::{Rules, Strategy, Value};
+use knf::{Map, MergeOpts, Rules, Strategy, Value, format::Format};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -15,6 +14,15 @@ fn tree(files: &[(&str, &str)]) -> TempDir {
 
 fn as_json(value: Value) -> serde_json::Value {
     knf::value::to_json(value)
+}
+
+/// An overlay is a [`Map`]: the type is what keeps a scalar layer — which would
+/// replace the whole document rather than shadow a key — out of the fold.
+fn overlay(json: serde_json::Value) -> Map {
+    let serde_json::Value::Object(map) = json else {
+        panic!("an overlay fixture must be an object")
+    };
+    knf::value::object_from_json(map)
 }
 
 #[test]
@@ -44,7 +52,7 @@ fn merge_options_cover_rules_terminal_overlays_and_interpolation() {
     ]);
     let paths = [dir.path().join("base.json"), dir.path().join("prod.json")];
     let rules = Rules::build([(vec!["plugins".into()], Strategy::Append)]).expect("valid rule");
-    let overlay = knf::value::from_json(json!({"port": 443, "data": "${root}/data"}));
+    let overlay = overlay(json!({"port": 443, "data": "${root}/data"}));
 
     let merged = knf::merge(
         &paths,
@@ -72,7 +80,7 @@ fn merge_options_cover_rules_terminal_overlays_and_interpolation() {
 fn strict_overlay_errors_preserve_the_core_error() {
     let dir = tree(&[("base.json", r#"{"port":80}"#)]);
     let paths = [dir.path().join("base.json")];
-    let overlay = knf::value::from_json(json!({"port": "wrong kind"}));
+    let overlay = overlay(json!({"port": "wrong kind"}));
 
     let err = knf::merge(
         &paths,
@@ -85,7 +93,7 @@ fn strict_overlay_errors_preserve_the_core_error() {
     .expect_err("strict overlay must fail");
 
     assert_eq!(
-        err.downcast_ref::<knf_core::MergeError>()
+        err.downcast_ref::<knf::MergeError>()
             .expect("preserves the core error")
             .path(),
         ["port"]

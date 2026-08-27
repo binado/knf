@@ -14,13 +14,19 @@ use std::path::Path;
 #[cfg(feature = "cli")]
 use anyhow::anyhow;
 use anyhow::{Context, bail};
+use knf_core::{MergeOptions as CoreMergeOptions, merge_with};
 #[cfg(feature = "cli")]
-use knf_core::{MergeError, RuleError, RuleErrors, Strategy};
-use knf_core::{MergeOptions as CoreMergeOptions, Rules, Value, merge_with};
+use knf_core::{RuleError, RuleErrors};
 #[cfg(feature = "cli")]
 use knf_dotted::{PathError, PathLeaf};
 #[cfg(feature = "cli")]
 use knf_interp::{InterpError, Problem};
+
+/// The core types this crate's own signatures are written in. A consumer of
+/// `knf-cli --no-default-features` depends on this crate alone, so `merge`'s
+/// result, `MergeOpts`' fields and the error it hands back must all be
+/// nameable from here.
+pub use knf_core::{Map, MergeError, Rules, Strategy, Value};
 
 #[cfg(feature = "cli")]
 use cli::Cli;
@@ -45,7 +51,11 @@ pub struct MergeOpts {
     /// Per-path overrides of the default merge strategy.
     pub rules: Rules,
     /// In-memory layers appended after every file, in order.
-    pub overlays: Vec<Value>,
+    ///
+    /// Maps rather than [`Value`]s for the reason [`format::parse`] requires an
+    /// object at the top level: a scalar layer does not shadow a key, it
+    /// replaces the whole document with something no format can emit.
+    pub overlays: Vec<Map>,
     /// Resolve document and process-environment references after merging.
     pub interpolate: bool,
 }
@@ -73,38 +83,57 @@ impl Default for MergeOpts {
 /// values come from the current process and follow the same JSON-or-string
 /// typing rule as CLI `--set` values.
 pub fn merge<P: AsRef<Path>>(paths: &[P], opts: MergeOpts) -> anyhow::Result<Value> {
-    merge_inputs(paths, opts).map(|(value, _formats)| value)
+    let (layers, _formats) = load_layers(paths, opts.input_format)?;
+    merge_layers(layers, opts)
 }
 
-/// The shared implementation also returns the formats observed by the CLI,
-/// which needs them to choose an output encoding. That presentation concern is
-/// intentionally absent from the public merge result.
-fn merge_inputs<P: AsRef<Path>>(
+/// Reads and parses every positional into the merge IR, keeping the format each
+/// input was read as.
+///
+/// Separate from the fold because the CLI resolves the *output* format in
+/// between, and the observed formats are the input to that decision. A missing
+/// `-f` is a mistake in argv alone: reporting it must not wait behind a merge
+/// conflict the user would otherwise fix first, only to learn about the flag on
+/// the next run. The formats are a presentation concern and so are absent from
+/// the public merge result.
+fn load_layers<P: AsRef<Path>>(
     paths: &[P],
-    opts: MergeOpts,
-) -> anyhow::Result<(Value, Vec<Format>)> {
-    let mut layers: Vec<Value> = Vec::with_capacity(paths.len() + opts.overlays.len());
+    input_format: Option<Format>,
+) -> anyhow::Result<(Vec<Value>, Vec<Format>)> {
+    let mut layers: Vec<Value> = Vec::with_capacity(paths.len());
     let mut input_formats: Vec<Format> = Vec::with_capacity(paths.len());
 
     for path in paths {
-        let (name, format, text) = read_input(path.as_ref(), opts.input_format)?;
+        let (name, format, text) = read_input(path.as_ref(), input_format)?;
         let value = format::parse(format, &text, &name)?;
         input_formats.push(format);
         layers.push(value);
     }
-    layers.extend(opts.overlays);
+    Ok((layers, input_formats))
+}
+
+/// Appends the overlays to the file layers and folds the flat list, resolving
+/// references once at the end when asked.
+fn merge_layers(mut layers: Vec<Value>, opts: MergeOpts) -> anyhow::Result<Value> {
+    layers.reserve(opts.overlays.len());
+    layers.extend(opts.overlays.into_iter().map(Value::Object));
 
     let core_opts = CoreMergeOptions {
         strict: opts.strict,
         rules: opts.rules,
     };
     let merged = merge_with(layers, &core_opts)?;
+    // After the merge, before the emit, and never per layer: a reference reads
+    // the document the user is actually going to get. `--set` layers therefore
+    // interpolate like any other layer, and `--strict` has already run — it
+    // compares the types values had when they were *written*, so a `"${port}"`
+    // was a string when it looked.
     let merged = if opts.interpolate {
         knf_interp::interpolate(merged, &ProcessEnv)?
     } else {
         merged
     };
-    Ok((merged, input_formats))
+    Ok(merged)
 }
 
 /// `knf <files...>` — merge layers left to right, print one document.
@@ -122,11 +151,16 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
     // JSON with a string fallback, which is knf-dotted's job. The conversion
     // is also where a bracketed path is rejected, so it runs with the rule
     // set above: up front, not after the files exist or parse.
-    let mut set_layers: Vec<Value> = Vec::with_capacity(cli.set.len());
+    let mut set_layers: Vec<Map> = Vec::with_capacity(cli.set.len());
     for path_leaf in &cli.set {
         let typed = PathLeaf::<serde_json::Value>::from(path_leaf.clone());
         let json = serde_json::Value::try_from(typed).map_err(name_the_set_flag)?;
-        set_layers.push(value::from_json(json));
+        let serde_json::Value::Object(obj) = json else {
+            // The expansion nests the leaf under every key in the path, and
+            // the grammar rejects an empty path — so it is always an object.
+            unreachable!("a --set expression expands to a nested object")
+        };
+        set_layers.push(value::object_from_json(obj));
     }
 
     let opts = MergeOpts {
@@ -136,9 +170,15 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         overlays: set_layers,
         interpolate: cli.interpolate,
     };
-    let (merged, input_formats) = merge_inputs(&cli.files, opts).map_err(explain_pipeline)?;
 
+    // Between the parse and the fold: the output format is a decision about
+    // argv, and the formats it needs are known as soon as the inputs are read.
+    // Deciding it after the merge would make a forgotten `-f` queue behind
+    // every error in the documents themselves.
+    let (layers, input_formats) = load_layers(&cli.files, opts.input_format)?;
     let out_format = resolve_output_format(cli.format, &input_formats)?;
+
+    let merged = merge_layers(layers, opts).map_err(explain_pipeline)?;
     let text = format::emit(merged, out_format, !cli.compact, cli.null_as.as_deref())?;
     write_stdout(&text)
 }

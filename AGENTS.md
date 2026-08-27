@@ -71,9 +71,16 @@ crates appear only at the two boundaries, and the conversions live only in
 `crates/knf/src/value.rs`, called only from `crates/knf/src/format.rs`.
 
 Pipeline (`crates/knf/src/lib.rs::run`): build `MergeOptions` (so a bad rule set fails
-before any I/O) → read each positional → `format::parse` into `Value` → append `--set`
-layers → `merge_with` over the flat list → `knf_interp::interpolate` if `--interpolate`
-→ `format::emit`.
+before any I/O) → `load_layers` (read each positional, `format::parse` into `Value`) →
+`resolve_output_format` → `merge_layers` (append the overlays, `merge_with` over the flat
+list, `knf_interp::interpolate` if `--interpolate`) → `format::emit`. `merge` is the
+library entry point onto the same two halves, minus the format decision.
+
+**The output format is resolved between the parse and the fold**, and the split into
+`load_layers`/`merge_layers` exists to hold that ordering. A missing `-f` is a mistake in
+argv alone; deciding it after the merge would queue it behind every error in the documents
+themselves, so the user would fix a type conflict, re-run, and only then learn about the
+flag — the same "one run at a time" pattern the rule-conflict message is built to avoid.
 
 **Interpolation runs once, on the merged document, never per layer.** Several
 consequences fall out of that placement and need no code: `--set` layers interpolate
