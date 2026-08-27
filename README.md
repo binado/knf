@@ -33,7 +33,45 @@ To build from source instead:
 cargo install knf-cli
 ```
 
-## Library
+## Rust libraries
+
+The whole pipeline — read paths, parse JSON and TOML, merge, interpolate — is
+`knf-config`, published separately from the command line so a Rust consumer or
+a language binding never pulls in `clap`:
+
+```bash
+cargo add knf-config
+```
+
+```rust
+use knf::{MergeOpts, merge};
+
+let merged = merge(&["base.toml", "prod.toml"], MergeOpts::default())?;
+```
+
+`MergeOpts` also accepts strict mode, per-path rules, in-memory terminal
+overlays, an input-format override, and opt-in interpolation. An overlay is a
+`knf::Map` rather than a value, for the reason a file layer must be an object at
+the top level: a scalar layer would replace the whole document instead of
+shadowing a key. The result is the format-independent `knf::Value`, ready for a
+native adapter or language binding to convert without parsing rendered stdout;
+`knf::format::emit` renders it when you do want text.
+
+`merge` resolves `${env:NAME}` against the process environment. Pass your own
+with `merge_with_env`, and the output is a function of the inputs alone:
+
+```rust
+let merged = knf::merge_with_env(&paths, opts, &my_env)?;
+```
+
+Errors carry typed causes rather than prose — `LoadError`, `MergeError`,
+`InterpError` — and name no command-line flags, since a library caller has no
+command line to act on. `Map`, `Value`, `Rules`, `Strategy`, `Format`, `Env` and
+every error type are re-exported from `knf`, so a consumer needs no direct
+dependency on `knf-core` or `knf-interp`.
+
+For merging values that are already in memory, use the smaller core crate — it
+has no file I/O and no format crates, only `indexmap` and `thiserror`:
 
 ```bash
 cargo add knf-core
