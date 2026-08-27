@@ -4,17 +4,21 @@
 //! and file paths — never a command-line flag, because none of them has heard
 //! of one. Every `help:` line in this file exists to close that gap on the way
 //! out, and this is the only place in the workspace where `--append`,
-//! `--replace`, `--fail`, `--set`, `--input-format` and `--interpolate` appear
-//! in an error message.
+//! `--replace`, `--fail`, `--set`, `--input-format`, `--interpolate`, `-f` and
+//! `--null-as` appear in an error message.
 
 use anyhow::anyhow;
-use knf::{InterpError, LoadError, MergeError, PathError, Problem, RuleError, RuleErrors};
+use knf::{
+    InterpError, LoadError, MergeError, NullInToml, PathError, Problem, RuleError, RuleErrors,
+};
 
 /// Adds the command-line spelling to errors produced by the reusable pipeline.
 ///
-/// Downcasts rather than matching on a wrapper enum, because the pipeline's
-/// errors arrive inside `anyhow` and each typed error is decorated by a
-/// different rule. Note the hazard: if `knf-config` ever wraps these in one
+/// Every stage passes through here — load, merge, interpolate and emit — so
+/// there is one place a library error can pick up a flag name, rather than one
+/// per call site. Downcasts rather than matching on a wrapper enum, because the
+/// pipeline's errors arrive inside `anyhow` and each typed error is decorated by
+/// a different rule. Note the hazard: if `knf-config` ever wraps these in one
 /// error type of its own, every downcast below starts missing and nothing here
 /// fails to compile — the tests that pin this stderr are what would catch it.
 pub fn explain_pipeline(err: anyhow::Error) -> anyhow::Error {
@@ -26,10 +30,24 @@ pub fn explain_pipeline(err: anyhow::Error) -> anyhow::Error {
         Ok(err) => return name_the_flag(err),
         Err(err) => err,
     };
-    match err.downcast::<InterpError>() {
-        Ok(err) => explain_interp(err),
+    let err = match err.downcast::<InterpError>() {
+        Ok(err) => return explain_interp(err),
+        Err(err) => err,
+    };
+    match err.downcast::<NullInToml>() {
+        Ok(err) => explain_null(err),
         Err(err) => err,
     }
+}
+
+/// Names the two flags that get a document with a null out through TOML.
+///
+/// `knf-config` reports where the nulls are and stops: emitting JSON instead
+/// and substituting a string are both things an *interface* offers, and it has
+/// none. The report is deliberately newline-free at the end so this line lands
+/// flush against its last `-->`.
+fn explain_null(err: NullInToml) -> anyhow::Error {
+    anyhow!("{err}\nhelp: emit JSON with -f json, substitute with --null-as, or remove the null")
 }
 
 /// Names the flag that resolves an input whose format could not be settled.

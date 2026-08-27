@@ -196,3 +196,32 @@ fn interpolation_is_off_by_default() {
         .expect("no references are resolved");
     assert_eq!(as_json(merged), json!({"a": "${b}", "b": "literal"}));
 }
+
+/// The other error a caller has to be able to act on without a command line.
+///
+/// A null cannot go to TOML, and every remedy for that is interface-shaped —
+/// emit JSON, substitute a string, drop the null — so the report locates the
+/// nulls and says nothing about how to spell the fix. Asserted against the two
+/// flags specifically rather than a bare `--`, because the report's own path
+/// lines are spelled `  --> a.b`.
+#[test]
+fn the_null_in_toml_report_locates_the_nulls_and_names_no_flag() {
+    let dir = tree(&[("base.json", r#"{"a":{"b":null},"c":[1,null]}"#)]);
+    let merged = knf::merge(&[dir.path().join("base.json")], MergeOpts::default())
+        .expect("a null is an ordinary value up to the emit");
+
+    let err = knf::format::emit(merged, Format::Toml, true, None)
+        .expect_err("a null cannot be serialized to TOML");
+    let report = err
+        .downcast_ref::<knf::NullInToml>()
+        .expect("preserves the typed error");
+
+    let text = report.to_string();
+    assert_eq!(text, "cannot serialize null to TOML\n  --> a.b\n  --> c[1]");
+    for flag in ["--null-as", "-f json"] {
+        assert!(
+            !text.contains(flag),
+            "a library error must not name a flag: {text}"
+        );
+    }
+}

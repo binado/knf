@@ -32,15 +32,22 @@ use knf_core::{MergeOptions as CoreMergeOptions, merge_with};
 ///
 /// A consumer of `knf-config` depends on this crate alone, so [`merge`]'s
 /// result, [`MergeOpts`]' fields, the [`Env`] it can be handed and every error
-/// it returns must all be nameable from here.
+/// it returns must all be nameable from here. "Nameable" reaches through the
+/// public types, not just to them: [`Number`] is the payload of
+/// [`Value::Number`], [`Cycle`] and [`Syntax`] of [`InterpError::Cycle`] and
+/// [`Problem::Syntax`], and [`render_path`] is the only renderer for the
+/// [`Seg`]s a [`RefPath`] hands out. A consumer that had to add a `knf-core`
+/// dependency to write one of those down would make this surface a half-truth.
 pub use knf_core::{
-    Map, MergeError, PathError, RefPath, RuleError, RuleErrors, Rules, Seg, Strategy, Value,
+    Map, MergeError, Number, PathError, RefPath, RuleError, RuleErrors, Rules, Seg, Strategy,
+    Value, render_path,
 };
-pub use knf_interp::{Env, EnvValue, InterpError, Problem};
+pub use knf_interp::{Cycle, Env, EnvValue, InterpError, Problem, Syntax};
 
 pub use env::ProcessEnv;
 pub use format::Format;
 pub use set::{PathLeaf, json_or_string};
+pub use value::NullInToml;
 
 use format::SourceName;
 

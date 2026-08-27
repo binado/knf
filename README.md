@@ -65,10 +65,15 @@ let merged = knf::merge_with_env(&paths, opts, &my_env)?;
 ```
 
 Errors carry typed causes rather than prose — `LoadError`, `MergeError`,
-`InterpError` — and name no command-line flags, since a library caller has no
-command line to act on. `Map`, `Value`, `Rules`, `Strategy`, `Format`, `Env` and
-every error type are re-exported from `knf`, so a consumer needs no direct
-dependency on `knf-core` or `knf-interp`.
+`InterpError`, `NullInToml` — and name no command-line flags, since a library
+caller has no command line to act on. A null reaching TOML, for instance, is
+reported as the paths it was found at; whether the remedy is spelled `-f json`
+is your interface's business, not the library's.
+
+`Map`, `Value`, `Rules`, `Strategy`, `Format`, `Env` and every error type are
+re-exported from `knf`, along with what they are made of — `Number` inside
+`Value::Number`, `Cycle` and `Syntax` inside `InterpError` — so a consumer needs
+no direct dependency on `knf-core` or `knf-interp` to write any of it down.
 
 For merging values that are already in memory, use the smaller core crate — it
 has no file I/O and no format crates, only `indexmap` and `thiserror`:

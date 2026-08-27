@@ -22,8 +22,9 @@ fn main() {
     let cli = Cli::parse();
 
     if let Err(err) = run(cli) {
-        // Some errors (the null-in-TOML report, mixed-format, directory) are
-        // deliberately multi-line and carry their own `help:` line.
+        // Some errors are deliberately multi-line: the null-in-TOML report and
+        // the directory hint get their `help:` line from `explain`, the
+        // mixed-format one carries its own from below.
         eprintln!("error: {err}");
         for cause in err.chain().skip(1) {
             eprintln!("  caused by: {cause}");
@@ -49,7 +50,8 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     let out_format = resolve_output_format(cli.format.map(Format::from), &input_formats)?;
 
     let merged = merge_layers(layers, opts, &knf::ProcessEnv).map_err(explain_pipeline)?;
-    let text = format::emit(merged, out_format, !cli.compact, cli.null_as.as_deref())?;
+    let text = format::emit(merged, out_format, !cli.compact, cli.null_as.as_deref())
+        .map_err(explain_pipeline)?;
     write_stdout(&text)
 }
 

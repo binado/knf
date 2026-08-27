@@ -197,25 +197,27 @@ pub fn replace_nulls(value: &mut Value, placeholder: &str) {
 /// drop: the `toml` crate's map serializer *skips* a `None` entry, so emitting
 /// without this check would quietly lose keys.
 ///
-/// Carries paths and nothing else. Naming the layer each null came from would
-/// mean retaining every parsed layer past the merge purely for an error path;
-/// the paths alone locate the value in the merged document, and the usual fix
-/// (`-f json`, or `--null-as`) does not depend on knowing the file.
+/// Carries paths and nothing else — no filenames and no flag names. Naming the
+/// layer each null came from would mean retaining every parsed layer past the
+/// merge purely for an error path, and the paths alone locate the value in the
+/// merged document. The remedies are all interface-shaped — emit JSON instead,
+/// substitute a string, or drop the null — so which of them a caller can offer
+/// is the caller's to say, the same division of labour [`crate::LoadError`]
+/// keeps.
 #[derive(Debug)]
 pub struct NullInToml {
     entries: Vec<Vec<Seg>>,
 }
 
 impl fmt::Display for NullInToml {
+    /// Ends without a trailing newline, so a caller can append a `help:` line
+    /// of its own — which is what `knf-cli` does, and why the line is not here.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "cannot serialize null to TOML")?;
+        write!(f, "cannot serialize null to TOML")?;
         for path in &self.entries {
-            writeln!(f, "  --> {}", render_path(path))?;
+            write!(f, "\n  --> {}", render_path(path))?;
         }
-        write!(
-            f,
-            "help: emit JSON with -f json, substitute with --null-as, or remove the null"
-        )
+        Ok(())
     }
 }
 

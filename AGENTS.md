@@ -198,10 +198,17 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
   and nothing else — no filenames, no layer indices, no flag names: `Locked` and
   `AppendKind` must not say `--fail` or `--append`. Same rule in `knf-interp` (no
   `--interpolate`) and in `knf-config`, which is why the three load failures that used
-  to say `--input-format` are the typed `LoadError` instead. Every `help:` line naming
-  a flag lives in `crates/knf/src/explain.rs` and nowhere else; a library test asserts
-  a `LoadError` contains no `--`. `knf-interp` cannot name a file even if it wanted to
-  — it runs after the merge, and no layer outlives the merge.
+  to say `--input-format` are the typed `LoadError` instead, and why `NullInToml`
+  reports *where* the nulls are and leaves `-f json` and `--null-as` unsaid. Every
+  `help:` line naming a flag lives in `crates/knf/src/explain.rs` and nowhere else,
+  reached by the one `explain_pipeline` every stage's errors pass through; library
+  tests assert a `LoadError` contains no `--` and the null report neither flag.
+  `knf-interp` cannot name a file even if it wanted to — it runs after the merge, and
+  no layer outlives the merge.
+- **A library error that ends without a newline is a seam, not an oversight.**
+  `NullInToml`'s `Display` stops after its last `-->` line precisely so `knf-cli` can
+  append a `help:` line flush against it; restoring the `writeln!` would put a blank
+  line in the CLI's stderr, which `cli__null_in_toml_error` pins.
 - Every input must be an object at the top level (`format::parse`).
 - Output format is never guessed for mixed inputs — `-f` is required, so reordering
   arguments can never silently change the encoding.
@@ -223,8 +230,14 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
 - `crates/knf-config/tests/library.rs` exercises the public API the way a consumer
   would, and is the only place `merge`, `merge_with_env` and `LoadError` are tested.
   It cannot catch a missing `pub use`, though — an integration test sees its own
-  package's dependencies, which a downstream crate does not; check a real consumer by
-  hand when the public surface changes.
+  package's dependencies, so `knf_core::Number` resolves there whether or not
+  `knf-config` re-exports it.
+- `crates/knf/tests/public_api.rs` is what catches that instead, by being the
+  downstream crate: `knf-cli` depends on `knf-config` and on neither `knf-core` nor
+  `knf-interp`, so every `knf::` path in it resolves through a re-export or fails to
+  compile. Name a type there when it becomes reachable *through* the public surface,
+  not only when a signature mentions it — `Number` behind `Value::Number`, `Cycle`
+  and `Syntax` behind `InterpError`, `render_path` for the `Seg`s `RefPath` yields.
 - `crates/knf/tests/cli.rs` runs the real binary in a tempdir with `current_dir` set
   to the fixture, so paths in output stay relative and snapshots stay stable. Anything
   touching `${env:...}` sets its variables explicitly through the `with_env` helper
