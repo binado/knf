@@ -120,7 +120,7 @@ pub fn merge<P: AsRef<Path>>(paths: &[P], opts: MergeOpts) -> anyhow::Result<Val
     merge_with_env(paths, opts, &ProcessEnv)
 }
 
-/// [`merge`], with the environment `${env:NAME}` resolves against supplied by
+/// [`merge`], with the environment used to resolve `${env:NAME}` supplied by
 /// the caller.
 ///
 /// `knf-interp` takes its environment through a trait precisely so a caller can
