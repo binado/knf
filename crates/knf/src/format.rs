@@ -14,7 +14,8 @@ use crate::value;
 
 /// v1 ships JSON and TOML only. Adding a format is one arm of these matches;
 /// removing one is a breaking change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum Format {
     Json,
     Toml,

@@ -33,7 +33,28 @@ To build from source instead:
 cargo install knf-cli
 ```
 
-## Library
+## Rust libraries
+
+To load and merge JSON/TOML files without going through the command-line
+parser, depend on the `knf-cli` package with its CLI feature disabled. Its Rust
+library crate is named `knf`:
+
+```bash
+cargo add knf-cli --no-default-features
+```
+
+```rust
+use knf::{MergeOpts, merge};
+
+let merged = merge(&["base.toml", "prod.toml"], MergeOpts::default())?;
+```
+
+`MergeOpts` also accepts strict mode, per-path rules, in-memory terminal
+overlays, an input-format override, and opt-in interpolation. The result is the
+format-independent `knf_core::Value`, ready for a native adapter or language
+binding to convert without parsing rendered stdout.
+
+For merging values that are already in memory, use the smaller core crate:
 
 ```bash
 cargo add knf-core

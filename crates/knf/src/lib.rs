@@ -1,20 +1,28 @@
-//! The `knf` pipeline: load layers, merge, emit.
+//! Load and merge layered JSON and TOML configuration files.
 
+#[cfg(feature = "cli")]
 pub mod cli;
 pub mod format;
 pub mod interp;
 pub mod value;
 
-use std::io::{Read, Write};
+use std::io::Read;
+#[cfg(feature = "cli")]
+use std::io::Write;
 use std::path::Path;
 
-use anyhow::{Context, anyhow, bail};
-use knf_core::{
-    MergeError, MergeOptions, RuleError, RuleErrors, Rules, Strategy, Value, merge_with,
-};
+#[cfg(feature = "cli")]
+use anyhow::anyhow;
+use anyhow::{Context, bail};
+#[cfg(feature = "cli")]
+use knf_core::{MergeError, RuleError, RuleErrors, Strategy};
+use knf_core::{MergeOptions as CoreMergeOptions, Rules, Value, merge_with};
+#[cfg(feature = "cli")]
 use knf_dotted::{PathError, PathLeaf};
+#[cfg(feature = "cli")]
 use knf_interp::{InterpError, Problem};
 
+#[cfg(feature = "cli")]
 use cli::Cli;
 use format::{Format, SourceName};
 use interp::ProcessEnv;
@@ -22,15 +30,93 @@ use interp::ProcessEnv;
 /// The positional that means "read stdin".
 const STDIN: &str = "-";
 
+/// Options for loading and merging configuration files.
+///
+/// The files named by [`merge`] are followed by `overlays`, all in one flat,
+/// strictly-left fold. This makes an overlay supplied by another interface
+/// (for example the CLI's `--set`, or a future language binding) behave exactly
+/// like one more terminal file layer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeOpts {
+    /// Treat every input path as this format instead of inferring extensions.
+    pub input_format: Option<Format>,
+    /// Error when a layer changes the kind of an existing key.
+    pub strict: bool,
+    /// Per-path overrides of the default merge strategy.
+    pub rules: Rules,
+    /// In-memory layers appended after every file, in order.
+    pub overlays: Vec<Value>,
+    /// Resolve document and process-environment references after merging.
+    pub interpolate: bool,
+}
+
+impl Default for MergeOpts {
+    fn default() -> Self {
+        Self {
+            input_format: None,
+            strict: false,
+            rules: Rules::EMPTY,
+            overlays: Vec::new(),
+            interpolate: false,
+        }
+    }
+}
+
+/// Loads `paths`, parses every file into the common IR, and merges the flat
+/// layer list from left to right.
+///
+/// JSON and TOML may be mixed. Their formats are inferred from file extensions
+/// unless [`MergeOpts::input_format`] overrides inference. A path equal to `-`
+/// reads standard input and therefore requires an explicit input format.
+///
+/// Interpolation, when enabled, runs once on the merged document. Environment
+/// values come from the current process and follow the same JSON-or-string
+/// typing rule as CLI `--set` values.
+pub fn merge<P: AsRef<Path>>(paths: &[P], opts: MergeOpts) -> anyhow::Result<Value> {
+    merge_inputs(paths, opts).map(|(value, _formats)| value)
+}
+
+/// The shared implementation also returns the formats observed by the CLI,
+/// which needs them to choose an output encoding. That presentation concern is
+/// intentionally absent from the public merge result.
+fn merge_inputs<P: AsRef<Path>>(
+    paths: &[P],
+    opts: MergeOpts,
+) -> anyhow::Result<(Value, Vec<Format>)> {
+    let mut layers: Vec<Value> = Vec::with_capacity(paths.len() + opts.overlays.len());
+    let mut input_formats: Vec<Format> = Vec::with_capacity(paths.len());
+
+    for path in paths {
+        let (name, format, text) = read_input(path.as_ref(), opts.input_format)?;
+        let value = format::parse(format, &text, &name)?;
+        input_formats.push(format);
+        layers.push(value);
+    }
+    layers.extend(opts.overlays);
+
+    let core_opts = CoreMergeOptions {
+        strict: opts.strict,
+        rules: opts.rules,
+    };
+    let merged = merge_with(layers, &core_opts)?;
+    let merged = if opts.interpolate {
+        knf_interp::interpolate(merged, &ProcessEnv)?
+    } else {
+        merged
+    };
+    Ok((merged, input_formats))
+}
+
 /// `knf <files...>` — merge layers left to right, print one document.
 ///
 /// One pipeline regardless of the formats involved: every layer becomes a
 /// [`Value`], the fold runs once, and the output format is only consulted at
 /// emit. Nothing about JSON or TOML reaches the merge.
+#[cfg(feature = "cli")]
 pub fn run(cli: Cli) -> anyhow::Result<()> {
     // Before anything is read: a broken rule set is a mistake in the command
     // line, and saying so must not wait on the files existing or parsing.
-    let opts = merge_options(&cli)?;
+    let core_opts = merge_options(&cli)?;
 
     // --set layers are terminal: appended after every file. The RHS parses as
     // JSON with a string fallback, which is knf-dotted's job. The conversion
@@ -43,32 +129,31 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         set_layers.push(value::from_json(json));
     }
 
-    let mut layers: Vec<Value> = Vec::new();
-    let mut input_formats: Vec<Format> = Vec::new();
-
-    for path in &cli.files {
-        let (name, format, text) = read_input(path, cli.input_format)?;
-        let value = format::parse(format, &text, &name)?;
-        input_formats.push(format);
-        layers.push(value);
-    }
-    layers.extend(set_layers);
+    let opts = MergeOpts {
+        input_format: cli.input_format,
+        strict: core_opts.strict,
+        rules: core_opts.rules,
+        overlays: set_layers,
+        interpolate: cli.interpolate,
+    };
+    let (merged, input_formats) = merge_inputs(&cli.files, opts).map_err(explain_pipeline)?;
 
     let out_format = resolve_output_format(cli.format, &input_formats)?;
-
-    let merged = merge_with(layers, &opts).map_err(name_the_flag)?;
-    // After the merge, before the emit, and never per layer: a reference reads
-    // the document the user is actually going to get. `--set` layers therefore
-    // interpolate like any other layer, and `--strict` has already run — it
-    // compares the types values had when they were *written*, so a `"${port}"`
-    // was a string when it looked.
-    let merged = if cli.interpolate {
-        knf_interp::interpolate(merged, &ProcessEnv).map_err(explain_interp)?
-    } else {
-        merged
-    };
     let text = format::emit(merged, out_format, !cli.compact, cli.null_as.as_deref())?;
     write_stdout(&text)
+}
+
+/// Adds the command-line spelling to errors produced by the reusable pipeline.
+#[cfg(feature = "cli")]
+fn explain_pipeline(err: anyhow::Error) -> anyhow::Error {
+    let err = match err.downcast::<MergeError>() {
+        Ok(err) => return name_the_flag(err),
+        Err(err) => err,
+    };
+    match err.downcast::<InterpError>() {
+        Ok(err) => explain_interp(err),
+        Err(err) => err,
+    }
 }
 
 /// Reads one positional, resolving its format.
@@ -146,7 +231,8 @@ pub fn resolve_output_format(
 ///
 /// Fallible, and called before any input is read: the rules come from argv
 /// alone, so nothing about the files can change whether they are legal.
-pub fn merge_options(cli: &Cli) -> anyhow::Result<MergeOptions> {
+#[cfg(feature = "cli")]
+pub fn merge_options(cli: &Cli) -> anyhow::Result<CoreMergeOptions> {
     let flags = [
         ("--append", &cli.append, Strategy::Append),
         ("--replace", &cli.replace, Strategy::Replace),
@@ -165,7 +251,7 @@ pub fn merge_options(cli: &Cli) -> anyhow::Result<MergeOptions> {
         }
     }
 
-    Ok(MergeOptions {
+    Ok(CoreMergeOptions {
         strict: cli.strict,
         rules: Rules::build(rules).map_err(explain_rules)?,
     })
@@ -173,6 +259,7 @@ pub fn merge_options(cli: &Cli) -> anyhow::Result<MergeOptions> {
 
 /// The established division of labour: `knf-dotted` renders the path and
 /// stays provenance-free, the help line names the flag that carried it.
+#[cfg(feature = "cli")]
 fn name_the_rule_flag(err: PathError, flag: &str) -> anyhow::Error {
     match err {
         PathError::IndexInKeyPath { .. } => {
@@ -183,6 +270,7 @@ fn name_the_rule_flag(err: PathError, flag: &str) -> anyhow::Error {
 }
 
 /// Same division of labour for `--set`: its paths feed the same conversion.
+#[cfg(feature = "cli")]
 fn name_the_set_flag(err: PathError) -> anyhow::Error {
     match err {
         PathError::IndexInKeyPath { .. } => anyhow!(
@@ -197,6 +285,7 @@ fn name_the_set_flag(err: PathError) -> anyhow::Error {
 ///
 /// `knf-core` names strategies, never flags — it has no idea they are spelled
 /// `--append`, `--replace` and `--fail` — so the help lines belong here.
+#[cfg(feature = "cli")]
 fn explain_rules(errors: RuleErrors) -> anyhow::Error {
     const FLAGS: &str = "--append, --replace and --fail";
     let mut help = String::new();
@@ -222,6 +311,7 @@ fn explain_rules(errors: RuleErrors) -> anyhow::Error {
 }
 
 /// Same division of labour for the errors a rule raises during the merge.
+#[cfg(feature = "cli")]
 fn name_the_flag(err: MergeError) -> anyhow::Error {
     let help = match err {
         MergeError::Locked { .. } => {
@@ -237,6 +327,7 @@ fn name_the_flag(err: MergeError) -> anyhow::Error {
 ///
 /// `knf-interp` names key paths and reference spellings; it has never heard of
 /// `--interpolate`, so the flag only appears here.
+#[cfg(feature = "cli")]
 fn explain_interp(err: InterpError) -> anyhow::Error {
     let mut help = String::new();
     match &err {
@@ -275,6 +366,7 @@ fn explain_interp(err: InterpError) -> anyhow::Error {
 
 /// Writes to stdout, treating a closed pipe as success so `knf big.json | head`
 /// does not report an error the user cannot act on.
+#[cfg(feature = "cli")]
 pub fn write_stdout(text: &str) -> anyhow::Result<()> {
     match std::io::stdout().write_all(text.as_bytes()) {
         Ok(()) => Ok(()),
