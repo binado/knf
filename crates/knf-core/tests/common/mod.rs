@@ -2,8 +2,8 @@
 //!
 //! The case table's readability comes from writing layers as JSON strings, and
 //! `serde_json` is a dev-dependency so this costs consumers nothing. It
-//! duplicates ~20 lines of `knf/src/value.rs` on purpose: the merge tests must
-//! not depend on the binary crate.
+//! duplicates ~20 lines of `knf-config/src/value.rs` on purpose: the merge tests
+//! must not depend on the crate that knows about formats.
 
 use knf_core::{Number, Value};
 

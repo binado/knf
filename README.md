@@ -57,10 +57,13 @@ shadowing a key. The result is the format-independent `knf::Value`, ready for a
 native adapter or language binding to convert without parsing rendered stdout;
 `knf::format::emit` renders it when you do want text.
 
-`merge` resolves `${env:NAME}` against the process environment. Pass your own
-with `merge_with_env`, and the output is a function of the inputs alone:
+With `interpolate` set, `merge` resolves `${env:NAME}` against the process
+environment; left unset, references are not substituted at all. Pass your own
+environment with `merge_with_env`, and the output is a function of the inputs
+alone:
 
 ```rust
+let opts = MergeOpts { interpolate: true, ..MergeOpts::default() };
 let merged = knf::merge_with_env(&paths, opts, &my_env)?;
 ```
 

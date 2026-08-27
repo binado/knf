@@ -228,9 +228,9 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
 - `crates/knf-interp` unit tests run against a `HashMap`-backed stub `Env`, never the
   process environment.
 - `crates/knf-config/tests/library.rs` exercises the public API the way a consumer
-  would, and is the only place `merge`, `merge_with_env` and `LoadError` are tested.
-  It cannot catch a missing `pub use`, though — an integration test sees its own
-  package's dependencies, so `knf_core::Number` resolves there whether or not
+  would, and is the dedicated behaviour suite for `merge`, `merge_with_env` and
+  `LoadError`. It cannot catch a missing `pub use`, though — an integration test sees
+  its own package's dependencies, so `knf_core::Number` resolves there whether or not
   `knf-config` re-exports it.
 - `crates/knf/tests/public_api.rs` is what catches that instead, by being the
   downstream crate: `knf-cli` depends on `knf-config` and on neither `knf-core` nor

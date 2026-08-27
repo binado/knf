@@ -27,9 +27,9 @@ use serde_json::{Map, Value};
 
 /// A leaf value addressed by a parsed path.
 ///
-/// [`FromStr`] for [`PathLeaf<String>] splits `key.path=value`, parses the LHS
-/// as a [`RefPath`], and stores the RHS as-is. The typed [`FromStr`] impl
-/// (behind `json`) parses that RHS as JSON, falling back to a string:
+/// [`FromStr`] for [`PathLeaf<String>`] splits `key.path=value`, parses the LHS
+/// as a [`RefPath`], and stores the RHS as-is. The [`serde_json::Value`] impl
+/// parses that RHS as JSON, falling back to a string:
 /// `port=8080` is a number, `name=foo` is a string.
 ///
 /// The grammar accepts bracket steps — `a[0]=1` parses — because it is the
