@@ -15,6 +15,13 @@ name = "knf"
 path = "src/main.rs"
 required-features = ["cli"]
 
+# The binary is feature-gated; the tests that execute it must be too, or a
+# `--no-default-features` run looks for a binary that was never built.
+# Edition 2024 keeps autodiscovery on, so library.rs is unaffected.
+[[test]]
+name = "cli"
+required-features = ["cli"]
+
 [features]
 default = ["cli"]
 cli = ["dep:clap"]
