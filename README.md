@@ -19,6 +19,17 @@ simple operation. `knf <files>` should need no explanation.
 ## Installation
 
 ```bash
+pip install knf-cli
+```
+
+The Python distribution is binary-only: it installs the `knf` executable and
+does not provide an importable Python module. Wheels are published for Linux
+(glibc and musl) on x86-64 and ARM64, macOS on Intel and Apple Silicon, and
+Windows on x64 and ARM64. No Rust toolchain is needed to install a wheel.
+
+To build from source instead:
+
+```bash
 cargo install knf-cli
 ```
 

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["maturin>=1.14,<2"]
+build-backend = "maturin"
+
+[project]
+name = "knf-cli"
+dynamic = ["version"]
+description = "Merge layered configuration files and print the result"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+keywords = ["configuration", "json", "toml", "cli"]
+classifiers = [
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Rust",
+  "Topic :: Utilities",
+]
+
+[project.urls]
+Repository = "https://github.com/binado/knf"
+Issues = "https://github.com/binado/knf/issues"
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "crates/knf/Cargo.toml"
+targets = [{ name = "knf", kind = "bin" }]
+locked = true
+strip = true
+compatibility = "pypi"
+
+[tool.maturin.target.x86_64-apple-darwin]
+macos-deployment-target = "10.12"
+
+[tool.maturin.target.aarch64-apple-darwin]
+macos-deployment-target = "11.0"

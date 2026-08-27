@@ -36,3 +36,17 @@ jobs:
         run: cargo package --workspace --locked --no-verify
       - name: Verify local CLI installation
         run: cargo install --path crates/knf --locked
+      - name: Build Python wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: x86_64
+          manylinux: "2_17"
+          maturin-version: v1.14.1
+          args: --release --locked --compatibility pypi --out dist
+      - name: Verify Python wheel installation
+        run: |
+          python -m venv /tmp/knf-wheel-test
+          /tmp/knf-wheel-test/bin/pip install --no-deps dist/*.whl
+          /tmp/knf-wheel-test/bin/knf --version
+          test "$(/tmp/knf-wheel-test/bin/knf --set smoke=true --compact)" = '{"smoke":true}'
