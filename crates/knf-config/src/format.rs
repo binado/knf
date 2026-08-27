@@ -14,7 +14,10 @@ use crate::value;
 
 /// v1 ships JSON and TOML only. Adding a format is one arm of these matches;
 /// removing one is a breaking change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+///
+/// No `clap::ValueEnum` here — this crate has no clap. `knf-cli` parses `-f`
+/// into a local enum and converts, which the orphan rule would force anyway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     Json,
     Toml,
@@ -51,7 +54,8 @@ impl fmt::Display for Format {
 
 /// Which input a parse error came from. Names an input being *read*, so there
 /// is no variant for `--set`: a bad `--set` expression is rejected by
-/// `knf-dotted` during argument parsing, long before anything reaches here.
+/// [`PathLeaf`](crate::PathLeaf) during argument parsing, long before anything
+/// reaches here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceName {
     File(PathBuf),

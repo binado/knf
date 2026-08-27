@@ -8,8 +8,7 @@
 
 use std::fmt;
 
-use knf_core::{Number, Value};
-use knf_dotted::{Seg, render_path};
+use knf_core::{Map, Number, Seg, Value, render_path};
 
 /// JSON → IR. Total: every JSON value has an IR counterpart.
 pub fn from_json(value: serde_json::Value) -> Value {
@@ -23,6 +22,15 @@ pub fn from_json(value: serde_json::Value) -> Value {
             Value::Object(map.into_iter().map(|(k, v)| (k, from_json(v))).collect())
         }
     }
+}
+
+/// JSON object → IR object.
+///
+/// A layer is a map, not a value — [`crate::MergeOpts::overlays`] says so in its
+/// type — so a caller holding a `serde_json` object needs this rather than
+/// [`from_json`] to build one.
+pub fn object_from_json(map: serde_json::Map<String, serde_json::Value>) -> Map {
+    map.into_iter().map(|(k, v)| (k, from_json(v))).collect()
 }
 
 /// IR → JSON. Total; a datetime renders as the string JSON would have to use.

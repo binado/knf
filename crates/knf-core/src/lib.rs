@@ -7,13 +7,22 @@
 //!
 //! `thiserror` and `indexmap` are the only dependencies — neither is a format
 //! crate. `cargo tree -p knf-core --depth 1` is the enforcement.
+//!
+//! The path vocabulary lives here too ([`Seg`], [`RefPath`]), one module over.
+//! It is pure text handling and needs nothing this crate does not already have,
+//! and putting it here is what keeps one spelling and one renderer for the key
+//! paths that both the merge errors and `${...}` references have to display.
 
+mod path;
 mod rules;
 mod strict;
 mod value;
 
+pub use path::{PathError, RefPath, Seg, render_path};
 pub use rules::{RuleError, RuleErrors, Rules, Strategy};
 pub use value::{Map, Number, Value};
+
+use path::render_keys;
 
 /// Knobs on the merge itself. Passed by reference rather than encoded as cargo
 /// features: features are additive and unify across a dependency graph, so a
@@ -47,7 +56,7 @@ pub enum MergeError {
     /// Carries a key path and nothing else — no filenames, no layer indices.
     #[error(
         "type conflict at `{}`: {expected} would be replaced by {found}",
-        render_path(path)
+        render_keys(path)
     )]
     TypeConflict {
         path: Vec<String>,
@@ -55,10 +64,10 @@ pub enum MergeError {
         found: &'static str,
     },
     /// A layer supplied a value for a path pinned by [`Strategy::Fail`].
-    #[error("`{}` is locked: an earlier layer already set it", render_path(path))]
+    #[error("`{}` is locked: an earlier layer already set it", render_keys(path))]
     Locked { path: Vec<String> },
     /// [`Strategy::Append`] met something other than two arrays.
-    #[error("cannot append {found} to {base} at `{}`", render_path(path))]
+    #[error("cannot append {found} to {base} at `{}`", render_keys(path))]
     AppendKind {
         path: Vec<String>,
         base: &'static str,
@@ -74,15 +83,6 @@ impl MergeError {
             | Self::Locked { path }
             | Self::AppendKind { path, .. } => path,
         }
-    }
-}
-
-/// Renders a key path for display. An empty path is the document root.
-fn render_path(path: &[String]) -> String {
-    if path.is_empty() {
-        "<root>".to_string()
-    } else {
-        path.join(".")
     }
 }
 

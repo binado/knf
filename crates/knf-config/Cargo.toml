@@ -1,0 +1,27 @@
+[package]
+# crates.io already has an unrelated `knf`; the library is still `knf`, so a
+# consumer writes `knf-config` in their manifest and `use knf::…` in their code.
+name = "knf-config"
+description = "Load, merge and emit layered JSON and TOML configuration files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "knf"
+
+# The format crates and the I/O live here and only here. No clap: the flag
+# vocabulary is `knf-cli`'s, and an error raised in this crate names key paths
+# and file paths but never a command-line flag.
+# `cargo tree -p knf-config --depth 1` is the enforcement.
+[dependencies]
+knf-core.workspace = true
+knf-interp.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

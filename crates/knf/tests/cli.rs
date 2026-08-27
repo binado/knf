@@ -660,6 +660,27 @@ fn mixed_input_formats_error() {
     insta::assert_snapshot!(run_err(&dir, &["a.toml", "b.json"]));
 }
 
+/// A missing `-f` is a mistake in argv alone, so it is reported before any
+/// error in the documents themselves — never one run at a time, where the user
+/// fixes the type conflict only to learn about the flag on the next attempt.
+/// The layers here conflict under `--strict`; the format check still wins.
+#[test]
+fn mixed_input_formats_error_precedes_merge_errors() {
+    let dir = tree(&[
+        ("a.json", r#"{"port":80}"#),
+        ("b.toml", "port = \"eighty\"\n"),
+    ]);
+    insta::assert_snapshot!(run_err(&dir, &["a.json", "b.toml", "--strict"]));
+}
+
+/// Same precedence with interpolation: it runs after the merge, so a reference
+/// that cannot resolve is further still from argv than the type conflict above.
+#[test]
+fn mixed_input_formats_error_precedes_interpolation_errors() {
+    let dir = tree(&[("a.json", r#"{"a":"${nope}"}"#), ("b.toml", "b = 1\n")]);
+    insta::assert_snapshot!(run_err(&dir, &["a.json", "b.toml", "--interpolate"]));
+}
+
 /// A locked path names the path and the flag that locked it. The core supplies
 /// the first line, the binary the `help:`.
 #[test]

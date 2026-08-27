@@ -291,11 +291,21 @@ dependencies = [
  "assert_cmd",
  "clap",
  "insta",
+ "knf-config",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "knf-config"
+version = "0.1.3"
+dependencies = [
+ "anyhow",
  "knf-core",
- "knf-dotted",
  "knf-interp",
  "serde_json",
  "tempfile",
+ "thiserror",
  "toml",
 ]
 
@@ -310,19 +320,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "knf-dotted"
-version = "0.1.3"
-dependencies = [
- "serde_json",
- "thiserror",
-]
-
-[[package]]
 name = "knf-interp"
 version = "0.1.3"
 dependencies = [
  "knf-core",
- "knf-dotted",
  "proptest",
  "thiserror",
 ]

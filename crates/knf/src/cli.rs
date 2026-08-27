@@ -3,9 +3,28 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use knf_dotted::{PathLeaf, RefPath};
+use knf::{Format, PathLeaf, RefPath};
 
-use crate::format::Format;
+/// `-f` and `--input-format`, as clap sees them.
+///
+/// A local mirror of [`Format`] rather than a derive on `Format` itself:
+/// `knf-config` has no clap, and the orphan rule forbids implementing
+/// `ValueEnum` for a foreign type from here. clap takes its possible values
+/// from the variant idents, so `--help` reads `json`/`toml` either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum FormatArg {
+    Json,
+    Toml,
+}
+
+impl From<FormatArg> for Format {
+    fn from(arg: FormatArg) -> Self {
+        match arg {
+            FormatArg::Json => Format::Json,
+            FormatArg::Toml => Format::Toml,
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -47,7 +66,7 @@ Required for `-`, which has no extension. Note that it applies to all inputs,
 not only stdin, so it cannot be used to mix a stdin layer of one format with
 files of another."
     )]
-    pub input_format: Option<Format>,
+    pub input_format: Option<FormatArg>,
 
     /// Inline terminal layer, applied after all files
     #[arg(
@@ -139,7 +158,7 @@ array element."
 
     /// Output format; required when inputs are mixed
     #[arg(short = 'f', long, value_name = "FORMAT")]
-    pub format: Option<Format>,
+    pub format: Option<FormatArg>,
 
     /// Write this string in place of null when emitting TOML
     #[arg(

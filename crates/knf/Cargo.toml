@@ -1,5 +1,8 @@
 [package]
 # crates.io already has an unrelated `knf`; the installed binary is still `knf`.
+# The library half lives in `knf-config`, which is what a Rust consumer or a
+# language binding depends on — this package is the command line and nothing
+# else, so there is no `[lib]` and no feature to turn one off.
 name = "knf-cli"
 description = "Merge layered configuration files and print the result"
 version.workspace = true
@@ -7,21 +10,17 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[lib]
-name = "knf"
-
 [[bin]]
 name = "knf"
 path = "src/main.rs"
 
+# clap appears here and only here. `cargo tree -p knf-config --depth 1` is the
+# enforcement on the other side of the boundary.
 [dependencies]
-knf-core.workspace = true
-knf-dotted = { workspace = true, features = ["json"] }
-knf-interp.workspace = true
-serde_json.workspace = true
+knf-config.workspace = true
 anyhow.workspace = true
 clap.workspace = true
-toml.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 assert_cmd = "2"

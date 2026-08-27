@@ -20,9 +20,9 @@
 //! what keeps the JSON-or-string typing rule out of this crate: the caller
 //! parses and hands over a [`Value`].
 //!
-//! `knf-core`, `knf-dotted` (with `default-features = false`, so `serde_json`
-//! stays out — the path vocabulary is unconditional there) and `thiserror`.
-//! No format crate, no I/O.
+//! `knf-core` and `thiserror`. No format crate, no I/O, and in particular no
+//! `serde_json` — the path vocabulary comes from `knf-core`, which has none
+//! either, so nothing in this tree can type a value the way `--set` does.
 //! `cargo tree -p knf-interp --depth 1` is the enforcement.
 
 mod error;
@@ -32,11 +32,10 @@ mod scan;
 
 use std::collections::HashMap;
 
-use knf_core::{Map, Value};
-use knf_dotted::{PathError, RefPath};
+use knf_core::{Map, PathError, RefPath, Value};
 
 pub use error::{Cycle, InterpError, Problem};
-pub use knf_dotted::{Seg, render_path};
+pub use knf_core::{Seg, render_path};
 pub use scan::Syntax;
 
 use path::lookup;
