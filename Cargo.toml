@@ -5,7 +5,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.3"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/binado/knf"
@@ -27,9 +27,9 @@ serde = "1"
 
 # version is required so `cargo publish` can rewrite the path dep to a crates.io
 # requirement. Keep it equal to [workspace.package].version.
-knf-core = { path = "crates/knf-core", version = "0.1.3" }
-knf-interp = { path = "crates/knf-interp", version = "0.1.3" }
-knf-config = { path = "crates/knf-config", version = "0.1.3" }
+knf-core = { path = "crates/knf-core", version = "0.2.0" }
+knf-interp = { path = "crates/knf-interp", version = "0.2.0" }
+knf-config = { path = "crates/knf-config", version = "0.2.0" }
 
 [profile.release]
 lto = "thin"
