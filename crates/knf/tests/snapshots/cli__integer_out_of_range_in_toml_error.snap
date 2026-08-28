@@ -1,0 +1,8 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"a.json\", \"-f\", \"toml\"])"
+---
+error: cannot serialize integer to TOML
+  --> id: `10000000000000000001`
+  --> ids[1]: `18446744073709551615`
+help: TOML integers are signed 64-bit; emit JSON with -f json

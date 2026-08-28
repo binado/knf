@@ -33,7 +33,53 @@ To build from source instead:
 cargo install knf-cli
 ```
 
-## Library
+## Rust libraries
+
+The whole pipeline — read paths, parse JSON and TOML, merge, interpolate — is
+`knf-config`, published separately from the command line so a Rust consumer or
+a language binding never pulls in `clap`:
+
+```bash
+cargo add knf-config
+```
+
+```rust
+use knf::{MergeOpts, merge};
+
+let merged = merge(&["base.toml", "prod.toml"], MergeOpts::default())?;
+```
+
+`MergeOpts` also accepts strict mode, per-path rules, in-memory terminal
+overlays, an input-format override, and opt-in interpolation. An overlay is a
+`knf::Map` rather than a value, for the reason a file layer must be an object at
+the top level: a scalar layer would replace the whole document instead of
+shadowing a key. The result is the format-independent `knf::Value`, ready for a
+native adapter or language binding to convert without parsing rendered stdout;
+`knf::format::emit` renders it when you do want text.
+
+With `interpolate` set, `merge` resolves `${env:NAME}` against the process
+environment; left unset, references are not substituted at all. Pass your own
+environment with `merge_with_env`, and the output is a function of the inputs
+alone:
+
+```rust
+let opts = MergeOpts { interpolate: true, ..MergeOpts::default() };
+let merged = knf::merge_with_env(&paths, opts, &my_env)?;
+```
+
+Errors carry typed causes rather than prose — `LoadError`, `MergeError`,
+`InterpError`, `TomlError` — and name no command-line flags, since a library
+caller has no command line to act on. A null reaching TOML, for instance, is
+reported as the paths it was found at; whether the remedy is spelled `-f json`
+is your interface's business, not the library's.
+
+`Map`, `Value`, `Rules`, `Strategy`, `Format`, `Env` and every error type are
+re-exported from `knf`, along with what they are made of — `Number` inside
+`Value::Number`, `Cycle` and `Syntax` inside `InterpError` — so a consumer needs
+no direct dependency on `knf-core` or `knf-interp` to write any of it down.
+
+For merging values that are already in memory, use the smaller core crate — it
+has no file I/O and no format crates, only `indexmap` and `thiserror`:
 
 ```bash
 cargo add knf-core
@@ -194,6 +240,33 @@ Alternatively, you may use `--null-as <string>` to parse nulls into a custom val
 knf base.toml override.json -f toml --null-as=none
 ```
 The option is a no-op for JSON output. 
+
+Two more values have no spelling in one format or the other, and both are
+rejected the same way — named by path, never silently substituted.
+
+TOML integers are signed 64-bit, so an ID above `i64::MAX` (a snowflake, a hash)
+round-trips exactly through JSON but cannot be written as TOML at all:
+
+```
+$ knf ids.json -f toml
+error: cannot serialize integer to TOML
+  --> id: `10000000000000000001`
+help: TOML integers are signed 64-bit; emit JSON with -f json
+```
+
+Conversely, TOML's number grammar has `inf`, `-inf` and `nan` literals and
+JSON's has none of them:
+
+```
+$ knf limits.toml -f json
+error: cannot serialize non-finite number to JSON
+  --> timeout: `inf`
+help: emit TOML with -f toml, which can represent inf and nan
+```
+
+Each format is the escape from the other's rejection, and no same-format
+round-trip is affected: `knf ids.json -f json` and `knf limits.toml -f toml`
+both emit their input unchanged.
 
 ## Testing
 

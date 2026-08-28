@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use crate::render_path;
+use crate::path::render_keys;
 
 /// What to do where a layer supplies a value for a path that already has one.
 ///
@@ -177,7 +177,7 @@ pub enum RuleError {
     /// given only two of three offending flags cannot tell how many to drop.
     #[error(
         "conflicting strategies at `{}`: {}",
-        render_path(path),
+        render_keys(path),
         render_strategies(strategies)
     )]
     Conflict {
@@ -188,8 +188,8 @@ pub enum RuleError {
     /// never fire.
     #[error(
         "rule at `{}` can never fire: `{}` is `{blocker}`, which does not recurse",
-        render_path(path),
-        render_path(blocked_by)
+        render_keys(path),
+        render_keys(blocked_by)
     )]
     Unreachable {
         path: Vec<String>,

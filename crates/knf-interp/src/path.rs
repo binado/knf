@@ -1,16 +1,15 @@
 //! Indexed lookups into a document.
 //!
-//! [`Seg`] itself lives in `knf-dotted` with the rest of the path vocabulary;
-//! only [`lookup`] is here, because it is the one piece that needs
-//! `knf_core::Value` — and `knf-dotted` must not.
+//! [`Seg`] itself lives in `knf-core` with the rest of the path vocabulary;
+//! only [`lookup`] is here, because this crate is its only caller — the merge
+//! side descends a document by recursion and never addresses one by path.
 //!
 //! Indices serve both directions of a reference: where one *lives* — inside an
 //! array, if that is where the string sits — and where one *points*, since a
 //! `${servers[0]}` body parses to a path with an [`Seg::Index`] in it. The
 //! merge-side grammars stay keys-only; only this crate's readers index.
 
-use knf_core::Value;
-use knf_dotted::Seg;
+use knf_core::{Seg, Value};
 
 /// The node at `path`, or `None` if nothing lives there.
 pub fn lookup<'a>(root: &'a Value, path: &[Seg]) -> Option<&'a Value> {

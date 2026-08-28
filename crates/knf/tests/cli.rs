@@ -646,6 +646,30 @@ fn null_in_toml_error() {
     insta::assert_snapshot!(run_err(&dir, &["base.toml", "override.json", "-f", "toml"]));
 }
 
+/// The same shape one format over. TOML's number grammar has `inf` and `nan`
+/// literals and JSON's has neither, so an ordinary `.toml` input cannot be
+/// emitted as JSON — it used to become `0`, a value that was in no input. The
+/// help points at `-f toml`, which is the reverse of the escape the null error
+/// offers, and a user who has met that one will reach for `-f json` by reflex.
+#[test]
+fn non_finite_in_json_error() {
+    let dir = tree(&[("a.toml", "timeout = inf\nbackoff = [1.0, nan]\n")]);
+    insta::assert_snapshot!(run_err(&dir, &["a.toml", "-f", "json"]));
+}
+
+/// The third TOML impossibility, and the one a document reaches. TOML integers
+/// are signed 64-bit, so the snowflake ID that `integers_above_i64_max_are_exact`
+/// round-trips through JSON has no TOML spelling at all; it used to round through
+/// `f64` and emit `1e19`, discarding the digits `Number::U64` exists to keep.
+#[test]
+fn integer_out_of_range_in_toml_error() {
+    let dir = tree(&[(
+        "a.json",
+        r#"{"id":10000000000000000001,"ok":42,"ids":[1,18446744073709551615]}"#,
+    )]);
+    insta::assert_snapshot!(run_err(&dir, &["a.json", "-f", "toml"]));
+}
+
 /// Directories are files-as-layers, never expanded. The help line must be
 /// runnable exactly as printed.
 #[test]
@@ -658,6 +682,27 @@ fn directory_in_the_default_command_error() {
 fn mixed_input_formats_error() {
     let dir = tree(&[("a.toml", "a = 1\n"), ("b.json", "{}")]);
     insta::assert_snapshot!(run_err(&dir, &["a.toml", "b.json"]));
+}
+
+/// A missing `-f` is a mistake in argv alone, so it is reported before any
+/// error in the documents themselves — never one run at a time, where the user
+/// fixes the type conflict only to learn about the flag on the next attempt.
+/// The layers here conflict under `--strict`; the format check still wins.
+#[test]
+fn mixed_input_formats_error_precedes_merge_errors() {
+    let dir = tree(&[
+        ("a.json", r#"{"port":80}"#),
+        ("b.toml", "port = \"eighty\"\n"),
+    ]);
+    insta::assert_snapshot!(run_err(&dir, &["a.json", "b.toml", "--strict"]));
+}
+
+/// Same precedence with interpolation: it runs after the merge, so a reference
+/// that cannot resolve is further still from argv than the type conflict above.
+#[test]
+fn mixed_input_formats_error_precedes_interpolation_errors() {
+    let dir = tree(&[("a.json", r#"{"a":"${nope}"}"#), ("b.toml", "b = 1\n")]);
+    insta::assert_snapshot!(run_err(&dir, &["a.json", "b.toml", "--interpolate"]));
 }
 
 /// A locked path names the path and the flag that locked it. The core supplies

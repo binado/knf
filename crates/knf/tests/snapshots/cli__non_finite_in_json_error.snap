@@ -1,0 +1,8 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"a.toml\", \"-f\", \"json\"])"
+---
+error: cannot serialize non-finite number to JSON
+  --> timeout: `inf`
+  --> backoff[1]: `nan`
+help: emit TOML with -f toml, which can represent inf and nan

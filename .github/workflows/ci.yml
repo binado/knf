@@ -22,7 +22,27 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo build --workspace
-      - run: cargo doc --workspace --no-deps
+      # The dependency direction is the design, so check it rather than trusting
+      # the manifests' comments. `--edges normal` excludes dev-dependencies:
+      # knf-core's table tests are written as JSON literals and take serde_json
+      # that way, which no consumer of the crate ever sees.
+      - name: Dependency boundaries
+        run: |
+          set -euo pipefail
+          forbid() {
+            if cargo tree -p "$1" --depth 1 --edges normal | tail -n +2 | grep -qE "$2"; then
+              echo "::error::$1 must not depend on $2"
+              cargo tree -p "$1" --depth 1 --edges normal
+              exit 1
+            fi
+          }
+          forbid knf-core   'serde_json|toml|clap|anyhow'
+          forbid knf-interp 'serde_json|toml|clap|anyhow'
+          forbid knf-config 'clap'
+      # --lib: knf-config's lib and knf-cli's bin are both named `knf`, and
+      # rustdoc writes both to target/doc/knf. The binary has no public API to
+      # document, so documenting lib targets only is the fix, not a workaround.
+      - run: cargo doc --workspace --no-deps --lib
         env:
           RUSTDOCFLAGS: -D warnings
 

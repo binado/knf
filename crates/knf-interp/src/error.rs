@@ -3,7 +3,7 @@
 //! Key paths and nothing else. Not a rule to enforce here so much as one that
 //! cannot be broken: this pass runs after the merge, and no layer outlives the
 //! merge, so the filename a reference was written in is genuinely unavailable.
-//! No flag names either — `crates/knf/src/lib.rs` adds the `help:` line that
+//! No flag names either — `crates/knf/src/explain.rs` adds the `help:` line that
 //! knows what the flags are called.
 
 use std::fmt;

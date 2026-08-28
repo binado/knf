@@ -12,7 +12,7 @@ use std::fmt;
 /// One span of a scanned string.
 ///
 /// A `Ref` body is deliberately left unparsed: the `env:` prefix and the
-/// [`RefPath`](knf_dotted::RefPath) split are resolution's business, not the
+/// [`RefPath`](knf_core::RefPath) split are resolution's business, not the
 /// scanner's, and keeping them apart is what makes this a `find` loop rather
 /// than a grammar.
 #[derive(Debug, Clone, PartialEq, Eq)]
