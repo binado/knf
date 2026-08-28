@@ -152,6 +152,11 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
 - **`Number::U64` is only for values that do not fit an `i64`.** Construct via
   `Number::from_u64`, which demotes; derived `PartialEq` would otherwise make
   `I64(1) != U64(1)` and equality would depend on which parser produced the value.
+  A consequence at the TOML boundary: since the constructor demotes, a *canonical*
+  `U64` always holds a value past `i64::MAX`, which TOML's signed integers cannot
+  spell — so `to_toml` rejects it rather than rounding through `f64`, which would
+  discard the exact digits the variant exists to keep. `collect_untomlable` guards
+  on the range rather than the variant, so a hand-built `U64(1)` still converts.
 - **`Value::Datetime` may only ever *originate* in the TOML parser.** It stores the
   source spelling and relies on `Display`/`FromStr` round-tripping.
   Interpolation may **copy** one (`d2 = "${d}"` takes the referent's type) — sound,
@@ -169,14 +174,24 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
   filenames — retaining every parsed layer past the merge to attribute a rare error is
   not worth the clone, and neither escape it offers (`-f json`, `--null-as`)
   needs to know which file the null came from.
-- **Null is rejected on the way to TOML, never dropped.** The `toml` crate's map
-  serializer silently *skips* a `None` entry, so `value.rs`'s `collect_untomlable` pre-walk
-  is the only thing standing between a null and quietly-missing keys. That one walk carries
-  both of TOML's impossibilities — nulls and unparseable datetimes — and `to_toml` reports
-  the nulls first, since a null is something a *document* can hold and a bad datetime only
-  a caller. Collecting up front rather than failing inside the conversion is what keeps
-  `to_toml_unchecked` infallible and its error messages carrying key paths. `--null-as` is
-  the one escape, and it substitutes rather than drops because a null inside an array
+- **What a format cannot spell is rejected by path, never substituted.** The one rule
+  behind every emission error, and it runs in both directions. `collect_untomlable`
+  carries TOML's three impossibilities — nulls, integers past `i64::MAX`, unparseable
+  datetimes — reported in that order, which is how close each is to something a real
+  input file can contain: a null and an oversized integer arrive from a document, a bad
+  datetime only from a caller. `collect_unjsonable` carries JSON's one, a non-finite
+  float, which an ordinary `.toml` input supplies because TOML's grammar has `inf`,
+  `-inf` and `nan` literals and JSON's has none. **The two sets do not overlap, so each
+  format is the escape from the other's rejection** — which is what the `help:` lines
+  say, and why neither library error has to. `to_json` returns `NonFiniteFloat`
+  directly rather than an enum: JSON has exactly one impossibility, and a
+  single-variant enum costs a consumer a `match` and buys nothing. Every one of these
+  used to substitute silently — a null vanished, `inf` became `0`, a snowflake ID
+  became `1e19` — which is the class of bug this pre-walk exists to make impossible.
+  Collecting up front rather than failing inside the conversions is also what keeps
+  `to_toml_unchecked` and `to_json_unchecked` infallible: no `Result` threads through
+  their array and table arms, and the reports carry key paths. `--null-as` is the one
+  escape that is not simply the other format, and it substitutes rather than drops because a null inside an array
   cannot be removed without shifting every index after it — `yq` and `tomlq` both fabricate
   a string there instead, and not the same one. It applies to TOML emission only (in
   `format::emit`): JSON holds a null fine, so there is nothing for it to rescue.
@@ -207,8 +222,9 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
   `AppendKind` must not say `--fail` or `--append`. Same rule in `knf-interp` (no
   `--interpolate`) and in `knf-config`, which is why the three load failures that used
   to say `--input-format` are the typed `LoadError` instead, and why `NullInToml`
-  reports *where* the nulls are and leaves `-f json` and `--null-as` unsaid — its
-  sibling `BadDatetime` names nothing at all, there being no flag that would help.
+  reports *where* the nulls are and leaves `-f json` and `--null-as` unsaid.
+  `IntegerOutOfRange` and `NonFiniteFloat` keep the same silence about `-f json` and
+  `-f toml`; `BadDatetime` names nothing at all, there being no flag that would help.
   Every `help:` line naming a flag lives in `crates/knf/src/explain.rs` and nowhere else,
   reached by the one `explain_pipeline` every stage's errors pass through; library
   tests assert a `LoadError` contains no `--` and neither TOML report a flag.
@@ -217,8 +233,9 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
 - **A library error that ends without a newline is a seam, not an oversight.**
   `NullInToml`'s `Display` stops after its last `-->` line precisely so `knf-cli` can
   append a `help:` line flush against it; restoring the `writeln!` would put a blank
-  line in the CLI's stderr, which `cli__null_in_toml_error` pins. `BadDatetime` keeps
-  the same shape. The `TomlError` wrapping them is `#[error("{0}")]` with **no**
+  line in the CLI's stderr, which `cli__null_in_toml_error` pins. `BadDatetime`,
+  `IntegerOutOfRange` and `NonFiniteFloat` keep the same shape, pinned by
+  `cli__integer_out_of_range_in_toml_error` and `cli__non_finite_in_json_error`. The `TomlError` wrapping them is `#[error("{0}")]` with **no**
   `#[from]` or `#[source]` for the same reason: an auto-derived `source()` would be a
   second copy of a message the variant already prints in full, and `main.rs` walks the
   cause chain onto stderr.

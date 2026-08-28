@@ -9,8 +9,8 @@
 
 use anyhow::anyhow;
 use knf::{
-    InterpError, LoadError, MergeError, NullInToml, PathError, Problem, RuleError, RuleErrors,
-    TomlError,
+    IntegerOutOfRange, InterpError, LoadError, MergeError, NonFiniteFloat, NullInToml, PathError,
+    Problem, RuleError, RuleErrors, TomlError,
 };
 
 /// Adds the command-line spelling to errors produced by the reusable pipeline.
@@ -35,12 +35,22 @@ pub fn explain_pipeline(err: anyhow::Error) -> anyhow::Error {
         Ok(err) => return explain_interp(err),
         Err(err) => err,
     };
+    let err = match err.downcast::<NonFiniteFloat>() {
+        Ok(report) => return explain_non_finite(report),
+        Err(err) => err,
+    };
+    // Exhaustive on purpose, rather than the catch-all this used to end with. The
+    // dispatch above is by downcast, so a new error type slipping out of the
+    // pipeline is already invisible to the compiler; the least this file can do is
+    // make a new *variant* of one it already handles a build error instead of a
+    // help line that quietly stops appearing.
     match err.downcast::<TomlError>() {
         Ok(TomlError::Null(report)) => explain_null(report),
-        // The other variant is a datetime a caller spelled wrongly while building
-        // a `Value` by hand — unreachable from argv, and no flag gets anyone out
-        // of it, so there is nothing for this file to add.
-        Ok(other) => other.into(),
+        Ok(TomlError::Integer(report)) => explain_integer(report),
+        // A datetime a caller spelled wrongly while building a `Value` by hand —
+        // unreachable from argv, and no flag gets anyone out of it, so there is
+        // nothing for this file to add.
+        Ok(err @ TomlError::Datetime(_)) => err.into(),
         Err(err) => err,
     }
 }
@@ -53,6 +63,26 @@ pub fn explain_pipeline(err: anyhow::Error) -> anyhow::Error {
 /// flush against its last `-->`.
 fn explain_null(err: NullInToml) -> anyhow::Error {
     anyhow!("{err}\nhelp: emit JSON with -f json, substitute with --null-as, or remove the null")
+}
+
+/// Names the flag that emits an integer TOML has no spelling for.
+///
+/// The other half of [`explain_null`]'s bargain, and the same division of labour:
+/// `knf-config` says which keys hold an integer past `i64::MAX`, and the one
+/// remedy — emit JSON, where the digits survive exactly — is a flag, so it is
+/// ours to name.
+fn explain_integer(err: IntegerOutOfRange) -> anyhow::Error {
+    anyhow!("{err}\nhelp: TOML integers are signed 64-bit; emit JSON with -f json")
+}
+
+/// Names the flag that emits a float JSON has no spelling for.
+///
+/// The escape runs the other way here: `inf` and `nan` are TOML literals and JSON
+/// has no syntax for either, so the format that rescues a null is the one that
+/// cannot hold this. Worth stating in the help, since a user who has met the null
+/// error will reach for `-f json` by reflex.
+fn explain_non_finite(err: NonFiniteFloat) -> anyhow::Error {
+    anyhow!("{err}\nhelp: emit TOML with -f toml, which can represent inf and nan")
 }
 
 /// Names the flag that resolves an input whose format could not be settled.

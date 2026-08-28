@@ -17,10 +17,10 @@
 use std::str::FromStr;
 
 use knf::{
-    BadDatetime, Cycle, Env, EnvValue, Format, InterpError, LoadError, Map, MergeError, MergeOpts,
-    NullInToml, Number, PathError, PathLeaf, Problem, RefPath, RuleError, RuleErrors, Rules, STDIN,
-    Seg, Strategy, Syntax, TomlError, Value, json_or_string, load_layers, merge, merge_layers,
-    merge_with_env, render_path,
+    BadDatetime, Cycle, Env, EnvValue, Format, IntegerOutOfRange, InterpError, LoadError, Map,
+    MergeError, MergeOpts, NonFiniteFloat, NullInToml, Number, PathError, PathLeaf, Problem,
+    RefPath, RuleError, RuleErrors, Rules, STDIN, Seg, Strategy, Syntax, TomlError, Value,
+    json_or_string, load_layers, merge, merge_layers, merge_with_env, render_path,
 };
 
 /// The types a caller writes into its own signatures, named in signatures.
@@ -57,6 +57,8 @@ struct EveryError {
     path: PathError,
     load: LoadError,
     null: NullInToml,
+    integer: IntegerOutOfRange,
+    non_finite: NonFiniteFloat,
     interp: InterpError,
     problem: Problem,
 }
@@ -155,7 +157,12 @@ fn the_public_surface_is_nameable_without_knf_core_or_knf_interp() {
     }
 
     // The two typed errors a caller matches on rather than reads.
-    let tree = dir(&[("layer", "{}"), ("null.json", r#"{"a":null}"#)]);
+    let tree = dir(&[
+        ("layer", "{}"),
+        ("null.json", r#"{"a":null}"#),
+        ("big.json", r#"{"id":10000000000000000001}"#),
+        ("inf.toml", "timeout = inf\n"),
+    ]);
     let err = merge(&[tree.path().join("layer")], MergeOpts::default())
         .expect_err("no extension, no format");
     assert!(matches!(
@@ -183,6 +190,28 @@ fn the_public_surface_is_nameable_without_knf_core_or_knf_interp() {
         panic!("expected the datetime variant, got {err}")
     };
     let _: &BadDatetime = report;
+
+    // The third variant, and the one a *document* reaches: an integer past
+    // `i64::MAX` has no TOML spelling, and `Number::U64` is the reason it survived
+    // the merge intact enough to say so.
+    let (layers, _) = load_layers(&[tree.path().join("big.json")], None).expect("json");
+    let merged = merge_layers(layers, MergeOpts::default(), &StubEnv).expect("one layer");
+    let err = knf::format::emit(merged, Format::Toml, true, None).expect_err("past i64::MAX");
+    let Some(TomlError::Integer(report)) = err.downcast_ref::<TomlError>() else {
+        panic!("expected the integer variant, got {err}")
+    };
+    let _: &IntegerOutOfRange = report;
+
+    // The impossibility on the other side of the boundary, and the reason it is a
+    // bare type rather than a variant: JSON has exactly one. Reached from a TOML
+    // input, whose grammar spells the `inf` that JSON's cannot.
+    let (layers, _) = load_layers(&[tree.path().join("inf.toml")], None).expect("toml");
+    let merged = merge_layers(layers, MergeOpts::default(), &StubEnv).expect("one layer");
+    let err = knf::format::emit(merged, Format::Json, true, None).expect_err("inf");
+    let report = err
+        .downcast_ref::<NonFiniteFloat>()
+        .expect("the typed error survives");
+    let _: &NonFiniteFloat = report;
 
     assert_eq!(STDIN, "-");
 }

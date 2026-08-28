@@ -105,9 +105,12 @@ pub fn parse(format: Format, text: &str, source: &SourceName) -> anyhow::Result<
 /// perfectly well, so there is nothing there for it to rescue and substituting
 /// anyway would corrupt a document that was never in trouble.
 ///
-/// The null pre-check inside [`value::to_toml`] is then the only thing that can
-/// fail here, and it reports key paths alone — nothing about the inputs
-/// survives the merge for it to name.
+/// Both arms can fail, and each fails on what its own format cannot spell:
+/// [`value::to_toml`] on nulls, integers past `i64::MAX` and malformed datetimes,
+/// [`value::to_json`] on infinities and NaNs. The two sets do not overlap, so each
+/// format is the escape from the other's rejection — which is the help the CLI
+/// appends, and the reason neither library error names a flag. Both report key
+/// paths alone: nothing about the inputs survives the merge for them to name.
 pub fn emit(
     value: Value,
     format: Format,
@@ -116,7 +119,7 @@ pub fn emit(
 ) -> anyhow::Result<String> {
     let text = match format {
         Format::Json => {
-            let native = value::to_json(value);
+            let native = value::to_json(value)?;
             if pretty {
                 serde_json::to_string_pretty(&native)?
             } else {

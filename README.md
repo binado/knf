@@ -241,6 +241,33 @@ knf base.toml override.json -f toml --null-as=none
 ```
 The option is a no-op for JSON output. 
 
+Two more values have no spelling in one format or the other, and both are
+rejected the same way — named by path, never silently substituted.
+
+TOML integers are signed 64-bit, so an ID above `i64::MAX` (a snowflake, a hash)
+round-trips exactly through JSON but cannot be written as TOML at all:
+
+```
+$ knf ids.json -f toml
+error: cannot serialize integer to TOML
+  --> id: `10000000000000000001`
+help: TOML integers are signed 64-bit; emit JSON with -f json
+```
+
+Conversely, TOML's number grammar has `inf`, `-inf` and `nan` literals and
+JSON's has none of them:
+
+```
+$ knf limits.toml -f json
+error: cannot serialize non-finite number to JSON
+  --> timeout: `inf`
+help: emit TOML with -f toml, which can represent inf and nan
+```
+
+Each format is the escape from the other's rejection, and no same-format
+round-trip is affected: `knf ids.json -f json` and `knf limits.toml -f toml`
+both emit their input unchanged.
+
 ## Testing
 
 ```bash

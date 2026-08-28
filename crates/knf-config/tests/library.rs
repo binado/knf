@@ -13,7 +13,7 @@ fn tree(files: &[(&str, &str)]) -> TempDir {
 }
 
 fn as_json(value: Value) -> serde_json::Value {
-    knf::value::to_json(value)
+    knf::value::to_json(value).expect("no non-finite floats in these fixtures")
 }
 
 /// An overlay is a [`Map`]: the type is what keeps a scalar layer — which would
@@ -263,6 +263,71 @@ fn a_hand_built_datetime_that_does_not_reparse_is_an_error_not_a_panic() {
     // Asserted flag by flag rather than against a bare `--`, for the reason the
     // null report is: the path lines are themselves spelled `  --> created`.
     for flag in ["--null-as", "-f json", "--set"] {
+        assert!(
+            !text.contains(flag),
+            "a library error must not name a flag: {text}"
+        );
+    }
+}
+
+/// TOML's number grammar has `inf`, `-inf` and `nan`; JSON's has none of them.
+///
+/// So an ordinary `.toml` layer carries a value that cannot be emitted as JSON,
+/// and this is the one impossibility on that side of the boundary. It used to be
+/// swallowed — the float became `0`, which is a value that was in no input — and
+/// it now names every offending key, saying nothing about how to spell the fix.
+#[test]
+fn the_non_finite_report_locates_the_floats_and_names_no_flag() {
+    let dir = tree(&[("base.toml", "timeout = inf\nbackoff = [1.0, nan]\n")]);
+    let merged = knf::merge(&[dir.path().join("base.toml")], MergeOpts::default())
+        .expect("inf is an ordinary value up to the emit");
+
+    let err = knf::format::emit(merged, Format::Json, true, None)
+        .expect_err("JSON has no spelling for inf");
+    let Some(report) = err.downcast_ref::<knf::NonFiniteFloat>() else {
+        panic!("preserves the typed error, got {err}")
+    };
+
+    let text = report.to_string();
+    assert_eq!(
+        text,
+        "cannot serialize non-finite number to JSON\n  --> timeout: `inf`\n  --> backoff[1]: `nan`"
+    );
+    // Flag by flag rather than a bare `--`, for the reason the null report is:
+    // the path lines are themselves spelled `  --> timeout`.
+    for flag in ["-f toml", "--input-format"] {
+        assert!(
+            !text.contains(flag),
+            "a library error must not name a flag: {text}"
+        );
+    }
+}
+
+/// The value `Number::U64` exists to carry, met at the one boundary that cannot
+/// carry it.
+///
+/// A snowflake ID above `i64::MAX` round-trips exactly through JSON, which is why
+/// the variant is there at all; TOML integers are signed 64-bit, so the same
+/// document has no TOML spelling. It used to round through `f64` and emit
+/// `1e19` — silently discarding the digits — and now reports the path instead.
+#[test]
+fn the_integer_out_of_range_report_locates_the_integers_and_names_no_flag() {
+    let dir = tree(&[("base.json", r#"{"id":10000000000000000001,"ok":42}"#)]);
+    let merged = knf::merge(&[dir.path().join("base.json")], MergeOpts::default())
+        .expect("a large integer is an ordinary value up to the emit");
+
+    let err = knf::format::emit(merged, Format::Toml, true, None)
+        .expect_err("TOML integers are signed 64-bit");
+    let Some(knf::TomlError::Integer(report)) = err.downcast_ref::<knf::TomlError>() else {
+        panic!("preserves the typed error, got {err}")
+    };
+
+    let text = report.to_string();
+    assert_eq!(
+        text,
+        "cannot serialize integer to TOML\n  --> id: `10000000000000000001`"
+    );
+    for flag in ["-f json", "--input-format"] {
         assert!(
             !text.contains(flag),
             "a library error must not name a flag: {text}"

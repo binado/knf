@@ -646,6 +646,30 @@ fn null_in_toml_error() {
     insta::assert_snapshot!(run_err(&dir, &["base.toml", "override.json", "-f", "toml"]));
 }
 
+/// The same shape one format over. TOML's number grammar has `inf` and `nan`
+/// literals and JSON's has neither, so an ordinary `.toml` input cannot be
+/// emitted as JSON — it used to become `0`, a value that was in no input. The
+/// help points at `-f toml`, which is the reverse of the escape the null error
+/// offers, and a user who has met that one will reach for `-f json` by reflex.
+#[test]
+fn non_finite_in_json_error() {
+    let dir = tree(&[("a.toml", "timeout = inf\nbackoff = [1.0, nan]\n")]);
+    insta::assert_snapshot!(run_err(&dir, &["a.toml", "-f", "json"]));
+}
+
+/// The third TOML impossibility, and the one a document reaches. TOML integers
+/// are signed 64-bit, so the snowflake ID that `integers_above_i64_max_are_exact`
+/// round-trips through JSON has no TOML spelling at all; it used to round through
+/// `f64` and emit `1e19`, discarding the digits `Number::U64` exists to keep.
+#[test]
+fn integer_out_of_range_in_toml_error() {
+    let dir = tree(&[(
+        "a.json",
+        r#"{"id":10000000000000000001,"ok":42,"ids":[1,18446744073709551615]}"#,
+    )]);
+    insta::assert_snapshot!(run_err(&dir, &["a.json", "-f", "toml"]));
+}
+
 /// Directories are files-as-layers, never expanded. The help line must be
 /// runnable exactly as printed.
 #[test]

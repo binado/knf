@@ -33,17 +33,40 @@ pub fn object_from_json(map: serde_json::Map<String, serde_json::Value>) -> Map 
     map.into_iter().map(|(k, v)| (k, from_json(v))).collect()
 }
 
-/// IR → JSON. Total; a datetime renders as the string JSON would have to use.
-pub fn to_json(value: Value) -> serde_json::Value {
+/// IR → JSON, rejecting up front the one thing JSON cannot hold.
+///
+/// One impossibility against [`to_toml`]'s three, and the same pre-walk shape for
+/// the same reasons: a non-finite float. TOML's number grammar has `inf`, `-inf`
+/// and `nan` literals, so an ordinary `.toml` input hands this function an
+/// infinity, and `serde_json::Number::from_f64` refuses it. That refusal used to
+/// be swallowed — `timeout = inf` emitted `{"timeout":0}` — which is the same
+/// silent substitution the null walk exists to prevent, one format over.
+///
+/// A datetime is not an impossibility here: JSON has no such type, so it renders
+/// as the string JSON would have to use anyway.
+pub fn to_json(value: Value) -> Result<serde_json::Value, NonFiniteFloat> {
+    let mut nonfinite = Vec::new();
+    collect_unjsonable(&value, &mut Vec::new(), &mut nonfinite);
+    if !nonfinite.is_empty() {
+        return Err(NonFiniteFloat { entries: nonfinite });
+    }
+    Ok(to_json_unchecked(value))
+}
+
+fn to_json_unchecked(value: Value) -> serde_json::Value {
     match value {
         Value::Null => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(b),
         Value::Number(n) => serde_json::Value::Number(number_to_json(n)),
         Value::String(s) | Value::Datetime(s) => serde_json::Value::String(s),
-        Value::Array(items) => serde_json::Value::Array(items.into_iter().map(to_json).collect()),
-        Value::Object(map) => {
-            serde_json::Value::Object(map.into_iter().map(|(k, v)| (k, to_json(v))).collect())
+        Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(to_json_unchecked).collect())
         }
+        Value::Object(map) => serde_json::Value::Object(
+            map.into_iter()
+                .map(|(k, v)| (k, to_json_unchecked(v)))
+                .collect(),
+        ),
     }
 }
 
@@ -65,24 +88,41 @@ pub fn from_toml(value: toml::Value) -> Value {
 
 /// IR → TOML, rejecting up front what TOML cannot hold.
 ///
-/// Two impossibilities, one walk. A null is the one users meet, and its check is
-/// separate because serde's own message ("unsupported None value") carries no key
-/// path, and `toml`'s map serializer *skips* a `None` entry rather than failing —
-/// so walking up front is the only way to surface it at all, let alone with paths.
+/// Three impossibilities, one walk. A null is the one users meet most, and its
+/// check is separate because serde's own message ("unsupported None value")
+/// carries no key path, and `toml`'s map serializer *skips* a `None` entry rather
+/// than failing — so walking up front is the only way to surface it at all, let
+/// alone with paths.
 ///
-/// A [`Value::Datetime`] whose spelling does not re-parse is the other, and it
-/// rides along here rather than failing inside the conversion for two reasons: the
-/// message wants the key path this walk already carries, and checking here keeps
-/// `to_toml_unchecked` infallible, so no `Result` has to be threaded through its
-/// array and table arms. Only a caller that hand-built a `Value` can produce one —
-/// every datetime a *parsed* document contains came from the TOML parser — which
-/// is why nulls are reported first when a document manages both.
+/// An integer above `i64::MAX` is the second. TOML integers are signed 64-bit, so
+/// a JSON snowflake ID has no TOML spelling at all; it used to be rounded through
+/// `f64`, which is the very loss [`Number::U64`] exists to prevent.
+///
+/// A [`Value::Datetime`] whose spelling does not re-parse is the third. All three
+/// ride along here rather than failing inside the conversion for the same two
+/// reasons: the messages want the key path this walk already carries, and checking
+/// here keeps `to_toml_unchecked` infallible, so no `Result` has to be threaded
+/// through its array and table arms.
+///
+/// Reported in the order a *document* can reach them. Nulls and out-of-range
+/// integers both arrive from a real input file; only a caller that hand-built a
+/// `Value` can produce a malformed datetime, so it goes last.
 pub fn to_toml(value: Value) -> Result<toml::Value, TomlError> {
     let mut nulls = Vec::new();
+    let mut integers = Vec::new();
     let mut datetimes = Vec::new();
-    collect_untomlable(&value, &mut Vec::new(), &mut nulls, &mut datetimes);
+    collect_untomlable(
+        &value,
+        &mut Vec::new(),
+        &mut nulls,
+        &mut integers,
+        &mut datetimes,
+    );
     if !nulls.is_empty() {
         return Err(TomlError::Null(NullInToml { entries: nulls }));
+    }
+    if !integers.is_empty() {
+        return Err(TomlError::Integer(IntegerOutOfRange { entries: integers }));
     }
     if !datetimes.is_empty() {
         return Err(TomlError::Datetime(BadDatetime { entries: datetimes }));
@@ -131,6 +171,12 @@ fn number_from_json(n: &serde_json::Number) -> Number {
     } else if let Some(f) = n.as_f64() {
         Number::F64(f)
     } else {
+        // Unreachable as this workspace is built: without serde_json's
+        // `arbitrary_precision` feature a `Number` is exactly one of i64/u64/f64,
+        // so one of the three arms above always takes it. Nothing here enables
+        // that feature, but cargo unifies features across a whole graph, so a
+        // downstream crate could switch it on from outside — hence a fallback
+        // rather than a panic in a library.
         Number::F64(0.0)
     }
 }
@@ -139,34 +185,51 @@ fn number_to_json(n: Number) -> serde_json::Number {
     match n {
         Number::I64(i) => i.into(),
         Number::U64(u) => u.into(),
-        Number::F64(f) => serde_json::Number::from_f64(f).unwrap_or_else(|| 0.into()),
+        // Guarded by `to_json`, exactly as the arms in `to_toml_unchecked` are.
+        // `from_f64` returns `None` only for inf and NaN, and both are collected
+        // by the pre-walk before this runs.
+        Number::F64(f) => serde_json::Number::from_f64(f)
+            .expect("non-finite floats are rejected by to_json before conversion"),
     }
 }
 
 fn number_to_toml(n: Number) -> toml::Value {
     match n {
         Number::I64(i) => toml::Value::Integer(i),
-        // TOML integers are signed, so anything past i64::MAX has to become a
-        // float. Lossy, but the alternative is refusing to emit at all.
-        Number::U64(u) => match i64::try_from(u) {
-            Ok(i) => toml::Value::Integer(i),
-            Err(_) => toml::Value::Float(u as f64),
-        },
+        // TOML integers are signed, so anything past i64::MAX has no TOML
+        // spelling. It used to become a float, which silently discarded the exact
+        // digits `Number::U64` exists to preserve; `to_toml`'s pre-walk rejects it
+        // instead, leaving this conversion for the values that do fit. Only a
+        // hand-built `Number::U64` gets here at all — `Number::from_u64` demotes
+        // anything representable to `I64` — and the pre-walk lets exactly those
+        // through.
+        Number::U64(u) => toml::Value::Integer(
+            i64::try_from(u)
+                .expect("out-of-range integers are rejected by to_toml before conversion"),
+        ),
         Number::F64(f) => toml::Value::Float(f),
     }
 }
 
 // --- what TOML cannot hold ------------------------------------------------
 
-/// One walk for both impossibilities, each collected with the path it sits at.
+/// One walk for all three impossibilities, each collected with the path it sits at.
 fn collect_untomlable(
     value: &Value,
     cur: &mut Vec<Seg>,
     nulls: &mut Vec<Vec<Seg>>,
+    integers: &mut Vec<(Vec<Seg>, u64)>,
     datetimes: &mut Vec<(Vec<Seg>, String)>,
 ) {
     match value {
         Value::Null => nulls.push(cur.clone()),
+        // A guard rather than an arm, for the same reason as the datetime below:
+        // a `U64` small enough for an `i64` converts perfectly well, and only a
+        // hand-built value is ever spelled that way, since `Number::from_u64`
+        // demotes. Every `U64` a *parser* produces fails this `try_from`.
+        Value::Number(Number::U64(u)) if i64::try_from(*u).is_err() => {
+            integers.push((cur.clone(), *u));
+        }
         // A guard rather than an arm, so a datetime that parses — every datetime
         // a parsed document can contain — falls through to the `_` below.
         Value::Datetime(s) if s.parse::<toml::value::Datetime>().is_err() => {
@@ -175,18 +238,63 @@ fn collect_untomlable(
         Value::Object(obj) => {
             for (k, v) in obj {
                 cur.push(Seg::Key(k.clone()));
-                collect_untomlable(v, cur, nulls, datetimes);
+                collect_untomlable(v, cur, nulls, integers, datetimes);
                 cur.pop();
             }
         }
         Value::Array(items) => {
             for (i, v) in items.iter().enumerate() {
                 cur.push(Seg::Index(i));
-                collect_untomlable(v, cur, nulls, datetimes);
+                collect_untomlable(v, cur, nulls, integers, datetimes);
                 cur.pop();
             }
         }
         _ => {}
+    }
+}
+
+// --- what JSON cannot hold ------------------------------------------------
+
+/// The mirror of [`collect_untomlable`], with one kind to find rather than three.
+fn collect_unjsonable(value: &Value, cur: &mut Vec<Seg>, nonfinite: &mut Vec<(Vec<Seg>, f64)>) {
+    match value {
+        Value::Number(Number::F64(f)) if !f.is_finite() => nonfinite.push((cur.clone(), *f)),
+        Value::Object(obj) => {
+            for (k, v) in obj {
+                cur.push(Seg::Key(k.clone()));
+                collect_unjsonable(v, cur, nonfinite);
+                cur.pop();
+            }
+        }
+        Value::Array(items) => {
+            for (i, v) in items.iter().enumerate() {
+                cur.push(Seg::Index(i));
+                collect_unjsonable(v, cur, nonfinite);
+                cur.pop();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The TOML spellings, which are the only text a non-finite float has anywhere in
+/// this workspace — and the spelling such a value arrived as, since TOML is the
+/// only format that can carry one in.
+///
+/// Three lines duplicated from `knf-interp`'s private `render::float` rather than
+/// shared: reaching into that crate would mean widening its public surface for a
+/// display detail, and `knf-config` already depends on it only through the
+/// pipeline. Keep the two in step.
+///
+/// Only non-finite values reach here, so the sign test after the NaN test is
+/// exhaustive.
+fn nonfinite_spelling(f: f64) -> &'static str {
+    if f.is_nan() {
+        "nan"
+    } else if f.is_sign_positive() {
+        "inf"
+    } else {
+        "-inf"
     }
 }
 
@@ -280,6 +388,70 @@ impl fmt::Display for BadDatetime {
 
 impl std::error::Error for BadDatetime {}
 
+/// An integer too large for TOML's signed 64-bit integers.
+///
+/// Reachable from an ordinary JSON input — a snowflake ID or a hash above
+/// `i64::MAX` is exactly what [`Number::U64`] exists to carry losslessly — so
+/// unlike [`BadDatetime`] this is a failure a user meets rather than one only a
+/// caller can build. It used to be rounded through `f64` on the way out, which
+/// discarded the very digits the variant preserves.
+///
+/// Carries paths and the offending value, and like its siblings stops short of a
+/// trailing newline so an interface can append a line of its own. There is one
+/// worth appending here: `-f json` emits the integer exactly.
+#[derive(Debug)]
+pub struct IntegerOutOfRange {
+    entries: Vec<(Vec<Seg>, u64)>,
+}
+
+impl fmt::Display for IntegerOutOfRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "cannot serialize integer to TOML")?;
+        for (path, n) in &self.entries {
+            write!(f, "\n  --> {}: `{n}`", render_path(path))?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for IntegerOutOfRange {}
+
+/// A float JSON cannot represent: an infinity or a NaN.
+///
+/// JSON's grammar has no spelling for either, and `serde_json` refuses to build a
+/// `Number` from one. TOML's grammar *does* — `inf`, `-inf`, `nan` are literals —
+/// so a `.toml` input can carry one straight into a `-f json` emission, where it
+/// used to be silently replaced by `0`.
+///
+/// The lone JSON impossibility, which is why [`to_json`] returns this type
+/// directly where [`to_toml`] returns the [`TomlError`] enum. A second one would
+/// be the moment to introduce the wrapper, not before: an enum with one variant
+/// buys a consumer nothing and costs it a `match`.
+///
+/// Carries paths and the value's TOML spelling, and stops short of a trailing
+/// newline like its TOML-side siblings.
+#[derive(Debug)]
+pub struct NonFiniteFloat {
+    entries: Vec<(Vec<Seg>, f64)>,
+}
+
+impl fmt::Display for NonFiniteFloat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "cannot serialize non-finite number to JSON")?;
+        for (path, value) in &self.entries {
+            write!(
+                f,
+                "\n  --> {}: `{}`",
+                render_path(path),
+                nonfinite_spelling(*value)
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for NonFiniteFloat {}
+
 /// Why a document could not be converted to TOML.
 ///
 /// Deliberately no `#[from]` and no `#[source]` on either variant: a generated
@@ -290,6 +462,9 @@ pub enum TomlError {
     /// The document contains a null, which TOML cannot represent.
     #[error("{0}")]
     Null(NullInToml),
+    /// The document contains an integer above `i64::MAX`.
+    #[error("{0}")]
+    Integer(IntegerOutOfRange),
     /// The document contains a datetime whose spelling does not parse.
     #[error("{0}")]
     Datetime(BadDatetime),
@@ -302,6 +477,10 @@ mod tests {
 
     fn ir(v: serde_json::Value) -> Value {
         from_json(v)
+    }
+
+    fn json(v: Value) -> serde_json::Value {
+        to_json(v).expect("no non-finite floats")
     }
 
     #[test]
@@ -317,7 +496,7 @@ mod tests {
             Value::Datetime("1979-05-27T07:32:00Z".to_string())
         );
         // Only the sentinel-free `Display` spelling, never toml's internal map.
-        assert_eq!(to_json(v), json!({"date": "1979-05-27T07:32:00Z"}));
+        assert_eq!(json(v), json!({"date": "1979-05-27T07:32:00Z"}));
     }
 
     /// All four TOML datetime forms round-trip through `Display`/`FromStr`,
@@ -373,16 +552,129 @@ time = 07:32:00.5
         );
     }
 
-    /// A document with both reports the nulls. A null is something a *document*
-    /// can legitimately contain, a malformed datetime only a caller that built one
-    /// by hand, so the failure a user can actually hit goes first.
+    /// A document with all three reports the nulls, then the integers. The order
+    /// is how close each is to something a real input file can contain: a null and
+    /// an oversized integer both arrive from a document, a malformed datetime only
+    /// from a caller that built one by hand.
     #[test]
     fn a_null_is_reported_before_a_malformed_datetime() {
+        let all_three = || {
+            Value::Object(Map::from_iter([
+                ("a".to_string(), Value::Null),
+                ("n".to_string(), Value::Number(Number::U64(u64::MAX))),
+                ("d".to_string(), Value::Datetime("nope".to_string())),
+            ]))
+        };
+        assert!(matches!(
+            to_toml(all_three()).unwrap_err(),
+            TomlError::Null(_)
+        ));
+
+        // Drop the null and the integer surfaces; drop that too and the datetime does.
+        let Value::Object(mut map) = all_three() else {
+            unreachable!()
+        };
+        map.shift_remove("a");
+        assert!(matches!(
+            to_toml(Value::Object(map.clone())).unwrap_err(),
+            TomlError::Integer(_)
+        ));
+        map.shift_remove("n");
+        assert!(matches!(
+            to_toml(Value::Object(map)).unwrap_err(),
+            TomlError::Datetime(_)
+        ));
+    }
+
+    /// TOML integers are signed 64-bit, so a snowflake ID has no spelling there at
+    /// all. It used to round through `f64` — discarding the exact digits
+    /// `Number::U64` exists to keep — and now names every offender instead.
+    #[test]
+    fn to_toml_reports_every_integer_above_i64_max() {
+        let value = ir(json!({
+            "id": 10_000_000_000_000_000_001_u64,
+            "ok": 42,
+            "ids": [1, 18_446_744_073_709_551_615_u64],
+        }));
+
+        let err = to_toml(value).unwrap_err();
+
+        assert!(matches!(err, TomlError::Integer(_)), "{err}");
+        assert_eq!(
+            err.to_string(),
+            "cannot serialize integer to TOML\n  --> id: `10000000000000000001`\n  \
+             --> ids[1]: `18446744073709551615`"
+        );
+    }
+
+    /// The pre-walk guards on the range, not on the variant, so a `U64` small
+    /// enough for an `i64` still converts. Only a hand-built value is spelled that
+    /// way — `Number::from_u64` demotes — but nothing should panic when one is.
+    #[test]
+    fn a_u64_small_enough_for_an_i64_still_converts() {
+        let value = Value::Object(Map::from_iter([(
+            "n".to_string(),
+            Value::Number(Number::U64(1)),
+        )]));
+        let toml = to_toml(value).expect("1 fits an i64");
+        assert_eq!(toml["n"], toml::Value::Integer(1));
+    }
+
+    /// TOML's grammar has `inf`, `-inf` and `nan`; JSON's has none of them, and
+    /// `serde_json` refuses to build a number from one. This used to be swallowed,
+    /// emitting `0` for a value the user wrote as `inf`.
+    #[test]
+    fn to_json_reports_every_non_finite_float() {
         let value = Value::Object(Map::from_iter([
-            ("a".to_string(), Value::Null),
-            ("d".to_string(), Value::Datetime("nope".to_string())),
+            (
+                "timeout".to_string(),
+                Value::Number(Number::F64(f64::INFINITY)),
+            ),
+            ("ok".to_string(), Value::Number(Number::F64(1.5))),
+            (
+                "backoff".to_string(),
+                Value::Array(vec![
+                    Value::Number(Number::F64(f64::NEG_INFINITY)),
+                    Value::Number(Number::F64(f64::NAN)),
+                ]),
+            ),
         ]));
-        assert!(matches!(to_toml(value).unwrap_err(), TomlError::Null(_)));
+
+        let err = to_json(value).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "cannot serialize non-finite number to JSON\n  --> timeout: `inf`\n  \
+             --> backoff[0]: `-inf`\n  --> backoff[1]: `nan`"
+        );
+    }
+
+    /// Both reports end mid-line so `knf-cli` can append a `help:` line flush
+    /// against the last `-->`, the same seam the null report keeps.
+    #[test]
+    fn the_new_reports_end_without_a_newline() {
+        let big = ir(json!({"id": 10_000_000_000_000_000_001_u64}));
+        assert!(!to_toml(big).unwrap_err().to_string().ends_with('\n'));
+
+        let inf = Value::Object(Map::from_iter([(
+            "t".to_string(),
+            Value::Number(Number::F64(f64::INFINITY)),
+        )]));
+        assert!(!to_json(inf).unwrap_err().to_string().ends_with('\n'));
+    }
+
+    /// A non-finite float is a JSON problem alone: TOML spells all three, so the
+    /// same document emits fine that way and `-f toml` is a real escape.
+    #[test]
+    fn non_finite_floats_are_fine_in_toml() {
+        let value = Value::Object(Map::from_iter([(
+            "timeout".to_string(),
+            Value::Number(Number::F64(f64::INFINITY)),
+        )]));
+        assert_eq!(
+            toml::to_string(&to_toml(value).expect("toml has inf")).expect("serializes"),
+            "timeout = inf\n"
+        );
     }
 
     #[test]
@@ -396,14 +688,14 @@ time = 07:32:00.5
             "nested": {"k": 3}
         });
         let toml = to_toml(ir(src.clone())).expect("no nulls");
-        assert_eq!(to_json(from_toml(toml)), src);
+        assert_eq!(json(from_toml(toml)), src);
     }
 
     /// A JSON integer above `i64::MAX` must not be rounded through `f64`.
     #[test]
     fn large_unsigned_integers_survive_json_round_trip() {
         let src = json!({"id": 10_000_000_000_000_000_001_u64});
-        assert_eq!(to_json(ir(src.clone())), src);
+        assert_eq!(json(ir(src.clone())), src);
     }
 
     /// The array case is the one both `yq` and `tomlq` fabricate a value for,
@@ -415,7 +707,7 @@ time = 07:32:00.5
         let mut v = ir(json!({"a": {"b": null}, "c": [1, null, 3], "d": 2}));
         replace_nulls(&mut v, "none");
         assert_eq!(
-            to_json(v.clone()),
+            json(v.clone()),
             json!({"a": {"b": "none"}, "c": [1, "none", 3], "d": 2})
         );
         to_toml(v).expect("the substitution left no nulls");
@@ -428,6 +720,6 @@ time = 07:32:00.5
         let src = json!({"a": 1, "xs": [1, 2], "nested": {"k": "v"}});
         let mut v = ir(src.clone());
         replace_nulls(&mut v, "none");
-        assert_eq!(to_json(v), src);
+        assert_eq!(json(v), src);
     }
 }
