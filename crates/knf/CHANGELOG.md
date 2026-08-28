@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/binado/knf/compare/knf-cli-v0.1.3...knf-cli-v0.2.0) - 2026-08-28
+
+### Other
+
+- [**breaking**] split the pipeline into knf-config and fold knf-dotted away ([#19](https://github.com/binado/knf/pull/19))
+
 ## [0.1.3](https://github.com/binado/knf/compare/knf-cli-v0.1.2...knf-cli-v0.1.3) - 2026-08-24
 
 ### Added
