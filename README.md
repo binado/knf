@@ -22,10 +22,11 @@ simple operation. `knf <files>` should need no explanation.
 pip install knf-cli
 ```
 
-The Python distribution is binary-only: it installs the `knf` executable and
-does not provide an importable Python module. Wheels are published for Linux
-(glibc and musl) on x86-64 and ARM64, macOS on Intel and Apple Silicon, and
-Windows on x64 and ARM64. No Rust toolchain is needed to install a wheel.
+`knf-cli` is binary-only: it installs the `knf` executable and provides no
+importable module. The Python *library* is a second distribution — see
+[Python](#python) below. Wheels are published for Linux (glibc and musl) on
+x86-64 and ARM64, macOS on Intel and Apple Silicon, and Windows on x64 and
+ARM64. No Rust toolchain is needed to install a wheel.
 
 To build from source instead:
 
@@ -90,6 +91,42 @@ use knf_core::{Value, merge};
 
 let merged = merge([base, overlay])?;
 ```
+
+## Python
+
+Two distributions, and which is which matters:
+
+```bash
+pip install knf-cli       # the `knf` executable, nothing importable
+pip install knf-config    # the library: `from knf import deep_merge`
+```
+
+The import name is `knf` for both the Rust library crate and the Python package;
+the *distribution* is `knf-config` because PyPI's `knf` belongs to an unrelated
+project. They are separate wheels because maturin can put a binary and an
+extension module in one wheel only when both are targets of one crate, and
+giving `knf-cli` a library target would put `pyo3` on the `cargo install knf-cli`
+path.
+
+```python
+from knf import deep_merge
+
+config = deep_merge(["base.toml", "prod.json"], rules={"plugins": "append"})
+```
+
+The same pipeline the command line runs, called natively — no subprocess and no
+round-trip through rendered stdout. `deep_merge` takes the `MergeOpts` fields as
+keyword arguments (`input_format`, `strict`, `rules`, `overlays`, `interpolate`,
+`env`) and returns a `dict`.
+
+Python is the widest target knf emits to, so nothing is refused on the way out:
+`null` is `None`, integers are arbitrary precision, `inf` and `nan` survive, and
+TOML datetimes arrive as real `datetime` objects — every one of which some
+format elsewhere in this README has to reject. The rejection moves to the way in
+instead, where an `overlays=` dict is checked before any file is opened.
+
+See [`crates/knf-py/README.md`](crates/knf-py/README.md) for the full surface:
+the type mapping, the rules dict and the exception hierarchy.
 
 ## Merging
 
@@ -273,6 +310,11 @@ both emit their input unchanged.
 ```bash
 cargo test --workspace
 cargo test -p knf-core           # fast inner loop: no filesystem, no process
+
+# The binding is tested from Python, which is the only place it can be: every
+# path through it needs a live interpreter.
+cd crates/knf-py && maturin develop && cd -
+pytest crates/knf-py/tests
 ```
 
 ## License

@@ -1,0 +1,48 @@
+[build-system]
+requires = ["maturin>=1.14,<2"]
+build-backend = "maturin"
+
+[project]
+# PyPI's `knf` is an unrelated project, so the distribution takes the Rust
+# crate's name and the import name stays `knf` — `pip install knf-config`,
+# `from knf import deep_merge`. The command line is the separate `knf-cli`.
+name = "knf-config"
+dynamic = ["version"]
+description = "Merge layered JSON and TOML configuration files into a dict"
+readme = "README.md"
+# 3.8 is end-of-life, and pyo3 has already dropped abi3-py38.
+requires-python = ">=3.9"
+license = "MIT"
+keywords = ["configuration", "json", "toml", "merge"]
+classifiers = [
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Rust",
+  "Topic :: Software Development :: Libraries",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Repository = "https://github.com/binado/knf"
+Issues = "https://github.com/binado/knf/issues"
+
+[tool.maturin]
+# The compiled module is `knf._knf`; `python/knf/__init__.py` re-exports from it
+# and carries the stubs and `py.typed`, which a bare cdylib has nowhere to put.
+module-name = "knf._knf"
+# `maturin develop` builds the extension into `python/knf/`, so a local working
+# tree has bytecode there that a clean checkout does not. Excluding it keeps the
+# wheel identical either way.
+exclude = ["**/__pycache__/**"]
+python-source = "python"
+manifest-path = "Cargo.toml"
+locked = true
+strip = true
+compatibility = "pypi"
+
+[tool.maturin.target.x86_64-apple-darwin]
+macos-deployment-target = "10.12"
+
+[tool.maturin.target.aarch64-apple-darwin]
+macos-deployment-target = "11.0"

@@ -9,3 +9,12 @@ name = "knf-cli"
 # The merge core, the pipeline and reference resolution live in sibling crates;
 # their commits belong in the CLI changelog.
 changelog_include = ["knf-core", "knf-interp", "knf-config"]
+
+[[package]]
+# A frontend, like knf-cli, and never published to crates.io — but its version is
+# the workspace's, so release-plz still bumps it and the PyPI job still has a
+# version to build. No changelog of its own: knf-cli's `changelog_include` covers
+# its *dependencies*, and a sibling frontend is not one of them.
+name = "knf-py"
+publish = false
+changelog_update = false

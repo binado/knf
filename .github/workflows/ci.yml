@@ -12,6 +12,21 @@ jobs:
       matrix:
         rust: ["1.88", stable]
     runs-on: ubuntu-latest
+    # knf-py's cdylib *is* a Python extension module: its Python symbols are
+    # resolved by the interpreter that imports it, never linked in. Saying so
+    # here is what keeps `cargo build --workspace` from needing libpython and the
+    # `python3-dev` package on the runner. An environment variable rather than a
+    # cargo feature on purpose — pyo3 deprecated `extension-module` in 0.29 for
+    # exactly this, and the workspace has no features to add.
+    #
+    # Linux only, which this job is: ELF shared objects may carry undefined
+    # symbols, so nothing more is needed. Mach-O may not, and needs
+    # `-undefined dynamic_lookup` besides — which maturin passes itself, and
+    # which is why the wheel jobs do not set this. Leave it unset locally: a
+    # plain `cargo build --workspace` links libpython and works on every
+    # platform. Adding a macOS runner to this matrix means dropping this.
+    env:
+      PYO3_BUILD_EXTENSION_MODULE: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -36,9 +51,16 @@ jobs:
               exit 1
             fi
           }
-          forbid knf-core   'serde_json|toml|clap|anyhow'
-          forbid knf-interp 'serde_json|toml|clap|anyhow'
-          forbid knf-config 'clap'
+          forbid knf-core   'serde_json|toml|clap|anyhow|pyo3'
+          forbid knf-interp 'serde_json|toml|clap|anyhow|pyo3'
+          forbid knf-config 'clap|pyo3'
+          # The two frontends are siblings and neither knows what the other is:
+          # no pyo3 on the `cargo install knf-cli` path, and no clap or format
+          # crate behind the binding. knf-py seeing JSON and TOML only through
+          # knf-config is what keeps `parse_datetime` the workspace's single
+          # call into the TOML datetime grammar.
+          forbid knf-cli    'pyo3'
+          forbid knf-py     'clap|toml|serde_json'
       # --lib: knf-config's lib and knf-cli's bin are both named `knf`, and
       # rustdoc writes both to target/doc/knf. The binary has no public API to
       # document, so documenting lib targets only is the fix, not a workaround.
@@ -70,3 +92,22 @@ jobs:
           /tmp/knf-wheel-test/bin/pip install --no-deps dist/*.whl
           /tmp/knf-wheel-test/bin/knf --version
           test "$(/tmp/knf-wheel-test/bin/knf --set smoke=true --compact)" = '{"smoke":true}'
+      # A second distribution from a second crate: `knf-config`, the library.
+      # maturin can only put a bin and a cdylib in one wheel when both are
+      # targets of one crate, and putting the cdylib in knf-cli would break its
+      # "no library target" and drag pyo3 onto the `cargo install` path.
+      - name: Build Python library wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: x86_64
+          manylinux: "2_17"
+          maturin-version: v1.14.1
+          working-directory: crates/knf-py
+          args: --release --locked --compatibility pypi --out dist
+      - name: Verify Python library installation
+        run: |
+          python -m venv /tmp/knf-lib-test
+          /tmp/knf-lib-test/bin/pip install pytest
+          /tmp/knf-lib-test/bin/pip install --no-deps crates/knf-py/dist/*.whl
+          /tmp/knf-lib-test/bin/pytest crates/knf-py/tests -q

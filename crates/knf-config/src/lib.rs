@@ -47,7 +47,10 @@ pub use knf_interp::{Cycle, Env, EnvValue, InterpError, Problem, Syntax};
 pub use env::ProcessEnv;
 pub use format::Format;
 pub use set::{PathLeaf, json_or_string};
-pub use value::{BadDatetime, IntegerOutOfRange, NonFiniteFloat, NullInToml, TomlError};
+pub use value::{
+    BadDatetime, DatetimeParts, IntegerOutOfRange, NonFiniteFloat, NullInToml, TomlError,
+    parse_datetime,
+};
 
 use format::SourceName;
 

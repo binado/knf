@@ -4,3 +4,11 @@
 !CHANGELOG.md
 !AGENTS.md
 !CLAUDE.md
+
+# `maturin develop` builds the extension straight into the Python source tree,
+# beside the wrapper it is imported through, so the artefacts land here rather
+# than under /target.
+*.so
+*.pyd
+__pycache__/
+.pytest_cache/
