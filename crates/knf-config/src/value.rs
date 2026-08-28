@@ -86,6 +86,67 @@ pub fn from_toml(value: toml::Value) -> Value {
     }
 }
 
+/// The parts of a TOML datetime spelling, for a caller whose target has real
+/// date and time types.
+///
+/// [`Value::Datetime`] carries the source spelling and nothing else, which is
+/// what keeps `toml` out of `knf-core`. A consumer that has somewhere richer to
+/// put it — Python's `datetime`, say — needs the spelling taken apart, and this
+/// is the one place that happens: the `toml` crate's own grammar, the grammar
+/// that produced the spelling, decomposed rather than re-implemented. A second
+/// parser would agree with this one only until one of them was edited.
+///
+/// The four TOML forms are the four inhabited combinations, exactly as the
+/// `toml` crate documents them:
+///
+/// | `date`    | `time`    | `offset_minutes` | TOML type        |
+/// | --------- | --------- | ---------------- | ---------------- |
+/// | `Some(_)` | `Some(_)` | `Some(_)`        | offset date-time |
+/// | `Some(_)` | `Some(_)` | `None`           | local date-time  |
+/// | `Some(_)` | `None`    | `None`           | local date       |
+/// | `None`    | `Some(_)` | `None`           | local time       |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DatetimeParts {
+    /// Year, month (1–12), day (1–31).
+    pub date: Option<(u16, u8, u8)>,
+    /// Hour, minute, second, nanosecond.
+    ///
+    /// TOML 1.1 lets a time omit its seconds (`07:32`), and the `toml` crate
+    /// models that as `None`. Both are flattened to `0` here, which is what the
+    /// omitted field means, so a consumer has three optional levels fewer to
+    /// think about than the grammar has.
+    pub time: Option<(u8, u8, u8, u32)>,
+    /// Minutes east of UTC. `None` is a local time with no offset at all;
+    /// `Some(0)` is `Z`.
+    pub offset_minutes: Option<i16>,
+}
+
+/// Takes a [`Value::Datetime`] spelling apart, or returns `None` if it is not
+/// one.
+///
+/// The workspace's only call into the TOML datetime grammar, and therefore also
+/// the predicate [`to_toml`]'s pre-walk uses: "does this spelling parse" and
+/// "what are its parts" are the same question asked twice, and asking it once
+/// is what keeps a second grammar from appearing behind a language binding.
+pub fn parse_datetime(spelling: &str) -> Option<DatetimeParts> {
+    let dt: toml::value::Datetime = spelling.parse().ok()?;
+    Some(DatetimeParts {
+        date: dt.date.map(|d| (d.year, d.month, d.day)),
+        time: dt.time.map(|t| {
+            (
+                t.hour,
+                t.minute,
+                t.second.unwrap_or(0),
+                t.nanosecond.unwrap_or(0),
+            )
+        }),
+        offset_minutes: dt.offset.map(|o| match o {
+            toml::value::Offset::Z => 0,
+            toml::value::Offset::Custom { minutes } => minutes,
+        }),
+    })
+}
+
 /// IR → TOML, rejecting up front what TOML cannot hold.
 ///
 /// Three impossibilities, one walk. A null is the one users meet most, and its
@@ -231,8 +292,12 @@ fn collect_untomlable(
             integers.push((cur.clone(), *u));
         }
         // A guard rather than an arm, so a datetime that parses — every datetime
-        // a parsed document can contain — falls through to the `_` below.
-        Value::Datetime(s) if s.parse::<toml::value::Datetime>().is_err() => {
+        // a parsed document can contain — falls through to the `_` below. The
+        // predicate is `parse_datetime` rather than a `parse::<Datetime>()` of
+        // its own: one call into the TOML datetime grammar for the whole
+        // workspace, which is what lets a language binding decompose a spelling
+        // without taking `toml` as a dependency of its own.
+        Value::Datetime(s) if parse_datetime(s).is_none() => {
             datetimes.push((cur.clone(), s.clone()));
         }
         Value::Object(obj) => {
@@ -513,6 +578,72 @@ time = 07:32:00.5
         let parsed: toml::Value = toml::from_str(src).expect("valid toml");
         let back = to_toml(from_toml(parsed.clone())).expect("every spelling re-parses");
         assert_eq!(back, parsed);
+    }
+
+    /// The four TOML forms, decomposed. `to_toml`'s pre-walk uses this same
+    /// function as its predicate, so a spelling that takes apart here is
+    /// exactly a spelling that emits.
+    #[test]
+    fn parse_datetime_decomposes_every_toml_form() {
+        // Offset date-time. `Z` is an offset of zero, not the absence of one.
+        assert_eq!(
+            parse_datetime("1979-05-27T07:32:00Z"),
+            Some(DatetimeParts {
+                date: Some((1979, 5, 27)),
+                time: Some((7, 32, 0, 0)),
+                offset_minutes: Some(0),
+            })
+        );
+        // A negative offset, and a fraction that keeps its nanoseconds.
+        assert_eq!(
+            parse_datetime("1979-05-27T00:32:00.999999-07:00"),
+            Some(DatetimeParts {
+                date: Some((1979, 5, 27)),
+                time: Some((0, 32, 0, 999_999_000)),
+                offset_minutes: Some(-7 * 60),
+            })
+        );
+        // Local date-time: no offset at all, which is what `None` means.
+        assert_eq!(
+            parse_datetime("1979-05-27T07:32:00"),
+            Some(DatetimeParts {
+                date: Some((1979, 5, 27)),
+                time: Some((7, 32, 0, 0)),
+                offset_minutes: None,
+            })
+        );
+        // Local date.
+        assert_eq!(
+            parse_datetime("1979-05-27"),
+            Some(DatetimeParts {
+                date: Some((1979, 5, 27)),
+                time: None,
+                offset_minutes: None,
+            })
+        );
+        // Local time, with a fraction that is tenths rather than nanoseconds.
+        assert_eq!(
+            parse_datetime("07:32:00.5"),
+            Some(DatetimeParts {
+                date: None,
+                time: Some((7, 32, 0, 500_000_000)),
+                offset_minutes: None,
+            })
+        );
+    }
+
+    /// Not a datetime is `None`, which is the whole of the pre-walk's predicate.
+    #[test]
+    fn parse_datetime_rejects_anything_else() {
+        for garbage in [
+            "nope",
+            "yesterday",
+            "",
+            "1979-13-27",
+            "1979-05-27T25:00:00Z",
+        ] {
+            assert_eq!(parse_datetime(garbage), None, "{garbage}");
+        }
     }
 
     #[test]

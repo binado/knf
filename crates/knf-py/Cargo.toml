@@ -1,0 +1,46 @@
+[package]
+# The distribution on PyPI is `knf-config` (import name `knf`), matching the
+# Rust crate whose pipeline this exposes; PyPI's `knf` is an unrelated project.
+# Never published to crates.io: this is a frontend onto `knf-config`, the same
+# way `knf-cli` is, and a frontend has no Rust consumer.
+name = "knf-py"
+description = "Python bindings for knf-config"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# `_knf` rather than `knf`: the Python package is a `python-source` wrapper that
+# re-exports from it, and a lib named `knf` would collide with `knf-config`'s in
+# `cargo doc --workspace --no-deps --lib`, which writes both to target/doc/knf.
+[lib]
+name = "_knf"
+crate-type = ["cdylib"]
+# No Rust test harness, and structurally so rather than by preference. A harness
+# is an *executable*, which under `PYO3_BUILD_EXTENSION_MODULE` has no libpython
+# to link against — the symbols come from the interpreter that loads the module,
+# and there is no interpreter loading a test binary. Everything this crate does
+# is exercised from Python, in `tests/test_deep_merge.py`, which is also the only
+# place it *can* be exercised: every path here needs a live interpreter.
+test = false
+doctest = false
+
+# knf-config and pyo3, and nothing else. No format crate: JSON and TOML reach
+# this crate only through the pipeline, which is what keeps `parse_datetime` the
+# workspace's one call into the TOML datetime grammar. No clap either — the
+# argument vocabulary here is keyword arguments, not flags.
+# `cargo tree -p knf-py --depth 1 --edges normal` is the enforcement.
+#
+# No `extension-module` feature: it is deprecated as of pyo3 0.29 in favour of
+# the PYO3_BUILD_EXTENSION_MODULE environment variable, which maturin sets when
+# it builds the wheel and which is unset for an ordinary `cargo build`. The
+# workspace's "no cargo features anywhere" rule therefore survives intact.
+#
+# anyhow rides along for the same reason `knf-cli` takes it: `knf::merge_with_env`
+# returns an `anyhow::Result`, so no consumer of that signature can avoid naming
+# the type, and `errors.rs` downcasts out of it exactly as `explain.rs` does.
+[dependencies]
+knf-config.workspace = true
+anyhow.workspace = true
+pyo3 = { version = "0.29", features = ["abi3-py39"] }

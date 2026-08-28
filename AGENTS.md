@@ -5,11 +5,18 @@ This file provides guidance to AI agents when working with code in this reposito
 ## Commands
 
 ```bash
-cargo test --workspace                  # everything
+cargo test --workspace                  # everything Rust
 cargo test -p knf-core                  # fast inner loop: no filesystem, no process
 cargo test -p knf-config --test library # the public API, as a consumer sees it
 cargo test -p knf-cli --test cli <name> # one CLI test by name substring
 cargo run -p knf-cli -- base.toml prod.toml --strict
+
+# knf-py has no Rust test harness — `[lib] test = false`, because a harness is an
+# executable and an extension module has no libpython to link one against. The
+# binding is tested from Python, which is also the only place it can be.
+python -m venv .venv && .venv/bin/pip install maturin pytest
+cd crates/knf-py && ../../.venv/bin/maturin develop && cd -
+.venv/bin/pytest crates/knf-py/tests
 
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
@@ -24,6 +31,8 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --lib
 cargo tree -p knf-core   --depth 1 --edges normal   # indexmap, thiserror. That is all.
 cargo tree -p knf-interp --depth 1 --edges normal   # knf-core, thiserror — no serde_json
 cargo tree -p knf-config --depth 1 --edges normal   # formats and I/O, but never clap
+cargo tree -p knf-py     --depth 1 --edges normal   # knf-config, anyhow, pyo3 — no format crate
+cargo tree -p knf-cli    --depth 1 --edges normal   # clap, and no pyo3
 ```
 
 Snapshot tests use `insta` (`crates/knf/tests/snapshots/`). Review changes with
@@ -32,7 +41,8 @@ is the thing under test, so read a diff rather than accepting it blindly.
 
 ## Architecture
 
-Four crates, and the dependency direction is the design:
+Five crates: one core, one pass over it, one pipeline, and **two frontends**.
+The dependency direction is the design:
 
 ```
 knf-core/     the merge core + its value type + the path vocabulary
@@ -40,8 +50,26 @@ knf-core/     the merge core + its value type + the path vocabulary
 knf-interp/   `${key.path}` / `${servers[0]}` / `${env:VAR}` resolution behind
               --interpolate — knf-core, thiserror
 knf-config/   the pipeline: file I/O, JSON and TOML, `key.path=value`, and the
-              `merge`/`MergeOpts` API. Library name `knf`. No clap
-knf/          CLI crate, published as knf-cli — the binary `knf` and nothing else
+              `merge`/`MergeOpts` API. Library name `knf`. No clap, no pyo3
+knf/          CLI frontend, published as knf-cli — the binary `knf`, argv and
+              stderr. clap, and no pyo3
+knf-py/       Python frontend, published to PyPI as knf-config (import name
+              `knf`) — `deep_merge`, keyword arguments and exceptions. pyo3, and
+              no clap and no format crate. Never published to crates.io
+```
+
+`knf-cli` and `knf-py` are **siblings**, not a stack: each depends on
+`knf-config` and neither has heard of the other. That is why the cdylib is its
+own crate rather than a second target on `knf-cli` — maturin can put a `bin` and
+a `cdylib` in one wheel only when both are targets of one crate, and doing that
+would break the "no library target" rule below *and* put pyo3's interpreter-
+hunting build script on the `cargo install knf-cli` path.
+
+Two distributions on PyPI, therefore:
+
+```
+pip install knf-cli       # the `knf` executable        (bin wheel, no module)
+pip install knf-config    # from knf import deep_merge  (cdylib, abi3-py39)
 ```
 
 The crates are separate for **compiler-enforced separation**. A `use clap::…` or
@@ -50,10 +78,27 @@ reason the boundary is a dependency edge rather than a cargo feature, which woul
 make it a `#[cfg]` and a convention. Do not add dependencies to any of them without
 a deliberate reason: the manifests document the rule and CI runs `cargo tree`.
 
-`knf-cli` has **no library target**. Everything reusable is `knf-config`, which is
-what a Rust consumer, and any future language binding, depends on; the binary crate
-is argv and stderr. That also means there are no cargo features anywhere in the
-workspace.
+`knf-cli` has **no library target**, and neither frontend is depended on by
+anything. Everything reusable is `knf-config`, which is what a Rust consumer and
+the Python binding both depend on.
+
+**There are still no cargo features anywhere in the workspace**, and keeping it
+that way is what the crate split is for. pyo3's `extension-module` feature is
+deprecated as of 0.29 in favour of the `PYO3_BUILD_EXTENSION_MODULE` environment
+variable, which maturin ≥ 1.9.4 sets on its own (the workflows pin `v1.14.1`). A
+feature here would have made the boundary a `#[cfg]` and a convention — exactly
+the kind of boundary the crate split exists to replace with a dependency edge the
+compiler enforces.
+
+Leave that variable **unset** when working locally: a plain `cargo build
+--workspace` links libpython and works everywhere, macOS included — no
+`.cargo/config.toml` and no `-undefined dynamic_lookup` are needed, which was
+checked rather than assumed. CI's `test` job does set it, so the runner needs no
+`python3-dev`; that works because it is Linux, where an ELF shared object may
+carry undefined symbols. On macOS the variable alone is *not* enough — Mach-O
+also wants `-undefined dynamic_lookup`, which maturin passes and a bare `cargo
+build` does not — so setting it by hand on a Mac fails to link. Adding a macOS
+runner to that matrix means dropping the variable from it.
 
 `knf-interp` depends on `knf-core` alone, which is what keeps `serde_json` out of its
 tree — the path vocabulary comes from a crate that has none either. It also contains
@@ -96,12 +141,40 @@ merging, so a JSON layer over a TOML layer needs no conversion in the middle. Fo
 crates appear only at the two boundaries, and the conversions live only in
 `crates/knf-config/src/value.rs`, called only from `crates/knf-config/src/format.rs`.
 
+**`parse_datetime` is the workspace's one call into the TOML datetime grammar.**
+`Value::Datetime` carries a source spelling and nothing else, which is what keeps `toml`
+out of `knf-core`; a frontend whose target has real date and time types needs that
+spelling taken apart. `knf_config::parse_datetime` returns the `DatetimeParts`, and
+`collect_untomlable`'s "does this re-parse" guard *is* that same function — one grammar
+answering both questions. `knf-py` therefore converts a datetime without a `toml`
+dependency of its own, which is the whole reason CI forbids one there.
+
 Pipeline (`crates/knf/src/main.rs::run`): build `MergeOpts` — rules and every `--set`
 expression, so a mistake in argv fails before any I/O → `load_layers` (read each
 positional, `format::parse` into `Value`) → `resolve_output_format` → `merge_layers`
 (append the overlays, `merge_with` over the flat list, `knf_interp::interpolate` if
 `--interpolate`) → `format::emit`. `knf_config::merge` is the library entry point onto
 the same two halves, minus the format decision.
+
+`crates/knf-py/src/lib.rs::deep_merge` runs the same order for the same reason: parse
+`rules` into `Rules::build`, convert every overlay, snapshot `env` — all of it from the
+keyword arguments alone — and only then call `merge_with_env`, so a bad `rules=` never
+queues behind a missing file. It ends there: `deep_merge` returns a `dict` and never
+emits, which is the next paragraph.
+
+**Python is the widest target in the workspace, so rejection moves to the input side.**
+Every emission path narrows — `to_toml` refuses nulls, integers past `i64::MAX` and
+unparseable datetimes; `to_json` refuses non-finite floats — and Python spells all of
+them (`None`, arbitrary-precision `int`, `float('inf')`, `datetime`). `deep_merge`
+therefore never calls `format::emit`, and **`TomlError`, `NullInToml`,
+`IntegerOutOfRange`, `BadDatetime` and `NonFiniteFloat` are unreachable from the Python
+API** — `crates/knf-py/src/errors.rs` has no exception for any of them, and its downcast
+chain ends where `explain.rs`'s continues. What `knf-py` rejects instead is what arrives
+in an `overlays=` dict: an `int` outside `[i64::MIN, u64::MAX]` (never truncated — the
+same rule `IntegerOutOfRange` enforces one format over), a non-`str` key, and any other
+type. A Python `datetime` is in that last group on purpose: `Value::Datetime` may only
+ever *originate* in the TOML parser, and converting one here would synthesize a spelling
+from outside the grammar that owns it.
 
 **The output format is resolved between the parse and the fold**, and the split into
 `load_layers`/`merge_layers` exists to hold that ordering. A missing `-f` is a mistake
@@ -217,7 +290,8 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
   namespace `db.host`". The only unaddressable keys are those literally beginning `env:`.
   A second namespace added later would change meaning for such a document; accepted
   knowingly.
-- **No library crate names a command-line flag.** Errors in the core carry key paths
+- **No library crate names an interface's vocabulary** — a flag or a keyword argument.
+  Errors in the core carry key paths
   and nothing else — no filenames, no layer indices, no flag names: `Locked` and
   `AppendKind` must not say `--fail` or `--append`. Same rule in `knf-interp` (no
   `--interpolate`) and in `knf-config`, which is why the three load failures that used
@@ -230,6 +304,17 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
   tests assert a `LoadError` contains no `--` and neither TOML report a flag.
   `knf-interp` cannot name a file even if it wanted to — it runs after the merge, and
   no layer outlives the merge.
+
+  **`crates/knf-py/src/errors.rs` is the Python frontend's `explain.rs`**, and it extends
+  the rule rather than adding one: a library crate has never heard of `rules=`,
+  `input_format=`, `overlays=`, `paths=` or `env=` either, so that file is the only place
+  in the workspace those spellings appear in a message. It downcasts out of `anyhow`
+  exactly as `explain.rs` does and inherits the same documented hazard — if `knf-config`
+  ever wraps its errors in one type of its own, every downcast silently starts missing and
+  nothing fails to compile. Two frontends now carry that comment; keep them in step. Its
+  chain is one arm *shorter*: with no emit step there is no `TomlError` to catch, and its
+  tail maps an `io::Error` in the cause chain onto `FileNotFoundError` rather than a knf
+  exception, because a missing path is a builtin a Python caller already handles.
 - **A library error that ends without a newline is a seam, not an oversight.**
   `NullInToml`'s `Display` stops after its last `-->` line precisely so `knf-cli` can
   append a `help:` line flush against it; restoring the `writeln!` would put a blank
@@ -272,6 +357,22 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
   to the fixture, so paths in output stay relative and snapshots stay stable. Anything
   touching `${env:...}` sets its variables explicitly through the `with_env` helper
   (`Command::env`/`env_remove`), so no test reads the ambient environment.
+- `crates/knf-py/tests/test_deep_merge.py` is the whole of that crate's suite, and there
+  is no Rust one to complement it: `[lib] test = false`, since a harness is an executable
+  and an extension module has no libpython to link one against. It runs against an
+  installed wheel (`maturin develop`), so it exercises the binding exactly as a consumer
+  imports it. Fixtures are written into `tmp_path` rather than committed. `env=` is always
+  passed explicitly, and the one test that touches `os.environ` does so through
+  `monkeypatch` precisely to show that `env=` and the process environment are different
+  things. Three tests are the Python echoes of Rust properties and should move together
+  with them: the one-layer identity (`crates/knf-core/tests/props.rs`), the four datetime
+  forms against `tomllib` (`value.rs`'s `parse_datetime` tests), and the pair asserting
+  that `inf` and an integer past `i64::MAX` *survive* — the two cases `-f json` and
+  `-f toml` respectively refuse, which is what "Python is the widest target" means in
+  practice.
 
 `README.md` documents the user-facing semantics; keep it in step with any change to
 merge behaviour, `--set` typing, interpolation, or error text.
+`crates/knf-py/README.md` is the PyPI page for the library and documents the same
+semantics for `deep_merge`; a change to merge behaviour, typing or the type mapping
+belongs in both.
