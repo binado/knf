@@ -212,13 +212,57 @@ fn the_null_in_toml_report_locates_the_nulls_and_names_no_flag() {
 
     let err = knf::format::emit(merged, Format::Toml, true, None)
         .expect_err("a null cannot be serialized to TOML");
-    let report = err
-        .downcast_ref::<knf::NullInToml>()
-        .expect("preserves the typed error");
+    let Some(knf::TomlError::Null(report)) = err.downcast_ref::<knf::TomlError>() else {
+        panic!("preserves the typed error, got {err}")
+    };
 
     let text = report.to_string();
     assert_eq!(text, "cannot serialize null to TOML\n  --> a.b\n  --> c[1]");
     for flag in ["--null-as", "-f json"] {
+        assert!(
+            !text.contains(flag),
+            "a library error must not name a flag: {text}"
+        );
+    }
+}
+
+/// The other half of that error, and the one a consumer reaches by accident.
+///
+/// `Value::Datetime` is a public variant holding a plain `String`, and an overlay
+/// is a `Map` of whatever the caller put in it — so a layer assembled in memory
+/// can carry a spelling that is not a TOML datetime. Nothing in the pipeline
+/// produces one (`${env:...}` and `--set` both type through JSON, which has no
+/// datetime), which is why the conversion used to assume it could not happen and
+/// abort the process. It reports the path instead.
+#[test]
+fn a_hand_built_datetime_that_does_not_reparse_is_an_error_not_a_panic() {
+    let dir = tree(&[("base.toml", "name = \"svc\"\n")]);
+    let mut overlay = Map::new();
+    overlay.insert("created".to_string(), Value::Datetime("nope".to_string()));
+
+    let merged = knf::merge(
+        &[dir.path().join("base.toml")],
+        MergeOpts {
+            overlays: vec![overlay],
+            ..MergeOpts::default()
+        },
+    )
+    .expect("a datetime is an ordinary value right up to the emit");
+
+    let err = knf::format::emit(merged, Format::Toml, true, None)
+        .expect_err("`nope` is not a TOML datetime");
+    let Some(knf::TomlError::Datetime(report)) = err.downcast_ref::<knf::TomlError>() else {
+        panic!("preserves the typed error, got {err}")
+    };
+
+    let text = report.to_string();
+    assert_eq!(
+        text,
+        "cannot serialize datetime to TOML\n  --> created: `nope`"
+    );
+    // Asserted flag by flag rather than against a bare `--`, for the reason the
+    // null report is: the path lines are themselves spelled `  --> created`.
+    for flag in ["--null-as", "-f json", "--set"] {
         assert!(
             !text.contains(flag),
             "a library error must not name a flag: {text}"

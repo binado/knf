@@ -153,12 +153,16 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
   `Number::from_u64`, which demotes; derived `PartialEq` would otherwise make
   `I64(1) != U64(1)` and equality would depend on which parser produced the value.
 - **`Value::Datetime` may only ever *originate* in the TOML parser.** It stores the
-  source spelling and relies on `Display`/`FromStr` round-tripping; `value.rs`'s
-  `to_toml_unchecked` has an `expect` that a new producer would make reachable.
+  source spelling and relies on `Display`/`FromStr` round-tripping.
   Interpolation may **copy** one (`d2 = "${d}"` takes the referent's type) — sound,
   since the string still round-trips — but nothing may ever **synthesize** one from
   text. That is a second reason `${env:...}` types through JSON, which has no datetime
-  and so structurally cannot fabricate one.
+  and so structurally cannot fabricate one. The rule is a convention, not a type: the
+  variant is public and holds a plain `String`, so a caller assembling a `Value` by
+  hand can break it, and enforcing it at construction would need `toml` inside
+  `knf-core`. `to_toml`'s pre-walk therefore checks the spelling and reports
+  `BadDatetime` where an `expect` used to abort — a backstop for the one producer the
+  compiler cannot rule out, not a licence to add another.
 - **No layer outlives the merge.** `merge_layers` folds a plain `Vec<Value>`; `SourceName`
   names an input only while it is being *read*, for parse errors, which is why it has
   no `--set` variant. The null-in-TOML error therefore carries key paths and no
@@ -166,8 +170,12 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
   not worth the clone, and neither escape it offers (`-f json`, `--null-as`)
   needs to know which file the null came from.
 - **Null is rejected on the way to TOML, never dropped.** The `toml` crate's map
-  serializer silently *skips* a `None` entry, so `value.rs`'s `collect_nulls` pre-walk is
-  the only thing standing between a null and quietly-missing keys. `--null-as` is
+  serializer silently *skips* a `None` entry, so `value.rs`'s `collect_untomlable` pre-walk
+  is the only thing standing between a null and quietly-missing keys. That one walk carries
+  both of TOML's impossibilities — nulls and unparseable datetimes — and `to_toml` reports
+  the nulls first, since a null is something a *document* can hold and a bad datetime only
+  a caller. Collecting up front rather than failing inside the conversion is what keeps
+  `to_toml_unchecked` infallible and its error messages carrying key paths. `--null-as` is
   the one escape, and it substitutes rather than drops because a null inside an array
   cannot be removed without shifting every index after it — `yq` and `tomlq` both fabricate
   a string there instead, and not the same one. It applies to TOML emission only (in
@@ -199,16 +207,21 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
   `AppendKind` must not say `--fail` or `--append`. Same rule in `knf-interp` (no
   `--interpolate`) and in `knf-config`, which is why the three load failures that used
   to say `--input-format` are the typed `LoadError` instead, and why `NullInToml`
-  reports *where* the nulls are and leaves `-f json` and `--null-as` unsaid. Every
-  `help:` line naming a flag lives in `crates/knf/src/explain.rs` and nowhere else,
+  reports *where* the nulls are and leaves `-f json` and `--null-as` unsaid — its
+  sibling `BadDatetime` names nothing at all, there being no flag that would help.
+  Every `help:` line naming a flag lives in `crates/knf/src/explain.rs` and nowhere else,
   reached by the one `explain_pipeline` every stage's errors pass through; library
-  tests assert a `LoadError` contains no `--` and the null report neither flag.
+  tests assert a `LoadError` contains no `--` and neither TOML report a flag.
   `knf-interp` cannot name a file even if it wanted to — it runs after the merge, and
   no layer outlives the merge.
 - **A library error that ends without a newline is a seam, not an oversight.**
   `NullInToml`'s `Display` stops after its last `-->` line precisely so `knf-cli` can
   append a `help:` line flush against it; restoring the `writeln!` would put a blank
-  line in the CLI's stderr, which `cli__null_in_toml_error` pins.
+  line in the CLI's stderr, which `cli__null_in_toml_error` pins. `BadDatetime` keeps
+  the same shape. The `TomlError` wrapping them is `#[error("{0}")]` with **no**
+  `#[from]` or `#[source]` for the same reason: an auto-derived `source()` would be a
+  second copy of a message the variant already prints in full, and `main.rs` walks the
+  cause chain onto stderr.
 - Every input must be an object at the top level (`format::parse`).
 - Output format is never guessed for mixed inputs — `-f` is required, so reordering
   arguments can never silently change the encoding.

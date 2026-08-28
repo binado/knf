@@ -63,17 +63,29 @@ pub fn from_toml(value: toml::Value) -> Value {
     }
 }
 
-/// IR → TOML, rejecting nulls first.
+/// IR → TOML, rejecting up front what TOML cannot hold.
 ///
-/// The pre-check is separate because serde's own message ("unsupported None
-/// value") carries no key path, and `toml`'s map serializer *skips* `None`
-/// entries rather than failing — so walking for nulls up front is the only way
-/// to surface the impossibility at all, let alone with paths.
-pub fn to_toml(value: Value) -> Result<toml::Value, NullInToml> {
-    let mut paths = Vec::new();
-    collect_nulls(&value, &mut Vec::new(), &mut paths);
-    if !paths.is_empty() {
-        return Err(NullInToml { entries: paths });
+/// Two impossibilities, one walk. A null is the one users meet, and its check is
+/// separate because serde's own message ("unsupported None value") carries no key
+/// path, and `toml`'s map serializer *skips* a `None` entry rather than failing —
+/// so walking up front is the only way to surface it at all, let alone with paths.
+///
+/// A [`Value::Datetime`] whose spelling does not re-parse is the other, and it
+/// rides along here rather than failing inside the conversion for two reasons: the
+/// message wants the key path this walk already carries, and checking here keeps
+/// `to_toml_unchecked` infallible, so no `Result` has to be threaded through its
+/// array and table arms. Only a caller that hand-built a `Value` can produce one —
+/// every datetime a *parsed* document contains came from the TOML parser — which
+/// is why nulls are reported first when a document manages both.
+pub fn to_toml(value: Value) -> Result<toml::Value, TomlError> {
+    let mut nulls = Vec::new();
+    let mut datetimes = Vec::new();
+    collect_untomlable(&value, &mut Vec::new(), &mut nulls, &mut datetimes);
+    if !nulls.is_empty() {
+        return Err(TomlError::Null(NullInToml { entries: nulls }));
+    }
+    if !datetimes.is_empty() {
+        return Err(TomlError::Datetime(BadDatetime { entries: datetimes }));
     }
     Ok(to_toml_unchecked(value))
 }
@@ -86,14 +98,17 @@ fn to_toml_unchecked(value: Value) -> toml::Value {
         Value::Bool(b) => toml::Value::Boolean(b),
         Value::Number(n) => number_to_toml(n),
         Value::String(s) => toml::Value::String(s),
-        // Infallible by construction: every `Datetime` *originates* in the TOML
-        // parser, from a string `toml` itself printed. Interpolation may copy
-        // one (`d2 = "${d}"` takes the referent's type), but nothing anywhere
-        // synthesizes one from text — `${env:...}` types through JSON, which has
-        // no datetime and so structurally cannot.
+        // Guarded by `to_toml`, exactly as the `Null` arm above is. In a document
+        // that came from a parser it could not fail at all: every `Datetime`
+        // *originates* in the TOML parser, from a string `toml` itself printed,
+        // and while interpolation may copy one (`d2 = "${d}"` takes the referent's
+        // type), nothing anywhere synthesizes one from text — `${env:...}` types
+        // through JSON, which has no datetime and so structurally cannot. A caller
+        // hand-building a `Value` can still spell one wrongly, and that is what the
+        // pre-walk catches.
         Value::Datetime(s) => toml::Value::Datetime(
             s.parse()
-                .expect("a Datetime always originates in the TOML parser, so it re-parses"),
+                .expect("unparseable datetimes are rejected by to_toml before conversion"),
         ),
         Value::Array(items) => {
             toml::Value::Array(items.into_iter().map(to_toml_unchecked).collect())
@@ -141,22 +156,33 @@ fn number_to_toml(n: Number) -> toml::Value {
     }
 }
 
-// --- nulls in TOML --------------------------------------------------------
+// --- what TOML cannot hold ------------------------------------------------
 
-fn collect_nulls(value: &Value, cur: &mut Vec<Seg>, out: &mut Vec<Vec<Seg>>) {
+/// One walk for both impossibilities, each collected with the path it sits at.
+fn collect_untomlable(
+    value: &Value,
+    cur: &mut Vec<Seg>,
+    nulls: &mut Vec<Vec<Seg>>,
+    datetimes: &mut Vec<(Vec<Seg>, String)>,
+) {
     match value {
-        Value::Null => out.push(cur.clone()),
+        Value::Null => nulls.push(cur.clone()),
+        // A guard rather than an arm, so a datetime that parses — every datetime
+        // a parsed document can contain — falls through to the `_` below.
+        Value::Datetime(s) if s.parse::<toml::value::Datetime>().is_err() => {
+            datetimes.push((cur.clone(), s.clone()));
+        }
         Value::Object(obj) => {
             for (k, v) in obj {
                 cur.push(Seg::Key(k.clone()));
-                collect_nulls(v, cur, out);
+                collect_untomlable(v, cur, nulls, datetimes);
                 cur.pop();
             }
         }
         Value::Array(items) => {
             for (i, v) in items.iter().enumerate() {
                 cur.push(Seg::Index(i));
-                collect_nulls(v, cur, out);
+                collect_untomlable(v, cur, nulls, datetimes);
                 cur.pop();
             }
         }
@@ -223,6 +249,52 @@ impl fmt::Display for NullInToml {
 
 impl std::error::Error for NullInToml {}
 
+/// A [`Value::Datetime`] carrying text that is not a TOML datetime.
+///
+/// Unreachable from a parsed document, and unreachable from this crate's own
+/// pipeline: a datetime only ever *originates* in the TOML parser, and neither
+/// `${env:...}` nor the CLI's `--set` can make one, since both type their values
+/// through JSON, which has no datetime. It is reachable from a caller that
+/// builds a [`Value`] by hand, though — the variant is an ordinary public one
+/// holding an ordinary `String` — and this is what that caller gets instead of a
+/// panic. The rule it reports on is unchanged: nothing may synthesize a datetime
+/// from text.
+///
+/// Carries paths and the offending spelling, and like [`NullInToml`] stops short
+/// of a trailing newline so an interface can append a line of its own. There is no
+/// flag that would help here, so no interface has one to append.
+#[derive(Debug)]
+pub struct BadDatetime {
+    entries: Vec<(Vec<Seg>, String)>,
+}
+
+impl fmt::Display for BadDatetime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "cannot serialize datetime to TOML")?;
+        for (path, text) in &self.entries {
+            write!(f, "\n  --> {}: `{text}`", render_path(path))?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for BadDatetime {}
+
+/// Why a document could not be converted to TOML.
+///
+/// Deliberately no `#[from]` and no `#[source]` on either variant: a generated
+/// `source()` would be a second copy of a message the variant's own `Display`
+/// already prints in full, and `knf-cli` walks the cause chain onto stderr.
+#[derive(Debug, thiserror::Error)]
+pub enum TomlError {
+    /// The document contains a null, which TOML cannot represent.
+    #[error("{0}")]
+    Null(NullInToml),
+    /// The document contains a datetime whose spelling does not parse.
+    #[error("{0}")]
+    Datetime(BadDatetime),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,15 +332,57 @@ date = 1979-05-27
 time = 07:32:00.5
 ";
         let parsed: toml::Value = toml::from_str(src).expect("valid toml");
-        let back = to_toml(from_toml(parsed.clone())).expect("no nulls");
+        let back = to_toml(from_toml(parsed.clone())).expect("every spelling re-parses");
         assert_eq!(back, parsed);
     }
 
     #[test]
     fn to_toml_rejects_nulls_with_array_indices() {
         let err = to_toml(ir(json!({"a": {"b": null}, "c": [1, null], "d": 2}))).unwrap_err();
-        let rendered: Vec<_> = err.entries.iter().map(|p| render_path(p)).collect();
+        let TomlError::Null(report) = err else {
+            panic!("expected a null report, got {err}");
+        };
+        let rendered: Vec<_> = report.entries.iter().map(|p| render_path(p)).collect();
         assert_eq!(rendered, vec!["a.b", "c[1]"]);
+    }
+
+    /// Reachable only from a hand-built `Value` — the variant is public and holds
+    /// a plain `String` — and it used to abort the process instead. Every
+    /// offender is named, so a caller does not learn of them one run at a time,
+    /// and the report ends without a newline like its null-shaped sibling.
+    #[test]
+    fn to_toml_reports_every_datetime_that_does_not_reparse() {
+        let value = Value::Object(Map::from_iter([
+            ("created".to_string(), Value::Datetime("nope".to_string())),
+            (
+                "events".to_string(),
+                Value::Array(vec![
+                    // The valid one is untouched, so only the second is reported.
+                    Value::Datetime("1979-05-27T07:32:00Z".to_string()),
+                    Value::Datetime("yesterday".to_string()),
+                ]),
+            ),
+        ]));
+
+        let err = to_toml(value).unwrap_err();
+
+        assert!(matches!(err, TomlError::Datetime(_)), "{err}");
+        assert_eq!(
+            err.to_string(),
+            "cannot serialize datetime to TOML\n  --> created: `nope`\n  --> events[1]: `yesterday`"
+        );
+    }
+
+    /// A document with both reports the nulls. A null is something a *document*
+    /// can legitimately contain, a malformed datetime only a caller that built one
+    /// by hand, so the failure a user can actually hit goes first.
+    #[test]
+    fn a_null_is_reported_before_a_malformed_datetime() {
+        let value = Value::Object(Map::from_iter([
+            ("a".to_string(), Value::Null),
+            ("d".to_string(), Value::Datetime("nope".to_string())),
+        ]));
+        assert!(matches!(to_toml(value).unwrap_err(), TomlError::Null(_)));
     }
 
     #[test]

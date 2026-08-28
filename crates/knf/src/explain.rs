@@ -10,6 +10,7 @@
 use anyhow::anyhow;
 use knf::{
     InterpError, LoadError, MergeError, NullInToml, PathError, Problem, RuleError, RuleErrors,
+    TomlError,
 };
 
 /// Adds the command-line spelling to errors produced by the reusable pipeline.
@@ -34,8 +35,12 @@ pub fn explain_pipeline(err: anyhow::Error) -> anyhow::Error {
         Ok(err) => return explain_interp(err),
         Err(err) => err,
     };
-    match err.downcast::<NullInToml>() {
-        Ok(err) => explain_null(err),
+    match err.downcast::<TomlError>() {
+        Ok(TomlError::Null(report)) => explain_null(report),
+        // The other variant is a datetime a caller spelled wrongly while building
+        // a `Value` by hand — unreachable from argv, and no flag gets anyone out
+        // of it, so there is nothing for this file to add.
+        Ok(other) => other.into(),
         Err(err) => err,
     }
 }

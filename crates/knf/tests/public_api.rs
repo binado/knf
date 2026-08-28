@@ -17,10 +17,10 @@
 use std::str::FromStr;
 
 use knf::{
-    Cycle, Env, EnvValue, Format, InterpError, LoadError, Map, MergeError, MergeOpts, NullInToml,
-    Number, PathError, PathLeaf, Problem, RefPath, RuleError, RuleErrors, Rules, STDIN, Seg,
-    Strategy, Syntax, Value, json_or_string, load_layers, merge, merge_layers, merge_with_env,
-    render_path,
+    BadDatetime, Cycle, Env, EnvValue, Format, InterpError, LoadError, Map, MergeError, MergeOpts,
+    NullInToml, Number, PathError, PathLeaf, Problem, RefPath, RuleError, RuleErrors, Rules, STDIN,
+    Seg, Strategy, Syntax, TomlError, Value, json_or_string, load_layers, merge, merge_layers,
+    merge_with_env, render_path,
 };
 
 /// The types a caller writes into its own signatures, named in signatures.
@@ -167,7 +167,22 @@ fn the_public_surface_is_nameable_without_knf_core_or_knf_interp() {
     assert_eq!(formats, vec![Format::Json]);
     let merged = merge_layers(layers, MergeOpts::default(), &StubEnv).expect("one layer");
     let err = knf::format::emit(merged, Format::Toml, true, None).expect_err("a null");
-    assert!(err.downcast_ref::<NullInToml>().is_some());
+    let Some(TomlError::Null(report)) = err.downcast_ref::<TomlError>() else {
+        panic!("expected the null variant, got {err}")
+    };
+    let _: &NullInToml = report;
+
+    // The sibling variant. Unreachable from argv — nothing the CLI can spell
+    // builds a `Value::Datetime` — but a caller assembling a layer in memory can,
+    // so both it and the report it carries have to be nameable from here.
+    let mut hand_built = Map::new();
+    hand_built.insert("d".to_string(), Value::Datetime("nope".to_string()));
+    let err = knf::format::emit(Value::Object(hand_built), Format::Toml, true, None)
+        .expect_err("`nope` is not a datetime");
+    let Some(TomlError::Datetime(report)) = err.downcast_ref::<TomlError>() else {
+        panic!("expected the datetime variant, got {err}")
+    };
+    let _: &BadDatetime = report;
 
     assert_eq!(STDIN, "-");
 }

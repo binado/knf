@@ -68,7 +68,7 @@ let merged = knf::merge_with_env(&paths, opts, &my_env)?;
 ```
 
 Errors carry typed causes rather than prose — `LoadError`, `MergeError`,
-`InterpError`, `NullInToml` — and name no command-line flags, since a library
+`InterpError`, `TomlError` — and name no command-line flags, since a library
 caller has no command line to act on. A null reaching TOML, for instance, is
 reported as the paths it was found at; whether the remedy is spelled `-f json`
 is your interface's business, not the library's.
