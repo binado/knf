@@ -3,14 +3,14 @@
 //! The library crates raise errors that carry key paths, reference spellings
 //! and file paths — never a command-line flag, because none of them has heard
 //! of one. Every `help:` line in this file exists to close that gap on the way
-//! out, and this is the only place in the workspace where `--append`,
-//! `--replace`, `--fail`, `--set`, `--input-format`, `--interpolate`, `-f` and
-//! `--null-as` appear in an error message.
+//! out, and this is the only place in the workspace where `--set`,
+//! `--input-format`, `--interpolate`, `-f` and `--null-as` appear in an error
+//! message.
 
 use anyhow::anyhow;
 use knf::{
     IntegerOutOfRange, InterpError, LoadError, MergeError, NonFiniteFloat, NullInToml, PathError,
-    Problem, RuleError, RuleErrors, TomlError,
+    Problem, TomlError,
 };
 
 /// Adds the command-line spelling to errors produced by the reusable pipeline.
@@ -28,7 +28,9 @@ pub fn explain_pipeline(err: anyhow::Error) -> anyhow::Error {
         Err(err) => err,
     };
     let err = match err.downcast::<MergeError>() {
-        Ok(err) => return name_the_flag(err),
+        // A type conflict is fixed in the documents, not on the command line.
+        // Exhaustive for the reason given on the match below.
+        Ok(err @ MergeError::TypeConflict { .. }) => return err.into(),
         Err(err) => err,
     };
     let err = match err.downcast::<InterpError>() {
@@ -104,16 +106,6 @@ fn explain_load(err: LoadError) -> anyhow::Error {
 
 /// The established division of labour: `knf-core` renders the path and stays
 /// provenance-free, the help line names the flag that carried it.
-pub fn name_the_rule_flag(err: PathError, flag: &str) -> anyhow::Error {
-    match err {
-        PathError::IndexInKeyPath { .. } => {
-            anyhow!("{err}\nhelp: {flag} takes a key path; a rule cannot name an array element")
-        }
-        other => other.into(),
-    }
-}
-
-/// Same division of labour for `--set`: its paths feed the same conversion.
 pub fn name_the_set_flag(err: PathError) -> anyhow::Error {
     match err {
         PathError::IndexInKeyPath { .. } => anyhow!(
@@ -122,46 +114,6 @@ pub fn name_the_set_flag(err: PathError) -> anyhow::Error {
         ),
         other => other.into(),
     }
-}
-
-/// Turns a rule-set rejection into the flags the user actually typed.
-///
-/// `knf-core` names strategies, never flags — it has no idea they are spelled
-/// `--append`, `--replace` and `--fail` — so the help lines belong here.
-pub fn explain_rules(errors: RuleErrors) -> anyhow::Error {
-    const FLAGS: &str = "--append, --replace and --fail";
-    let mut help = String::new();
-    if errors
-        .errors()
-        .iter()
-        .any(|e| matches!(e, RuleError::Conflict { .. }))
-    {
-        help.push_str(&format!(
-            "\nhelp: a path may be named by only one of {FLAGS}"
-        ));
-    }
-    if errors
-        .errors()
-        .iter()
-        .any(|e| matches!(e, RuleError::Unreachable { .. }))
-    {
-        help.push_str(&format!(
-            "\nhelp: {FLAGS} take the whole value at their path, so a rule below one can never fire"
-        ));
-    }
-    anyhow!("{errors}{help}")
-}
-
-/// Same division of labour for the errors a rule raises during the merge.
-fn name_the_flag(err: MergeError) -> anyhow::Error {
-    let help = match err {
-        MergeError::Locked { .. } => {
-            "help: --fail pins a path to the first layer that sets it; drop the flag or the later value"
-        }
-        MergeError::AppendKind { .. } => "help: --append needs an array on both sides",
-        MergeError::TypeConflict { .. } => return err.into(),
-    };
-    anyhow!("{err}\n{help}")
 }
 
 /// The same division of labour for interpolation.

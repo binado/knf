@@ -3,35 +3,24 @@
 mod common;
 
 use common::ir;
-use knf_core::{MergeError, MergeOptions, Rules, Strategy, Value, merge_with};
+use knf_core::{MergeError, MergeOptions, Value, merge_with};
 
-use ErrKind::{AppendKind, Locked, TypeConflict};
 use Expect::{Doc, Error};
-use Strategy::{Append, Fail, Replace};
 
 struct Case {
     name: &'static str,
     /// JSON literals, merged left to right.
     layers: &'static [&'static str],
     strict: bool,
-    /// Dotted paths and their strategies, in no meaningful order.
-    rules: &'static [(&'static str, Strategy)],
+    shallow: bool,
     expect: Expect,
 }
 
 enum Expect {
     /// A JSON literal the merge must equal.
     Doc(&'static str),
-    /// This kind of error, at this dotted key path.
-    Error(ErrKind, &'static str),
-}
-
-/// Which [`MergeError`] a case expects, without repeating its payload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ErrKind {
-    TypeConflict,
-    Locked,
-    AppendKind,
+    /// A type conflict at this dotted key path.
+    Error(&'static str),
 }
 
 const fn ok(name: &'static str, layers: &'static [&'static str], doc: &'static str) -> Case {
@@ -39,7 +28,7 @@ const fn ok(name: &'static str, layers: &'static [&'static str], doc: &'static s
         name,
         layers,
         strict: false,
-        rules: &[],
+        shallow: false,
         expect: Doc(doc),
     }
 }
@@ -49,7 +38,7 @@ const fn strict(name: &'static str, layers: &'static [&'static str], doc: &'stat
         name,
         layers,
         strict: true,
-        rules: &[],
+        shallow: false,
         expect: Doc(doc),
     }
 }
@@ -59,60 +48,39 @@ const fn conflict(name: &'static str, layers: &'static [&'static str], path: &'s
         name,
         layers,
         strict: true,
-        rules: &[],
-        expect: Error(TypeConflict, path),
+        shallow: false,
+        expect: Error(path),
     }
 }
 
-const fn ruled(
-    name: &'static str,
-    layers: &'static [&'static str],
-    rules: &'static [(&'static str, Strategy)],
-    expect: Expect,
-) -> Case {
+const fn shallow(name: &'static str, layers: &'static [&'static str], expect: Expect) -> Case {
     Case {
         name,
         layers,
         strict: false,
-        rules,
+        shallow: true,
         expect,
     }
 }
 
-const fn strict_ruled(
+const fn strict_shallow(
     name: &'static str,
     layers: &'static [&'static str],
-    rules: &'static [(&'static str, Strategy)],
     expect: Expect,
 ) -> Case {
     Case {
         name,
         layers,
         strict: true,
-        rules,
+        shallow: true,
         expect,
     }
 }
 
-/// Rules are validated once per case; every `CASES` entry must be a legal set.
 fn options(case: &Case) -> MergeOptions {
-    let rules = case.rules.iter().map(|(dotted, strategy)| {
-        (
-            dotted.split('.').map(str::to_string).collect::<Vec<_>>(),
-            *strategy,
-        )
-    });
     MergeOptions {
         strict: case.strict,
-        rules: Rules::build(rules).expect(case.name),
-    }
-}
-
-fn err_kind(err: &MergeError) -> ErrKind {
-    match err {
-        MergeError::TypeConflict { .. } => TypeConflict,
-        MergeError::Locked { .. } => Locked,
-        MergeError::AppendKind { .. } => AppendKind,
+        shallow: case.shallow,
     }
 }
 
@@ -170,45 +138,22 @@ const CASES: &[Case] = &[
     conflict("conflict reports a nested path", &[r#"{"a":{"b":{"c":1}}}"#, r#"{"a":{"b":{"c":[]}}}"#], "a.b.c"),
     conflict("conflict from the third layer", &[r#"{"a":1}"#, r#"{"a":2}"#, r#"{"a":"three"}"#], "a"),
 
-    // --- per-path strategies ------------------------------------------------
-    ruled("append concatenates base ++ overlay", &[r#"{"a":[1,2]}"#, r#"{"a":[3]}"#], &[("a", Append)], Doc(r#"{"a":[1,2,3]}"#)),
-    ruled("append across three layers", &[r#"{"a":[1]}"#, r#"{"a":[2]}"#, r#"{"a":[3]}"#], &[("a", Append)], Doc(r#"{"a":[1,2,3]}"#)),
-    // The seed is empty, so the first layer *inserts*: one layer must never
-    // double its own array.
-    ruled("append inserts where the key is absent", &[r#"{"a":[1,2]}"#], &[("a", Append)], Doc(r#"{"a":[1,2]}"#)),
-    ruled("append inserts into a missing branch", &[r#"{"b":1}"#, r#"{"a":[1]}"#], &[("a", Append)], Doc(r#"{"b":1,"a":[1]}"#)),
-    ruled("append needs an array on the left", &[r#"{"a":1}"#, r#"{"a":[2]}"#], &[("a", Append)], Error(AppendKind, "a")),
-    ruled("append needs an array on the right", &[r#"{"a":[1]}"#, r#"{"a":2}"#], &[("a", Append)], Error(AppendKind, "a")),
-    ruled("append applies at depth", &[r#"{"a":{"b":[1]}}"#, r#"{"a":{"b":[2]}}"#], &[("a.b", Append)], Doc(r#"{"a":{"b":[1,2]}}"#)),
-
-    // Replace is the whole point: object over object stops recursing, so keys
-    // the overlay omits are gone.
-    ruled("replace does not recurse into objects", &[r#"{"a":{"x":1,"y":2}}"#, r#"{"a":{"y":9}}"#], &[("a", Replace)], Doc(r#"{"a":{"y":9}}"#)),
-    ruled("replace still inserts where the key is absent", &[r#"{"b":1}"#, r#"{"a":{"y":9}}"#], &[("a", Replace)], Doc(r#"{"b":1,"a":{"y":9}}"#)),
-    ruled("replace at depth leaves the parent merging", &[r#"{"a":{"b":{"x":1},"c":{"x":1}}}"#, r#"{"a":{"b":{"y":2},"c":{"y":2}}}"#], &[("a.b", Replace)], Doc(r#"{"a":{"b":{"y":2},"c":{"x":1,"y":2}}}"#)),
-
-    // Fail pins a path to whichever layer defined it first.
-    ruled("fail allows the first insert", &[r#"{"a":1}"#], &[("a", Fail)], Doc(r#"{"a":1}"#)),
-    ruled("fail rejects the second layer", &[r#"{"a":1}"#, r#"{"a":2}"#], &[("a", Fail)], Error(Locked, "a")),
-    ruled("fail rejects an identical value too", &[r#"{"a":1}"#, r#"{"a":1}"#], &[("a", Fail)], Error(Locked, "a")),
-    ruled("fail reports a nested path", &[r#"{"a":{"b":1}}"#, r#"{"a":{"b":2}}"#], &[("a.b", Fail)], Error(Locked, "a.b")),
-    // A later layer can also lose the pinned value by replacing an *ancestor*
-    // wholesale, since that never visits `a.b` to consult its rule directly.
-    // Without threading rules through that fallback, this silently dropped a.b.
-    ruled("fail catches an ancestor replacing it wholesale", &[r#"{"a":{"b":1}}"#, r#"{"a":"oops"}"#], &[("a.b", Fail)], Error(Locked, "a.b")),
-    // Append has no equivalent protection: an ancestor replacement leaves no
-    // array on either side to concatenate, so there is nothing to error about.
-    ruled("append has no array left to protect once an ancestor is replaced", &[r#"{"a":{"b":[1]}}"#, r#"{"a":"oops"}"#], &[("a.b", Append)], Doc(r#"{"a":"oops"}"#)),
-
-    // A rule is exact: siblings and parents merge as usual.
-    ruled("a rule at a.b leaves a.c alone", &[r#"{"a":{"b":[1],"c":[1]}}"#, r#"{"a":{"b":[2],"c":[2]}}"#], &[("a.b", Append)], Doc(r#"{"a":{"b":[1,2],"c":[2]}}"#)),
-    ruled("an unrelated rule changes nothing", &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":2}}"#], &[("zz", Replace)], Doc(r#"{"a":{"x":1,"y":2}}"#)),
+    // --- shallow: jq's `+` rather than `*` ---------------------------------
+    // Top-level keys only: a colliding object is taken whole, so keys the
+    // overlay omits are gone.
+    shallow("shallow takes a nested object whole", &[r#"{"a":{"x":1,"y":2}}"#, r#"{"a":{"y":9}}"#], Doc(r#"{"a":{"y":9}}"#)),
+    shallow("shallow keeps untouched top-level keys", &[r#"{"a":{"x":1},"b":1}"#, r#"{"a":{"y":2}}"#], Doc(r#"{"a":{"y":2},"b":1}"#)),
+    shallow("shallow still inserts new keys", &[r#"{"a":1}"#, r#"{"b":{"c":2}}"#], Doc(r#"{"a":1,"b":{"c":2}}"#)),
+    shallow("shallow replaces arrays too", &[r#"{"a":[1,2]}"#, r#"{"a":[3]}"#], Doc(r#"{"a":[3]}"#)),
+    shallow("shallow one layer is a no-op", &[r#"{"a":{"b":[1]}}"#], Doc(r#"{"a":{"b":[1]}}"#)),
+    shallow("shallow across three layers", &[r#"{"a":{"x":1}}"#, r#"{"a":5}"#, r#"{"a":{"y":2}}"#], Doc(r#"{"a":{"y":2}}"#)),
 
     // --strict is orthogonal: it kind-checks wherever a replacement happens,
-    // and --replace makes object-over-object one of those places.
-    strict_ruled("strict kind-checks under replace", &[r#"{"a":{"x":1}}"#, r#"{"a":5}"#], &[("a", Replace)], Error(TypeConflict, "a")),
-    strict_ruled("strict allows a same-kind replace", &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":2}}"#], &[("a", Replace)], Doc(r#"{"a":{"y":2}}"#)),
-    strict_ruled("strict has nothing to check on append", &[r#"{"a":[1]}"#, r#"{"a":[2]}"#], &[("a", Append)], Doc(r#"{"a":[1,2]}"#)),
+    // and under shallow that is every colliding top-level key.
+    strict_shallow("strict kind-checks a shallow replace", &[r#"{"a":{"x":1}}"#, r#"{"a":5}"#], Error("a")),
+    strict_shallow("strict allows a same-kind shallow replace", &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":"s"}}"#], Doc(r#"{"a":{"y":"s"}}"#)),
+    // Nothing below the top level is compared: `x` changes kind unseen.
+    strict_shallow("strict shallow never looks below the top level", &[r#"{"a":{"x":1}}"#, r#"{"a":{"x":"s"}}"#], Doc(r#"{"a":{"x":"s"}}"#)),
 ];
 
 #[test]
@@ -224,13 +169,7 @@ fn table() {
             (Doc(want), Err(e)) => {
                 panic!("case `{}`: expected {want}, got error: {e}", case.name);
             }
-            (Error(kind, want), Err(e)) => {
-                assert_eq!(
-                    err_kind(&e),
-                    *kind,
-                    "case `{}`: wrong error: {e}",
-                    case.name
-                );
+            (Error(want), Err(e)) => {
                 assert_eq!(
                     e.path().join("."),
                     *want,
@@ -238,9 +177,9 @@ fn table() {
                     case.name
                 );
             }
-            (Error(kind, want), Ok(got)) => {
+            (Error(want), Ok(got)) => {
                 panic!(
-                    "case `{}`: expected {kind:?} at `{want}`, merged to {got:?}",
+                    "case `{}`: expected a type conflict at `{want}`, merged to {got:?}",
                     case.name
                 );
             }
@@ -269,7 +208,7 @@ fn merge_into_matches_merge_with() {
 #[test]
 fn merge_is_last_wins() {
     for case in CASES {
-        if case.strict || !case.rules.is_empty() {
+        if case.strict || case.shallow {
             continue;
         }
         let Doc(want) = case.expect else {
@@ -325,50 +264,12 @@ fn datetime_conflicts_with_string_under_strict() {
         &MergeOptions::STRICT,
     )
     .unwrap_err();
-    match err {
-        MergeError::TypeConflict {
-            path,
-            expected,
-            found,
-        } => {
-            assert_eq!(path, ["a"]);
-            assert_eq!(expected, "datetime");
-            assert_eq!(found, "string");
-        }
-        other => panic!("expected a type conflict, got {other}"),
-    }
-}
-
-/// The two rule-driven errors, whose text is what a user acts on. Neither may
-/// name a flag: `--append` and `--fail` are the caller's words, not the core's.
-#[test]
-fn rule_error_messages_carry_paths_only() {
-    let locked = merge_with(
-        [ir(r#"{"db":{"host":"a"}}"#), ir(r#"{"db":{"host":"b"}}"#)],
-        &MergeOptions {
-            strict: false,
-            rules: Rules::build([(vec!["db".into(), "host".into()], Fail)]).expect("valid"),
-        },
-    )
-    .unwrap_err();
-    assert_eq!(
-        locked.to_string(),
-        "`db.host` is locked: an earlier layer already set it"
-    );
-
-    let bad_append = merge_with(
-        [
-            ir(r#"{"plugins":"auth"}"#),
-            ir(r#"{"plugins":["metrics"]}"#),
-        ],
-        &MergeOptions {
-            strict: false,
-            rules: Rules::build([(vec!["plugins".into()], Append)]).expect("valid"),
-        },
-    )
-    .unwrap_err();
-    assert_eq!(
-        bad_append.to_string(),
-        "cannot append array to string at `plugins`"
-    );
+    let MergeError::TypeConflict {
+        path,
+        expected,
+        found,
+    } = err;
+    assert_eq!(path, ["a"]);
+    assert_eq!(expected, "datetime");
+    assert_eq!(found, "string");
 }

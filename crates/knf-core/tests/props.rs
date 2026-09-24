@@ -1,8 +1,6 @@
 //! Two cheap properties that catch real bugs in the recursion.
 
-// `Strategy` is proptest's central trait, so the merge strategy is aliased
-// rather than shadowing it in a file full of `impl Strategy<Value = _>`.
-use knf_core::{Map, MergeOptions, Number, Rules, Strategy as Rule, Value, merge_into, merge_with};
+use knf_core::{Map, MergeOptions, Number, Value, merge_into, merge_with};
 use proptest::prelude::*;
 
 /// Arbitrary IR values, deliberately without floats so that equality is total —
@@ -37,20 +35,13 @@ fn arb_doc() -> impl Strategy<Value = Value> {
     arb_object(arb_value())
 }
 
-/// Valid rule sets over the same small key alphabet as [`arb_doc`], so the
-/// rules actually land on paths the document has.
-///
-/// Paths are non-empty, matching every rule a command line can express; the
-/// empty path names the accumulator itself, which is seeded rather than absent.
-fn arb_rules() -> impl Strategy<Value = Rules> {
-    let strategy = prop_oneof![Just(Rule::Append), Just(Rule::Replace), Just(Rule::Fail)];
-    let path = prop::collection::vec("[a-c]{1,2}", 1..3);
-    prop::collection::vec((path, strategy), 0..4)
-        .prop_filter_map("rule sets must be valid", |rules| Rules::build(rules).ok())
-}
-
 fn merged(mut base: Value, over: Value) -> Value {
     merge_into(&mut base, over, &MergeOptions::LAST_WINS).expect("non-strict merge cannot fail");
+    base
+}
+
+fn shallow(mut base: Value, over: Value) -> Value {
+    merge_into(&mut base, over, &MergeOptions::SHALLOW).expect("non-strict merge cannot fail");
     base
 }
 
@@ -80,15 +71,34 @@ proptest! {
         }
     }
 
-    /// One layer is still the identity, whatever the rules say. Nothing in a
-    /// rule set may fire against the empty seed: every key is *absent*, so it is
-    /// inserted rather than combined. This is what `--append` most threatens —
-    /// a lone layer's array must not double — and what the byte-level no-op of
-    /// `knf a.json` rests on.
+    /// One layer is still the identity under shallow merge: against the empty
+    /// seed every key is absent, so it is inserted rather than replaced. This is
+    /// what the byte-level no-op of `knf --shallow a.json` rests on.
     #[test]
-    fn a_single_layer_is_identity_for_any_rule_set(a in arb_doc(), rules in arb_rules()) {
-        let opts = MergeOptions { strict: false, rules };
-        let got = merge_with([a.clone()], &opts).expect("no rule fires against an empty seed");
+    fn a_single_layer_is_identity_under_shallow(a in arb_doc()) {
+        let got = merge_with([a.clone()], &MergeOptions::SHALLOW).expect("non-strict");
         prop_assert_eq!(got, a);
+    }
+
+    /// Shallow merge is jq's `a + b`: every top-level key of `b` is assigned
+    /// over `a` whole, and nothing below the top level is looked at.
+    #[test]
+    fn shallow_assigns_top_level_keys(a in arb_doc(), b in arb_doc()) {
+        let (Value::Object(mut want), Value::Object(over)) = (a.clone(), b.clone()) else {
+            unreachable!("arb_doc generates objects")
+        };
+        for (k, v) in over {
+            want.insert(k, v);
+        }
+        prop_assert_eq!(shallow(a, b), Value::Object(want));
+    }
+
+    /// Unlike the deep merge, shallow merge is associative — a scalar shadowing
+    /// an object loses nothing a later object could have merged back into.
+    #[test]
+    fn shallow_is_associative(a in arb_doc(), b in arb_doc(), c in arb_doc()) {
+        let left = shallow(shallow(a.clone(), b.clone()), c.clone());
+        let right = shallow(a, shallow(b, c));
+        prop_assert_eq!(left, right);
     }
 }

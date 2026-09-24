@@ -14,12 +14,10 @@
 //! paths that both the merge errors and `${...}` references have to display.
 
 mod path;
-mod rules;
 mod strict;
 mod value;
 
 pub use path::{PathError, RefPath, Seg, render_path};
-pub use rules::{RuleError, RuleErrors, Rules, Strategy};
 pub use value::{Map, Number, Value};
 
 use path::render_keys;
@@ -30,22 +28,28 @@ use path::render_keys;
 /// a second consumer enabled it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MergeOptions {
+    /// Error when a layer changes the kind of an existing key.
     pub strict: bool,
-    /// Per-path overrides of the default merge. An empty set is the default
-    /// merge everywhere.
-    pub rules: Rules,
+    /// Replace top-level keys wholesale instead of recursing into them — jq's
+    /// `a + b` rather than `a * b`.
+    pub shallow: bool,
 }
 
 impl MergeOptions {
-    /// The default: last layer wins, no type checking.
+    /// The default: deep merge, last layer wins, no type checking.
     pub const LAST_WINS: Self = Self {
         strict: false,
-        rules: Rules::EMPTY,
+        shallow: false,
     };
     /// Error when a layer changes the kind of an existing key.
     pub const STRICT: Self = Self {
         strict: true,
-        rules: Rules::EMPTY,
+        shallow: false,
+    };
+    /// Top-level keys only: a later layer's value replaces the earlier one whole.
+    pub const SHALLOW: Self = Self {
+        strict: false,
+        shallow: true,
     };
 }
 
@@ -63,25 +67,13 @@ pub enum MergeError {
         expected: &'static str,
         found: &'static str,
     },
-    /// A layer supplied a value for a path pinned by [`Strategy::Fail`].
-    #[error("`{}` is locked: an earlier layer already set it", render_keys(path))]
-    Locked { path: Vec<String> },
-    /// [`Strategy::Append`] met something other than two arrays.
-    #[error("cannot append {found} to {base} at `{}`", render_keys(path))]
-    AppendKind {
-        path: Vec<String>,
-        base: &'static str,
-        found: &'static str,
-    },
 }
 
 impl MergeError {
     /// The dotted key path the conflict occurred at.
     pub fn path(&self) -> &[String] {
         match self {
-            Self::TypeConflict { path, .. }
-            | Self::Locked { path }
-            | Self::AppendKind { path, .. } => path,
+            Self::TypeConflict { path, .. } => path,
         }
     }
 }
@@ -90,12 +82,14 @@ impl MergeError {
 ///
 /// Objects recurse per key. Arrays, scalars, datetimes and null all replace
 /// wholesale — notably arrays are never index-merged or concatenated, and null
-/// is an ordinary value that overwrites rather than a delete instruction.
+/// is an ordinary value that overwrites rather than a delete instruction. This
+/// is jq's `a * b`.
 ///
-/// [`MergeOptions::rules`] overrides that at the paths it names, and only there.
+/// Under [`MergeOptions::shallow`] only the top level is merged key by key;
+/// every colliding value is replaced whole, objects included — jq's `a + b`.
 pub fn merge_into(base: &mut Value, over: Value, opts: &MergeOptions) -> Result<(), MergeError> {
     let mut path = Vec::new();
-    apply(base, over, opts, &mut path, Some(&opts.rules))
+    merge_at(base, over, opts, &mut path)
 }
 
 /// Folds a list of layers into one document, last-wins, seeded with an empty object.
@@ -107,20 +101,18 @@ pub fn merge(layers: impl IntoIterator<Item = Value>) -> Result<Value, MergeErro
 
 /// Folds a list of layers into one document, seeded with an empty object.
 ///
-/// The fold must be strictly left over the *flat* layer list. Merge is not
-/// associative — any scalar shadowing an object breaks it:
+/// The fold must be strictly left over the *flat* layer list. The deep merge is
+/// not associative — any scalar shadowing an object breaks it:
 ///
 /// ```text
-/// {a:{b:1}} + {a:5} + {a:{c:2}}
+/// {a:{b:1}} * {a:5} * {a:{c:2}}
 ///   left-assoc  -> {a:{c:2}}
 ///   right-assoc -> {a:{b:1,c:2}}
 /// ```
 ///
 /// So callers must never merge subgroups and then combine the results.
-/// Flatten first, fold second.
-///
-/// [`Strategy::Append`] does not reintroduce the problem: concatenation is
-/// associative, so strict mode still buys associativity with rules in play.
+/// Flatten first, fold second. (The shallow merge happens to be associative,
+/// but the fold does not rely on it.)
 pub fn merge_with(
     layers: impl IntoIterator<Item = Value>,
     opts: &MergeOptions,
@@ -128,98 +120,42 @@ pub fn merge_with(
     let mut acc = Value::Object(Map::new());
     let mut path = Vec::new();
     for layer in layers {
-        apply(&mut acc, layer, opts, &mut path, Some(&opts.rules))?;
+        merge_at(&mut acc, layer, opts, &mut path)?;
         debug_assert!(path.is_empty(), "breadcrumb leaked between layers");
     }
     Ok(acc)
 }
 
-/// Dispatches one node to its strategy. `rules` is the subtree of rules rooted
-/// at `path`, so the lookup is one `BTreeMap` probe per level and `None`
-/// short-circuits everything below it.
-///
-/// Reached only where `base` already holds a value: a key the accumulator does
-/// not have yet is inserted without consulting any strategy, which is what
-/// keeps [`Fail`](Strategy::Fail) meaning "the first layer to define this pins
-/// it" and keeps [`Append`](Strategy::Append) from doubling a lone layer's
-/// array against the empty seed.
-fn apply(
-    base: &mut Value,
-    over: Value,
-    opts: &MergeOptions,
-    path: &mut Vec<String>,
-    rules: Option<&Rules>,
-) -> Result<(), MergeError> {
-    match rules.and_then(Rules::strategy) {
-        None => merge_at(base, over, opts, path, rules),
-        Some(Strategy::Replace) => replace(base, over, opts, path),
-        Some(Strategy::Append) => append(base, over, path),
-        Some(Strategy::Fail) => Err(MergeError::Locked { path: path.clone() }),
-    }
-}
-
 /// The recursive worker. `path` is a breadcrumb threaded by push/pop so that a
-/// conflict can report where it happened without every frame allocating;
-/// `rules` narrows on the same descent.
+/// conflict can report where it happened without every frame allocating.
+///
+/// Shallow mode needs no depth counter: it replaces at the first collision
+/// below the root, so the walk never gets deeper than one level.
 fn merge_at(
     base: &mut Value,
     over: Value,
     opts: &MergeOptions,
     path: &mut Vec<String>,
-    rules: Option<&Rules>,
 ) -> Result<(), MergeError> {
     match (base, over) {
         (Value::Object(base_map), Value::Object(over_map)) => {
             for (k, v) in over_map {
-                let child = rules.and_then(|r| r.child(&k));
                 if let Some(slot) = base_map.get_mut(&k) {
                     path.push(k);
-                    apply(slot, v, opts, path, child)?;
+                    if opts.shallow {
+                        replace(slot, v, opts, path)?;
+                    } else {
+                        merge_at(slot, v, opts, path)?;
+                    }
                     path.pop();
                 } else {
-                    // No collision, so no strategy applies.
                     base_map.insert(k, v);
                 }
             }
             Ok(())
         }
-        (base, over) => {
-            if let Some(rules) = rules
-                && let Some(locked) = locked_path(base, rules)
-            {
-                let mut path = path.clone();
-                path.extend(locked);
-                return Err(MergeError::Locked { path });
-            }
-            replace(base, over, opts, path)
-        }
+        (base, over) => replace(base, over, opts, path),
     }
-}
-
-/// The path to a [`Fail`](Strategy::Fail)-protected key that `base` already
-/// holds a value at, if any is nested under `rules`.
-///
-/// This is the ancestor-replacement counterpart to the direct check in
-/// [`apply`]: `merge_at` only recurses key-by-key on an `(Object, Object)`
-/// pair, so a layer that replaces an *ancestor* of a locked path wholesale
-/// (`db.host` pinned, a later layer sets `db` itself to a string) never
-/// visits `db.host` and so never consults its rule. Without this, `--fail`
-/// would silently stop meaning "pinned" the moment a layer reached far enough
-/// up the tree. `--append`'s protection does not need the same treatment: an
-/// ancestor replacement leaves no array on either side to concatenate, so
-/// there is nothing for it to protect there.
-fn locked_path(base: &Value, rules: &Rules) -> Option<Vec<String>> {
-    if rules.strategy() == Some(Strategy::Fail) {
-        return Some(Vec::new());
-    }
-    let Value::Object(map) = base else {
-        return None;
-    };
-    rules.children().find_map(|(key, child)| {
-        let mut rest = locked_path(map.get(key)?, child)?;
-        rest.insert(0, key.to_string());
-        Some(rest)
-    })
 }
 
 fn replace(
@@ -233,20 +169,4 @@ fn replace(
     }
     *base = over;
     Ok(())
-}
-
-/// Concatenates base ++ overlay. The one place a layer adds to a value instead
-/// of replacing it, so both sides must really be arrays.
-fn append(base: &mut Value, over: Value, path: &[String]) -> Result<(), MergeError> {
-    match (base, over) {
-        (Value::Array(base_items), Value::Array(over_items)) => {
-            base_items.extend(over_items);
-            Ok(())
-        }
-        (base, over) => Err(MergeError::AppendKind {
-            path: path.to_vec(),
-            base: base.kind(),
-            found: over.kind(),
-        }),
-    }
 }

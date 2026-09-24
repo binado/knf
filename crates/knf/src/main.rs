@@ -12,10 +12,10 @@ use std::io::Write;
 
 use anyhow::bail;
 use clap::Parser;
-use knf::{Format, Map, MergeOpts, PathLeaf, Rules, Strategy, format, load_layers, merge_layers};
+use knf::{Format, Map, MergeOpts, PathLeaf, format, load_layers, merge_layers};
 
 use cli::Cli;
-use explain::{explain_pipeline, explain_rules, name_the_rule_flag, name_the_set_flag};
+use explain::{explain_pipeline, name_the_set_flag};
 
 fn main() {
     // clap handles --help/--version and exits 2 on usage errors.
@@ -37,7 +37,7 @@ fn main() {
 /// `Value`, the fold runs once, and the output format is only consulted at emit.
 /// Nothing about JSON or TOML reaches the merge.
 fn run(cli: Cli) -> anyhow::Result<()> {
-    // Before anything is read: a broken rule set is a mistake in the command
+    // Before anything is read: a malformed --set is a mistake in the command
     // line, and saying so must not wait on the files existing or parsing.
     let opts = merge_opts(&cli)?;
 
@@ -55,34 +55,15 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     write_stdout(&text)
 }
 
-/// Builds the merge knobs, validating the whole rule set and every `--set`
-/// expression up front.
+/// Builds the merge knobs, validating every `--set` expression up front.
 ///
-/// Fallible, and called before any input is read: both come from argv alone, so
-/// nothing about the files can change whether they are legal.
+/// Fallible, and called before any input is read: the expressions come from
+/// argv alone, so nothing about the files can change whether they are legal.
 fn merge_opts(cli: &Cli) -> anyhow::Result<MergeOpts> {
-    let flags = [
-        ("--append", &cli.append, Strategy::Append),
-        ("--replace", &cli.replace, Strategy::Replace),
-        ("--fail", &cli.fail, Strategy::Fail),
-    ];
-    let mut rules: Vec<(Vec<String>, Strategy)> = Vec::new();
-    for (flag, paths, strategy) in flags {
-        for path in paths {
-            // The one write-side predicate, run per flag so the error can
-            // name it: rules name keys, never array elements.
-            let keys = path
-                .clone()
-                .try_into_keys()
-                .map_err(|err| name_the_rule_flag(err, flag))?;
-            rules.push((keys, strategy));
-        }
-    }
-
     // --set layers are terminal: appended after every file. The RHS parses as
     // JSON with a string fallback, which is `knf-config`'s job. The conversion
-    // is also where a bracketed path is rejected, so it runs with the rule set
-    // above: up front, not after the files exist or parse.
+    // is also where a bracketed path is rejected, so it runs up front, not
+    // after the files exist or parse.
     let mut overlays: Vec<Map> = Vec::with_capacity(cli.set.len());
     for path_leaf in &cli.set {
         let typed = PathLeaf::<serde_json::Value>::from(path_leaf.clone());
@@ -98,7 +79,7 @@ fn merge_opts(cli: &Cli) -> anyhow::Result<MergeOpts> {
     Ok(MergeOpts {
         input_format: cli.input_format.map(Format::from),
         strict: cli.strict,
-        rules: Rules::build(rules).map_err(explain_rules)?,
+        shallow: cli.shallow,
         overlays,
         interpolate: cli.interpolate,
     })

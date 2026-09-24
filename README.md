@@ -49,7 +49,7 @@ use knf::{MergeOpts, merge};
 let merged = merge(&["base.toml", "prod.toml"], MergeOpts::default())?;
 ```
 
-`MergeOpts` also accepts strict mode, per-path rules, in-memory terminal
+`MergeOpts` also accepts strict mode, shallow merge, in-memory terminal
 overlays, an input-format override, and opt-in interpolation. An overlay is a
 `knf::Map` rather than a value, for the reason a file layer must be an object at
 the top level: a scalar layer would replace the whole document instead of
@@ -73,7 +73,7 @@ caller has no command line to act on. A null reaching TOML, for instance, is
 reported as the paths it was found at; whether the remedy is spelled `-f json`
 is your interface's business, not the library's.
 
-`Map`, `Value`, `Rules`, `Strategy`, `Format`, `Env` and every error type are
+`Map`, `Value`, `Format`, `Env` and every error type are
 re-exported from `knf`, along with what they are made of — `Number` inside
 `Value::Number`, `Cycle` and `Syntax` inside `InterpError` — so a consumer needs
 no direct dependency on `knf-core` or `knf-interp` to write any of it down.
@@ -105,8 +105,8 @@ goes to stdout.
 
 Two consequences worth knowing:
 
-- **Arrays replace**, unless `--append` names the path. Index-merging would turn
-  `["a"]` over `["x","y","z"]` into `["a","y","z"]` — a value nobody wrote.
+- **Arrays replace**, always. Index-merging would turn `["a"]` over
+  `["x","y","z"]` into `["a","y","z"]` — a value nobody wrote.
 - **Null is a value, not a delete.** So `knf a.json` with one argument is always
   a byte-level no-op.
 
@@ -118,21 +118,20 @@ $ knf a.json b.json --strict
 error: type conflict at `server`: object would be replaced by number
 ```
 
-### Override merge behavior on specific paths
+### Shallow merge
 
-What if a document has one array that should be appended to, and not replaced? 
-`knf` understands how to override the merge behavior on a specifc path: 
-```bash
-knf base.toml prod.toml --append plugins    # concatenate, base ++ prod
-knf base.toml prod.toml --replace db        # take prod's [db] whole
-knf base.toml prod.toml --fail db.host      # error if prod overrides db.host
-```
+The default is a deep merge. `--shallow` merges top-level keys only: a later
+layer's value replaces the earlier one whole, so keys it omits are dropped.
+These are jq's two object operators:
 
-| Flag | At that path |
-| --- | --- |
-| `--append` | concatenate; both sides must be arrays |
-| `--replace` | assign wholesale, no recursion, even object over object |
-| `--fail` | error; the first layer to define the path pins it |
+| knf | jq | `{"db":{"host":"a","port":1}}` then `{"db":{"host":"b"}}` |
+| --- | --- | --- |
+| `knf a.json b.json` | `a * b` | `{"db":{"host":"b","port":1}}` |
+| `knf a.json b.json --shallow` | `a + b` | `{"db":{"host":"b"}}` |
+
+Arrays replace wholesale in both, exactly as in jq; nothing is ever
+concatenated. `--set` layers are ordinary layers, so `--shallow --set
+db.host=x` leaves `db` with nothing but `host`.
 
 ### Variable and environment references
 
