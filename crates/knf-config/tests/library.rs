@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use knf::{Map, MergeOpts, Rules, Strategy, Value, format::Format};
+use knf::{Map, MergeOpts, Value, format::Format};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -42,22 +42,21 @@ fn merge_loads_parses_and_merges_paths_without_a_cli() {
 }
 
 #[test]
-fn merge_options_cover_rules_terminal_overlays_and_interpolation() {
+fn merge_options_cover_shallow_terminal_overlays_and_interpolation() {
     let dir = tree(&[
         (
             "base.json",
-            r#"{"plugins":["auth"],"port":80,"root":"/srv"}"#,
+            r#"{"db":{"host":"a","port":1},"port":80,"root":"/srv"}"#,
         ),
-        ("prod.json", r#"{"plugins":["metrics"]}"#),
+        ("prod.json", r#"{"db":{"host":"b"}}"#),
     ]);
     let paths = [dir.path().join("base.json"), dir.path().join("prod.json")];
-    let rules = Rules::build([(vec!["plugins".into()], Strategy::Append)]).expect("valid rule");
     let overlay = overlay(json!({"port": 443, "data": "${root}/data"}));
 
     let merged = knf::merge(
         &paths,
         MergeOpts {
-            rules,
+            shallow: true,
             overlays: vec![overlay],
             interpolate: true,
             ..MergeOpts::default()
@@ -68,7 +67,7 @@ fn merge_options_cover_rules_terminal_overlays_and_interpolation() {
     assert_eq!(
         as_json(merged),
         json!({
-            "plugins": ["auth", "metrics"],
+            "db": {"host": "b"},
             "port": 443,
             "root": "/srv",
             "data": "/srv/data"

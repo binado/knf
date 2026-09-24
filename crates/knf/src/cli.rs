@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use knf::{Format, PathLeaf, RefPath};
+use knf::{Format, PathLeaf};
 
 /// `-f` and `--input-format`, as clap sees them.
 ///
@@ -40,15 +40,11 @@ mixed freely. Exactly one document goes to stdout.
   knf base.toml prod.toml
   knf base.json - --input-format json          # stdin as a layer
   knf defaults.json --set server.port=8080 -f toml
-  knf base.toml prod.toml --append plugins     # concatenate one array
+  knf base.toml prod.toml --shallow            # top-level keys only
 
-Objects merge key by key. Arrays, scalars and null all replace wholesale —
-null is an ordinary value that overwrites, not a delete instruction.
-
---append, --replace and --fail change that at the paths they name, and only
-there. A path may be named by at most one of them, and since all three consume
-the whole value at their path, no rule may sit below another. Rules are a set:
-their order never affects the output."
+Objects merge key by key, recursively. Arrays, scalars and null all replace
+wholesale — null is an ordinary value that overwrites, not a delete
+instruction. This is jq's `a * b`; --shallow gives jq's `a + b`."
 )]
 pub struct Cli {
     /// Files to merge as layers; `-` reads stdin
@@ -95,66 +91,24 @@ literally spelled a[0]; only a file can carry either."
     )]
     pub set: Vec<PathLeaf<String>>,
 
-    /// Concatenate arrays at this path instead of replacing them
+    /// Merge top-level keys only, replacing each value whole
     #[arg(
         long,
-        value_name = "KEY.PATH",
-        help_heading = "Merge rules",
         long_help = "\
-Concatenate arrays at this path instead of replacing them. Repeatable.
+Merge top-level keys only, replacing each value whole.
 
-Both sides must be arrays; anything else is an error. The path is only combined
-where the merge already has a value for it, so a lone layer's array is inserted
-as-is rather than doubled:
+The default is a deep merge, like jq's `a * b`: objects recurse key by key.
+--shallow is jq's `a + b`: a later layer's value for a top-level key replaces
+the earlier one entirely, so keys it omits are dropped:
 
-  knf base.toml prod.toml --append plugins    # base's plugins ++ prod's
+  knf base.toml prod.toml --shallow    # [db] is prod's [db], entirely
 
-Dotted paths address nested keys, so a key containing a literal dot cannot be
-named. An index like xs[0] cannot appear either: a rule names keys, never an
-array element."
+Arrays replace wholesale either way; nothing is ever concatenated.
+
+This applies to --set layers too, which are ordinary layers: --shallow
+--set db.host=x leaves db with nothing but host."
     )]
-    pub append: Vec<RefPath>,
-
-    /// Replace the value at this path wholesale, without merging into it
-    #[arg(
-        long,
-        value_name = "KEY.PATH",
-        help_heading = "Merge rules",
-        long_help = "\
-Replace the value at this path wholesale, without merging into it. Repeatable.
-
-Object over object stops recursing, so the later layer's table is taken whole
-and keys it omits are dropped:
-
-  knf base.toml prod.toml --replace db        # db is prod's db, entirely
-
-This applies to --set layers too, which are ordinary layers: --replace db
---set db.host=x leaves db with nothing but host.
-
-Dotted paths address nested keys, so a key containing a literal dot cannot be
-named. An index like xs[0] cannot appear either: a rule names keys, never an
-array element."
-    )]
-    pub replace: Vec<RefPath>,
-
-    /// Error if a later layer sets this path again
-    #[arg(
-        long,
-        value_name = "KEY.PATH",
-        help_heading = "Merge rules",
-        long_help = "\
-Error if a later layer sets this path again. Repeatable.
-
-The first layer to define the path pins it; the path may still be absent from
-every layer. Use it to protect a value that later layers must not override:
-
-  knf base.toml prod.toml --fail db.host
-
-Dotted paths address nested keys, so a key containing a literal dot cannot be
-named. An index like xs[0] cannot appear either: a rule names keys, never an
-array element."
-    )]
-    pub fail: Vec<RefPath>,
+    pub shallow: bool,
 
     /// Output format; required when inputs are mixed
     #[arg(short = 'f', long, value_name = "FORMAT")]

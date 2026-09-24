@@ -96,7 +96,7 @@ merging, so a JSON layer over a TOML layer needs no conversion in the middle. Fo
 crates appear only at the two boundaries, and the conversions live only in
 `crates/knf-config/src/value.rs`, called only from `crates/knf-config/src/format.rs`.
 
-Pipeline (`crates/knf/src/main.rs::run`): build `MergeOpts` — rules and every `--set`
+Pipeline (`crates/knf/src/main.rs::run`): build `MergeOpts` — flags and every `--set`
 expression, so a mistake in argv fails before any I/O → `load_layers` (read each
 positional, `format::parse` into `Value`) → `resolve_output_format` → `merge_layers`
 (append the overlays, `merge_with` over the flat list, `knf_interp::interpolate` if
@@ -107,8 +107,8 @@ the same two halves, minus the format decision.
 `load_layers`/`merge_layers` exists to hold that ordering. A missing `-f` is a mistake
 in argv alone; deciding it after the merge would queue it behind every error in the
 documents themselves, so the user would fix a type conflict, re-run, and only then
-learn about the flag — the same "one run at a time" pattern the rule-conflict message
-is built to avoid. Two CLI snapshots pin it.
+learn about the flag — errors should arrive in one run, not one run at a time. Two
+CLI snapshots pin it.
 
 **Interpolation runs once, on the merged document, never per layer.** Several
 consequences fall out of that placement and need no code: `--set` layers interpolate
@@ -117,35 +117,21 @@ was a string when it looked; `--null-as` is not interpolated (it runs later, and
 literal from argv); and a reference resolving to `Null` meets the existing TOML-null
 error and its existing escape.
 
-**Per-path strategies** (`knf-core/src/rules.rs`) live in the core because `merge_at`
-already threads the key path and the rule trie narrows on the same descent — pure data,
-no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every mention of
-`--append`, `--replace` and `--fail`: the core knows only `Strategy` names.
+**Two merge depths, named after jq's operators.** The default is a deep merge, jq's
+`a * b`; `MergeOptions::shallow` (`--shallow`) is jq's `a + b`, replacing each colliding
+top-level value whole. It is one branch in `merge_at` and nothing more: the seed and every
+layer are objects, so "replace at the first collision" *is* "top level only". There are
+deliberately no per-path rules — `--append`/`--replace`/`--fail` once existed and were
+removed as more machinery than the two common cases justify.
 
 ### Invariants worth not breaking
 
 - **The fold is strictly left over a flat layer list.** Merge is not associative (any
   scalar shadowing an object breaks it), so never merge subgroups and combine results.
   Flatten first, fold second. Strict mode rejects exactly the type changes that break
-  associativity, so under `--strict` the merge *is* associative.
-- **Arrays replace wholesale** unless `--append` names the path; never index-merge, and
-  never concatenate anywhere else.
-- **Rules are a set, not a list.** Flag order must never affect the output — the same
-  value `resolve_output_format` protects. `Rules::build` validates the finished set in
-  one pass (rather than an insert-time check) and reports every offender sorted, so an
-  illegal set produces an identical message whatever order the flags arrived in. A
-  conflict reports the *whole* set at that path, not a pair: three flags on one path is
-  one error naming all three, so the user never learns of them one run at a time.
-- **Terminal nesting is rejected up front.** Every `Strategy` stops the walk, so a rule
-  beneath another can never fire and is an error when the set is built — before any file
-  is read. The rationale is structural rather than a carve-out: the default merge is the
-  *absence* of a rule, not a variant, so there is nothing a deeper rule could sit under.
-  That is also why there is no `--merge` flag — without globs it could only ever be
-  redundant or unreachable.
-- **A strategy only applies where the accumulator already holds a value**; an absent key
-  is inserted regardless. That is what keeps `Fail` meaning "the first layer to define
-  this pins it" and keeps `Append` from doubling a lone layer's array against the empty
-  seed — see the identity property in `props.rs`.
+  associativity, so under `--strict` the merge *is* associative; the shallow merge is
+  associative anyway, a property in `props.rs`.
+- **Arrays replace wholesale**, in both depths; never index-merge, and never concatenate.
 - **Null is an ordinary value, not a delete instruction.** This is what makes
   `knf a.json` with one argument a byte-level no-op — a property tested in
   `crates/knf-core/tests/props.rs`.
@@ -218,8 +204,8 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
   A second namespace added later would change meaning for such a document; accepted
   knowingly.
 - **No library crate names a command-line flag.** Errors in the core carry key paths
-  and nothing else — no filenames, no layer indices, no flag names: `Locked` and
-  `AppendKind` must not say `--fail` or `--append`. Same rule in `knf-interp` (no
+  and nothing else — no filenames, no layer indices, no flag names: a
+  `TypeConflict` must not say `--strict`. Same rule in `knf-interp` (no
   `--interpolate`) and in `knf-config`, which is why the three load failures that used
   to say `--input-format` are the typed `LoadError` instead, and why `NullInToml`
   reports *where* the nulls are and leaves `-f json` and `--null-as` unsaid.
@@ -248,8 +234,8 @@ no new dependencies. Flag *parsing* stays in `crates/knf/`, and so does every me
 - `crates/knf-core/tests/cases.rs` is table-driven; adding a merge case is one line
   in `CASES`, written as JSON literals converted by `tests/common/mod.rs` (which
   duplicates ~20 lines of `knf-config/src/value.rs` on purpose — merge tests must not
-  depend on the crate that knows about formats). A `Case` holds `strict` and a `rules` slice rather than a
-  `MergeOptions`, so the table stays `const` and one line per case.
+  depend on the crate that knows about formats). A `Case` holds `strict` and `shallow`, so the
+  table stays `const` and one line per case.
 - `crates/knf-core/tests/props.rs` holds the proptest invariants above. Its value
   strategy excludes floats deliberately, so equality stays total.
 - `crates/knf-interp/tests/props.rs` holds the identity property, over its own small

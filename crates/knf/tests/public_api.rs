@@ -19,8 +19,8 @@ use std::str::FromStr;
 use knf::{
     BadDatetime, Cycle, Env, EnvValue, Format, IntegerOutOfRange, InterpError, LoadError, Map,
     MergeError, MergeOpts, NonFiniteFloat, NullInToml, Number, PathError, PathLeaf, Problem,
-    RefPath, RuleError, RuleErrors, Rules, STDIN, Seg, Strategy, Syntax, TomlError, Value,
-    json_or_string, load_layers, merge, merge_layers, merge_with_env, render_path,
+    RefPath, STDIN, Seg, Syntax, TomlError, Value, json_or_string, load_layers, merge,
+    merge_layers, merge_with_env, render_path,
 };
 
 /// The types a caller writes into its own signatures, named in signatures.
@@ -43,7 +43,7 @@ mod named {
         render_path(segs)
     }
 
-    pub fn knobs(_: &Map, _: &MergeOpts, _: &Rules, _: Strategy, _: Format, _: &dyn Env) {}
+    pub fn knobs(_: &Map, _: &MergeOpts, _: Format, _: &dyn Env) {}
 }
 
 /// Type position is the whole requirement for an error a caller matches on
@@ -52,8 +52,6 @@ mod named {
 #[allow(dead_code)]
 struct EveryError {
     merge: MergeError,
-    rule: RuleError,
-    rules: RuleErrors,
     path: PathError,
     load: LoadError,
     null: NullInToml,
@@ -91,17 +89,10 @@ fn the_public_surface_is_nameable_without_knf_core_or_knf_interp() {
 
     // The merge knobs, and a merged document whose numbers are `Number`s.
     let opts = MergeOpts {
-        rules: Rules::build(vec![(vec!["xs".to_string()], Strategy::Append)]).expect("one rule"),
+        shallow: true,
         ..MergeOpts::default()
     };
-    named::knobs(
-        &Map::new(),
-        &opts,
-        &Rules::default(),
-        Strategy::Replace,
-        Format::Json,
-        &knf::ProcessEnv,
-    );
+    named::knobs(&Map::new(), &opts, Format::Json, &knf::ProcessEnv);
 
     let tree = dir(&[
         ("a.json", r#"{"xs":[1],"port":8080}"#),
@@ -111,7 +102,7 @@ fn the_public_surface_is_nameable_without_knf_core_or_knf_interp() {
         &[tree.path().join("a.json"), tree.path().join("b.json")],
         opts,
     )
-    .expect("the rule appends");
+    .expect("a shallow merge");
     let Value::Object(map) = &merged else {
         panic!("the top level is an object")
     };

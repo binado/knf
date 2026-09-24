@@ -38,10 +38,7 @@ use knf_core::{MergeOptions as CoreMergeOptions, merge_with};
 /// [`Problem::Syntax`], and [`render_path`] is the only renderer for the
 /// [`Seg`]s a [`RefPath`] hands out. A consumer that had to add a `knf-core`
 /// dependency to write one of those down would make this surface a half-truth.
-pub use knf_core::{
-    Map, MergeError, Number, PathError, RefPath, RuleError, RuleErrors, Rules, Seg, Strategy,
-    Value, render_path,
-};
+pub use knf_core::{Map, MergeError, Number, PathError, RefPath, Seg, Value, render_path};
 pub use knf_interp::{Cycle, Env, EnvValue, InterpError, Problem, Syntax};
 
 pub use env::ProcessEnv;
@@ -100,8 +97,9 @@ pub struct MergeOpts {
     pub input_format: Option<Format>,
     /// Error when a layer changes the kind of an existing key.
     pub strict: bool,
-    /// Per-path overrides of the default merge strategy.
-    pub rules: Rules,
+    /// Merge top-level keys only, replacing each colliding value whole (jq's
+    /// `a + b`) instead of recursing into objects (jq's `a * b`).
+    pub shallow: bool,
     /// In-memory layers appended after every file, in order.
     ///
     /// Maps rather than [`Value`]s for the reason [`format::parse`] requires an
@@ -179,7 +177,7 @@ pub fn merge_layers(
 
     let core_opts = CoreMergeOptions {
         strict: opts.strict,
-        rules: opts.rules,
+        shallow: opts.shallow,
     };
     let merged = merge_with(layers, &core_opts)?;
     // After the merge, before the emit, and never per layer: a reference reads
