@@ -10,11 +10,12 @@ name = "knf-cli"
 # belong in the CLI changelog, since knf-cli is what ships both.
 changelog_include = ["knf-core", "knf-py"]
 
-# The Python module, the only PyPI package. Published from release-plz.yml when
-# the knf-cli-v* tag is pushed. Never on crates.io, and versioned by the workspace.
-# A package entry defaults publish to true, which release-plz rejects when
-# Cargo.toml sets publish = false, so both flags have to be explicit.
+# The Python module, the only PyPI package. Track its changes so Python-only
+# updates bump the shared workspace version and produce a knf-cli release tag.
+# Git-only mode does not publish the crate to crates.io. The workflow publishes
+# the PyPI wheels from the knf-cli tag; its changelog includes these commits.
 [[package]]
 name = "knf-py"
-release = false
+git_only = true
 publish = false
+changelog_update = false
