@@ -1,10 +1,11 @@
 [package]
 # `import knf`, published to PyPI as `pyknf` (see pyproject.toml here) and never
-# to crates.io. The `knf-cli` wheel and `cargo install knf-cli` build
-# `crates/knf`, which stays free of pyo3 (`cargo tree -p knf-cli` is the
-# enforcement in CI).
+# to crates.io. The wheel's `knf` command is a Python entry point that calls
+# into the same source as `crates/knf` (included from `src/lib.rs`). `cargo
+# install knf-cli` still builds that crate on its own, free of pyo3 (`cargo
+# tree -p knf-cli` is the enforcement in CI).
 name = "knf-py"
-description = "Python bindings for knf-core, bundled with the knf command line"
+description = "Python bindings for knf-core, with the knf command line"
 publish = false
 version.workspace = true
 edition.workspace = true
@@ -23,7 +24,11 @@ doctest = false
 
 # No `extension-module` feature: pyo3 deprecated it in favour of the
 # PYO3_BUILD_EXTENSION_MODULE environment variable, which maturin sets.
+# `clap` and `serde_json` are for the command line compiled into this library
+# from `crates/knf/src/main.rs`, not for the Python API.
 [dependencies]
 knf-core.workspace = true
 anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
 pyo3 = { version = "0.29", features = ["abi3-py39"] }

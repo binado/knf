@@ -314,8 +314,10 @@ name = "knf-py"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "clap",
  "knf-core",
  "pyo3",
+ "serde_json",
 ]
 
 [[package]]

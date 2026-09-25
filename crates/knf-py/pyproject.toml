@@ -4,8 +4,7 @@ build-backend = "maturin"
 
 [project]
 # PyPI's `knf` is an unrelated project, so the distribution is `pyknf` and the
-# import name stays `knf`. The `knf` executable is the separate `knf-cli` wheel,
-# pulled in as a dependency; the module never calls it, so any version will do.
+# import name stays `knf`. The wheel also installs the `knf` executable.
 name = "pyknf"
 dynamic = ["version"]
 description = "Merge layered JSON and TOML configuration files into a dict"
@@ -14,7 +13,6 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENSE"]
-dependencies = ["knf-cli>=0.3"]
 keywords = ["configuration", "json", "toml", "merge"]
 classifiers = [
   "License :: OSI Approved :: MIT License",
@@ -27,6 +25,9 @@ classifiers = [
 [project.urls]
 Repository = "https://github.com/binado/knf"
 Issues = "https://github.com/binado/knf/issues"
+
+[project.scripts]
+knf = "knf._cli:main"
 
 [tool.maturin]
 bindings = "pyo3"

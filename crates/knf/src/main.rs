@@ -19,9 +19,24 @@ use knf::{
 use cli::Cli;
 use explain::{explain_pipeline, name_the_set_flag};
 
+// Entry point for the `knf-cli` binary. `knf-py` includes this file and calls
+// `main_from` instead, so the function is unused in that compilation.
+#[allow(dead_code)]
 fn main() {
+    // `std::env::args` is right for the `knf-cli` binary. The pyknf wheel's
+    // command is a Python script, whose process argv starts with the interpreter,
+    // so that caller passes `sys.argv` to `main_from` instead.
+    main_from(std::env::args_os());
+}
+
+/// Runs the command line over `args`, whose first item is the program name.
+pub fn main_from<I, T>(args: I)
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
     // clap handles --help/--version and exits 2 on usage errors.
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(args);
 
     if let Err(err) = run(cli) {
         // Some errors are deliberately multi-line: the null-in-TOML report and
