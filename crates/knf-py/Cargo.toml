@@ -1,10 +1,9 @@
 [package]
 # `import knf`, published to PyPI as `pyknf` (see pyproject.toml here) and never
-# to crates.io. The `knf-cli` wheel and `cargo install knf-cli` build
-# `crates/knf`, which stays free of pyo3 (`cargo tree -p knf-cli` is the
-# enforcement in CI).
+# to crates.io. `cargo install knf-cli` builds `crates/knf`, which stays free of
+# pyo3 (`cargo tree -p knf-cli` is the enforcement in CI).
 name = "knf-py"
-description = "Python bindings for knf-core, bundled with the knf command line"
+description = "Python bindings for knf-core"
 publish = false
 version.workspace = true
 edition.workspace = true

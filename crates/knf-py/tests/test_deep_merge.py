@@ -1,11 +1,9 @@
-"""`knf.deep_merge` and the `knf` executable, as an installed wheel exposes them."""
+"""`knf.deep_merge`, as an installed wheel exposes it."""
 
 import datetime
 import errno
 import json
 import os
-import shutil
-import subprocess
 from collections import UserDict
 
 import pytest
@@ -224,16 +222,3 @@ def test_a_bare_str_is_not_a_list_of_files(write):
     with pytest.raises(TypeError):
         deep_merge(str(path))
 
-
-def test_the_knf_executable_comes_with_it(write):
-    """pyknf depends on knf-cli, so installing one installs the executable."""
-    knf = shutil.which("knf")
-    assert knf is not None
-    path = write("a.json", '{"a": 1}')
-    out = subprocess.run(
-        [knf, str(path), "--set", "b=2", "--compact"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert out.stdout.strip() == '{"a":1,"b":2}'

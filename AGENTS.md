@@ -42,14 +42,14 @@ knf/         CLI (published as knf-cli): binary only, argv and stderr
 knf-py/      Python module `knf._knf` (pyo3): arguments and exceptions
 ```
 
-Two PyPI wheels: `knf-cli` (root `pyproject.toml`, the binary only) and `pyknf`
-(`knf-py/pyproject.toml`, the pyo3 module, depending on `knf-cli`). maturin can't
-put a bin next to a pyo3 module, hence two. They publish from `release-plz.yml`
-on a `knf-cli-v*` tag and on `workflow_dispatch`; the PyPI trusted publisher names
-that workflow file and the `pypi` environment. A release-plz run dispatches the
-workflow after pushing the tag, because a `GITHUB_TOKEN` tag push does not start
-a run. `knf-py` is never on crates.io and has no Rust tests: its tests are
-`knf-py/tests/*.py`, run against an installed wheel.
+One PyPI wheel, `pyknf` (`knf-py/pyproject.toml`, the pyo3 module). The `knf`
+executable is `cargo install knf-cli`, not a second wheel. `pyknf` publishes from
+`release-plz.yml` on a `knf-cli-v*` tag and on `workflow_dispatch`; the PyPI
+trusted publisher names that workflow file and the `pypi` environment. A
+release-plz run dispatches the workflow after pushing the tag, because a
+`GITHUB_TOKEN` tag push does not start a run. `knf-py` is never on crates.io and
+has no Rust tests: its tests are `knf-py/tests/*.py`, run against an installed
+wheel.
 Building it with plain cargo needs `PYO3_BUILD_EXTENSION_MODULE=1` (set in CI) unless
 libpython is installed.
 
@@ -100,5 +100,4 @@ reusable goes in `knf-core`; `knf-cli` has no library target; pyo3 appears only 
   becomes reachable through the public surface.
 - `knf/tests/cli.rs`: runs the real binary in a tempdir; set env vars via `with_env`,
   never read the ambient environment.
-- `knf-py/tests/test_deep_merge.py`: pytest against the installed pyknf wheel, including
-  the `knf` executable its knf-cli dependency brings.
+- `knf-py/tests/test_deep_merge.py`: pytest against the installed pyknf wheel.
