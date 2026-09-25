@@ -19,19 +19,43 @@ simple operation. `knf <files>` should need no explanation.
 ## Installation
 
 ```bash
-pip install knf-cli
+pip install knf-cli   # the `knf` executable
+pip install pyknf     # `from knf import deep_merge`, plus the executable
 ```
 
-The Python distribution is binary-only: it installs the `knf` executable and
-does not provide an importable Python module. Wheels are published for Linux
-(glibc and musl) on x86-64 and ARM64, macOS on Intel and Apple Silicon, and
-Windows on x64 and ARM64. No Rust toolchain is needed to install a wheel.
+`knf-cli` is binary-only. `pyknf` is the [Python](#python) module, and it
+depends on `knf-cli`. Wheels are published for Linux (glibc and musl) on x86-64
+and ARM64, macOS on Intel and Apple Silicon, and Windows on x64 and ARM64;
+`pyknf` needs CPython 3.9+. No Rust toolchain is needed to install a wheel.
 
-To build from source instead:
+To build the command line from source instead:
 
 ```bash
 cargo install knf-cli
 ```
+
+## Python
+
+`pip install pyknf`. `deep_merge` runs the same merge as the command line, natively, and returns a
+`dict`:
+
+```python
+from knf import deep_merge
+
+config = deep_merge(["base.toml", "prod.json"], override={"server": {"port": 8080}})
+```
+
+Files are merged left to right, exactly like `knf base.toml prod.json`. If you pass
+`override`, it is merged last as one more layer, which makes it the Python version
+of `--set`. It must be a `dict` of JSON-like values: `None`, `bool`, `int` (within
+64 bits), `float`, `str`, `list`/`tuple` and nested `dict`s with `str` keys, at most
+128 levels deep and without cycles. Anything else raises `TypeError` or `ValueError`
+naming the key path, before any file is read.
+
+A file that can't be read raises `FileNotFoundError`, `PermissionError` or
+`IsADirectoryError`, as `open()` would. Invalid JSON or TOML raises
+`knf.ParseError`, a `ValueError` like `json.JSONDecodeError`. TOML datetimes come
+back as their TOML spelling in a `str`, which is also what `knf -f json` prints.
 
 ## Rust library
 

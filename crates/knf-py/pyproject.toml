@@ -1,0 +1,44 @@
+[build-system]
+requires = ["maturin>=1.14,<2"]
+build-backend = "maturin"
+
+[project]
+# PyPI's `knf` is an unrelated project, so the distribution is `pyknf` and the
+# import name stays `knf`. The `knf` executable is the separate `knf-cli` wheel,
+# pulled in as a dependency; the module never calls it, so any version will do.
+name = "pyknf"
+dynamic = ["version"]
+description = "Merge layered JSON and TOML configuration files into a dict"
+readme = "README.md"
+# abi3-py39: one wheel per platform serves every CPython from 3.9 on.
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["knf-cli>=0.3"]
+keywords = ["configuration", "json", "toml", "merge"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Rust",
+  "Topic :: Software Development :: Libraries",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Repository = "https://github.com/binado/knf"
+Issues = "https://github.com/binado/knf/issues"
+
+[tool.maturin]
+bindings = "pyo3"
+module-name = "knf._knf"
+python-source = "python"
+exclude = ["**/__pycache__/**"]
+locked = true
+strip = true
+compatibility = "pypi"
+
+[tool.maturin.target.x86_64-apple-darwin]
+macos-deployment-target = "10.12"
+
+[tool.maturin.target.aarch64-apple-darwin]
+macos-deployment-target = "11.0"

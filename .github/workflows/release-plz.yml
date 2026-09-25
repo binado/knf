@@ -105,70 +105,99 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
-      - name: Build wheel
+      - name: Build knf-cli wheel
         uses: PyO3/maturin-action@v1
         with:
           command: build
           target: ${{ matrix.platform.target }}
           manylinux: ${{ matrix.platform.manylinux }}
           maturin-version: v1.14.1
-          args: --release --locked --compatibility pypi --out dist
+          args: --release --locked --compatibility pypi --out dist/knf-cli
           sccache: true
-      - name: Smoke-test native wheel
+      # The pyo3 module; maturin reads the pyproject.toml beside the manifest.
+      - name: Build pyknf wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: ${{ matrix.platform.target }}
+          manylinux: ${{ matrix.platform.manylinux }}
+          maturin-version: v1.14.1
+          args: --release --locked --compatibility pypi -m crates/knf-py/Cargo.toml --out dist/pyknf
+          sccache: true
+      # pyknf alone, with no index: its knf-cli dependency must resolve from dist/.
+      - name: Smoke-test native wheels
         if: ${{ matrix.platform.family == 'macos' || matrix.platform.family == 'windows' }}
         shell: bash
         run: |
-          python -m pip install --force-reinstall --no-deps dist/*.whl
+          python -m pip install --force-reinstall --no-index --find-links dist/knf-cli --find-links dist/pyknf pyknf
           knf --version
           test "$(knf --set smoke=true --compact)" = '{"smoke":true}'
-      - name: Smoke-test Linux wheel
+          python -c "import knf; assert knf.deep_merge([], override={'a': 1}) == {'a': 1}"
+      - name: Smoke-test Linux wheels
         if: ${{ matrix.platform.family == 'manylinux' || matrix.platform.family == 'musllinux' }}
         shell: bash
         run: |
           docker run --rm --platform "${{ matrix.platform.docker_platform }}" \
             -v "${{ github.workspace }}/dist:/dist" \
             "${{ matrix.platform.test_image }}" \
-            sh -c 'python -m pip install --no-deps /dist/*.whl && knf --version && knf --set smoke=true --compact >/dev/null'
-      - name: Upload wheel
+            sh -c 'python -m pip install --no-index --find-links /dist/knf-cli --find-links /dist/pyknf pyknf && knf --version && knf --set smoke=true --compact >/dev/null && python -c "import knf; assert knf.deep_merge([], override={\"a\": 1}) == {\"a\": 1}"'
+      - name: Upload knf-cli wheel
         uses: actions/upload-artifact@v6
         with:
           name: knf-cli-${{ matrix.platform.family }}-${{ matrix.platform.target }}
-          path: dist/*.whl
+          path: dist/knf-cli/*.whl
+          if-no-files-found: error
+      - name: Upload pyknf wheel
+        uses: actions/upload-artifact@v6
+        with:
+          name: pyknf-${{ matrix.platform.family }}-${{ matrix.platform.target }}
+          path: dist/pyknf/*.whl
           if-no-files-found: error
 
+  # Both distributions, from one job: each PyPI project's trusted publisher
+  # names this workflow and the `pypi` environment.
   publish-pypi:
-    name: Publish knf-cli to PyPI
+    name: Publish knf-cli and pyknf to PyPI
     needs: [release-plz-release, build-pypi-wheels]
     if: ${{ needs.release-plz-release.outputs.knf_released == 'true' }}
     runs-on: ubuntu-latest
     # PyPI's trusted publisher must name this workflow and environment exactly.
     environment: pypi
     concurrency:
-      group: pypi-knf-cli-${{ needs.release-plz-release.outputs.knf_version }}
+      group: pypi-${{ needs.release-plz-release.outputs.knf_version }}
       cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
     steps:
-      - name: Download wheels
+      - name: Download knf-cli wheels
         uses: actions/download-artifact@v7
         with:
           pattern: knf-cli-*
-          path: dist
+          path: dist/knf-cli
           merge-multiple: true
-      - name: Verify wheel set
+      - name: Download pyknf wheels
+        uses: actions/download-artifact@v7
+        with:
+          pattern: pyknf-*
+          path: dist/pyknf
+          merge-multiple: true
+      - name: Verify wheel sets
         shell: bash
         env:
           VERSION: ${{ needs.release-plz-release.outputs.knf_version }}
         run: |
-          mapfile -t wheels < <(find dist -maxdepth 1 -type f -name '*.whl' -print | sort)
-          test "${#wheels[@]}" -eq 8
-          test "$(find dist -maxdepth 1 -type f -name '*.tar.gz' -print | wc -l)" -eq 0
-          for wheel in "${wheels[@]}"; do
-            case "$(basename "$wheel")" in
-              knf_cli-"$VERSION"-*) ;;
-              *) echo "unexpected wheel: $wheel" >&2; exit 1 ;;
-            esac
+          test "$(find dist -type f -name '*.tar.gz' -print | wc -l)" -eq 0
+          for pair in knf-cli:knf_cli pyknf:pyknf; do
+            dir="dist/${pair%%:*}" prefix="${pair##*:}"
+            mapfile -t wheels < <(find "$dir" -maxdepth 1 -type f -name '*.whl' -print | sort)
+            test "${#wheels[@]}" -eq 8
+            for wheel in "${wheels[@]}"; do
+              case "$(basename "$wheel")" in
+                "$prefix-$VERSION"-*) ;;
+                *) echo "unexpected wheel: $wheel" >&2; exit 1 ;;
+              esac
+            done
           done
       - name: Install uv
         uses: astral-sh/setup-uv@v9.0.0
@@ -176,8 +205,13 @@ jobs:
           version: "0.12.5"
       - name: Generate PyPI attestations
         uses: astral-sh/attest-action@v0.0.6
+        with:
+          paths: dist/knf-cli dist/pyknf
+      # knf-cli first: pyknf depends on it.
       - name: Publish wheels
-        run: uv publish --trusted-publishing always dist/*.whl
+        run: |
+          uv publish --trusted-publishing always dist/knf-cli/*.whl
+          uv publish --trusted-publishing always dist/pyknf/*.whl
 
   # Open or refresh the PR that bumps versions and the changelog.
   release-plz-pr:
