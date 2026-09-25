@@ -2,7 +2,7 @@
 //!
 //! A frontend, sibling to `knf-cli`: that one is argv and stderr, this one is
 //! arguments and exceptions. Published to PyPI as `pyknf`. The `knf` command
-//! installed by that wheel calls [`cli_bin::main_from`], the same source
+//! installed by that wheel calls `cli_bin::main_from`, the same source
 //! `knf-cli` compiles, so there is one command line and no second package.
 
 use std::io;
