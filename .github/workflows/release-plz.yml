@@ -100,10 +100,12 @@ jobs:
           else
             publish="${INPUT_PUBLISH:-pyknf}"
           fi
+          # attest-action globs the path as given. A directory without a
+          # trailing slash matches the directory itself, not the wheels in it.
           case "$publish" in
-            both) attest_paths="dist/knf-cli dist/pyknf" ;;
-            knf-cli) attest_paths="dist/knf-cli" ;;
-            pyknf) attest_paths="dist/pyknf" ;;
+            both) attest_paths="dist/knf-cli/* dist/pyknf/*" ;;
+            knf-cli) attest_paths="dist/knf-cli/*" ;;
+            pyknf) attest_paths="dist/pyknf/*" ;;
             *)
               echo "::error::publish must be both, knf-cli, or pyknf"
               exit 1
