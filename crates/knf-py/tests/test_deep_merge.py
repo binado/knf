@@ -11,7 +11,7 @@ from collections import UserDict
 
 import pytest
 
-from knf import ParseError, deep_merge
+from knf import InterpolationError, ParseError, deep_merge
 
 
 @pytest.fixture
@@ -218,6 +218,83 @@ def test_a_value_shared_by_two_keys_is_not_a_cycle():
         "a": [1, {"x": 2}],
         "b": [1, {"x": 2}],
     }
+
+
+def test_interpolation_is_opt_in(write):
+    path = write("refs.json", '{"port": 8080, "copy": "${port}"}')
+    assert deep_merge([path])["copy"] == "${port}"
+    assert deep_merge([path], interpolate=False)["copy"] == "${port}"
+    assert deep_merge([path], interpolate=True)["copy"] == 8080
+
+
+def test_interpolation_sees_final_layers_and_nested_values(write):
+    base = write(
+        "base.json",
+        json.dumps({
+            "server": {"host": "local", "port": 80},
+            "servers": [{"host": "first"}],
+            "url": "http://${server.host}:${server.port}/",
+            "copy": "${server}",
+            "first": "${servers[0].host}",
+            "next": "${url}",
+            "final": "${next}",
+        }),
+    )
+    prod = write("prod.toml", '[server]\nhost = "prod"\n')
+    merged = deep_merge(
+        [base, prod],
+        override={"server": {"port": 443}, "from_override": "${server.port}"},
+        interpolate=True,
+    )
+    assert merged["url"] == "http://prod:443/"
+    assert merged["copy"] == {"host": "prod", "port": 443}
+    assert merged["first"] == "first"
+    assert merged["final"] == "http://prod:443/"
+    assert merged["from_override"] == 443
+    assert type(merged["from_override"]) is int
+
+
+def test_interpolation_reads_process_environment(monkeypatch):
+    monkeypatch.setenv("KNF_PY_TEST_PORT", "8080")
+    merged = deep_merge(
+        [],
+        override={
+            "port": "${env:KNF_PY_TEST_PORT}",
+            "url": "http://localhost:${env:KNF_PY_TEST_PORT}/",
+            "literal": "$${env:KNF_PY_TEST_PORT}",
+        },
+        interpolate=True,
+    )
+    assert merged == {
+        "port": 8080,
+        "url": "http://localhost:8080/",
+        "literal": "${env:KNF_PY_TEST_PORT}",
+    }
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"a": "${missing}"}, "unresolved reference\n  --> a: `missing`"),
+        ({"a": "${}"}, "invalid reference\n  --> a: empty reference"),
+        ({"a": "${b}", "b": "${a}"}, "reference cycle: `a` -> `b` -> `a`"),
+        ({"box": {"x": 1}, "text": "box=${box}"}, "text: `box` is an object"),
+    ],
+)
+def test_interpolation_errors_are_value_errors_with_paths(override, message):
+    with pytest.raises(InterpolationError) as info:
+        deep_merge([], override=override, interpolate=True)
+    assert isinstance(info.value, ValueError)
+    assert message in str(info.value)
+
+
+def test_interpolation_keeps_file_and_override_error_precedence(tmp_path):
+    missing = tmp_path / "missing.json"
+    with pytest.raises(TypeError, match="`a`"):
+        deep_merge([missing], override={"a": object()}, interpolate=True)
+    with pytest.raises(FileNotFoundError) as info:
+        deep_merge([missing], interpolate=True)
+    assert info.value.filename == str(missing)
 
 
 def test_the_knf_executable_comes_with_the_wheel(write):

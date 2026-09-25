@@ -14,7 +14,8 @@ use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 mod cli_bin;
 
 use knf::{
-    LoadError, Map, MergeError, MergeOptions, Number, Seg, Value, load_layers, merge, render_path,
+    InterpError, LoadError, Map, MergeError, MergeOptions, Number, ProcessEnv, Seg, Value,
+    interpolate as interpolate_value, load_layers, merge, render_path,
 };
 use pyo3::PyTypeInfo;
 use pyo3::create_exception;
@@ -32,17 +33,26 @@ create_exception!(
     "A file is not valid JSON or TOML, or is not an object at the top level."
 );
 
+create_exception!(
+    knf,
+    InterpolationError,
+    PyValueError,
+    "A configuration reference cannot be resolved."
+);
+
 /// Merge layered JSON and TOML files into one `dict`.
 ///
 /// `files` are merged left to right; `override`, if given, is merged last, as
 /// one more layer — the Python spelling of `knf --set`. Objects merge key by
-/// key; arrays, scalars and `None` replace wholesale.
+/// key; arrays, scalars and `None` replace wholesale. Interpolation, when
+/// requested, runs once after all layers have been merged.
 #[pyfunction]
-#[pyo3(signature = (files, *, r#override = None))]
+#[pyo3(signature = (files, *, r#override = None, interpolate = false))]
 fn deep_merge<'py>(
     py: Python<'py>,
     files: Vec<PathBuf>,
     r#override: Option<&Bound<'py, PyDict>>,
+    interpolate: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     // Before any file is read: a bad override is a mistake in the arguments
     // alone, and saying so must not wait on the files existing or parsing.
@@ -62,12 +72,18 @@ fn deep_merge<'py>(
                 }
             }
             layers.extend(overlay.map(Value::Object));
-            merge(layers, &MergeOptions::default()).map_err(Failure::Merge)
+            let merged = merge(layers, &MergeOptions::default()).map_err(Failure::Merge)?;
+            if interpolate {
+                interpolate_value(merged, &ProcessEnv).map_err(Failure::Interpolate)
+            } else {
+                Ok(merged)
+            }
         })
         .map_err(|failure| match failure {
             Failure::File(path, err) => file_error(py, &path, err),
             // Only strict mode reports a conflict, and it is not exposed.
             Failure::Merge(err) => PyValueError::new_err(err.to_string()),
+            Failure::Interpolate(err) => InterpolationError::new_err(err.to_string()),
         })?;
 
     value_to_py(py, merged)
@@ -76,6 +92,7 @@ fn deep_merge<'py>(
 enum Failure {
     File(PathBuf, anyhow::Error),
     Merge(MergeError),
+    Interpolate(InterpError),
 }
 
 /// The exception Python's own I/O and parsers would raise for the same
@@ -163,6 +180,10 @@ fn _knf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deep_merge, m)?)?;
     m.add_function(wrap_pyfunction!(cli, m)?)?;
     m.add("ParseError", m.py().get_type::<ParseError>())?;
+    m.add(
+        "InterpolationError",
+        m.py().get_type::<InterpolationError>(),
+    )?;
     Ok(())
 }
 

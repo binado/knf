@@ -39,6 +39,16 @@ from knf import deep_merge
 config = deep_merge(["base.toml", "prod.json"], override={"server": {"port": 8080}})
 ```
 
+Set `interpolate=True` to resolve `${key.path}` references against the final
+merged config, including nested keys and array elements such as
+`${servers[0].host}`. A whole-string reference keeps its value's type (so
+`"${server.port}"` can become an integer and `"${server}"` a dict); an embedded
+reference such as `"http://${server.host}:${server.port}/"` becomes text.
+`${env:NAME}` reads the process environment, using the CLI's JSON-or-string
+typing for whole-string references and raw text when embedded. Use `$$` for a
+literal `$`. Interpolation is off by default. Invalid or missing references
+and cycles raise `knf.InterpolationError`, a `ValueError`, with key paths.
+
 Files are merged left to right, exactly like `knf base.toml prod.json`. If you pass
 `override`, it is merged last as one more layer, which makes it the Python version
 of `--set`. It must be a `dict` of JSON-like values: `None`, `bool`, `int` (within
