@@ -4,8 +4,7 @@ build-backend = "maturin"
 
 [project]
 # PyPI's `knf` is an unrelated project, so the distribution is `pyknf` and the
-# import name stays `knf`. The `knf` executable is `cargo install knf-cli`, not
-# this package.
+# import name stays `knf`. The wheel also installs the `knf` executable.
 name = "pyknf"
 dynamic = ["version"]
 description = "Merge layered JSON and TOML configuration files into a dict"
@@ -26,6 +25,9 @@ classifiers = [
 [project.urls]
 Repository = "https://github.com/binado/knf"
 Issues = "https://github.com/binado/knf/issues"
+
+[project.scripts]
+knf = "knf._cli:main"
 
 [tool.maturin]
 bindings = "pyo3"

@@ -5,7 +5,7 @@ Rust merge the [`knf`](https://github.com/binado/knf) command line runs, called
 natively.
 
 ```bash
-pip install pyknf
+pip install pyknf    # the module, and the `knf` executable
 ```
 
 ```python

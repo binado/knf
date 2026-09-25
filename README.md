@@ -19,14 +19,14 @@ simple operation. `knf <files>` should need no explanation.
 ## Installation
 
 ```bash
-pip install pyknf      # `from knf import deep_merge`
-cargo install knf-cli  # the `knf` executable
+pip install pyknf      # `from knf import deep_merge`, and the `knf` executable
+cargo install knf-cli  # the executable alone, without Python
 ```
 
-`pyknf` is the [Python](#python) module. Wheels are published for Linux (glibc
-and musl) on x86-64 and ARM64, macOS on Intel and Apple Silicon, and Windows on
-x64 and ARM64; it needs CPython 3.9+. No Rust toolchain is needed to install a
-wheel. The command line is the `knf-cli` crate.
+`pyknf` is the [Python](#python) module and the `knf` command line. Wheels are
+published for Linux (glibc and musl) on x86-64 and ARM64, macOS on Intel and
+Apple Silicon, and Windows on x64 and ARM64; it needs CPython 3.9+. No Rust
+toolchain is needed to install a wheel.
 
 ## Python
 

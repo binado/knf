@@ -1,11 +1,15 @@
 //! `knf.deep_merge`: the `knf-core` pipeline as one Python function.
 //!
 //! A frontend, sibling to `knf-cli`: that one is argv and stderr, this one is
-//! arguments and exceptions. Published to PyPI as `pyknf`, which depends on the
-//! `knf-cli` wheel, so `pip install pyknf` gives both.
+//! arguments and exceptions. Published to PyPI as `pyknf`. The `knf` command
+//! installed by that wheel calls [`cli_bin::main_from`], the same source
+//! `knf-cli` compiles, so there is one command line and no second package.
 
 use std::io;
 use std::path::{Path, PathBuf};
+
+#[path = "../../knf/src/main.rs"]
+mod cli_bin;
 
 use knf::{
     LoadError, Map, MergeError, MergeOptions, Number, Seg, Value, load_layers, merge, render_path,
@@ -127,9 +131,20 @@ fn os_error<E: PyTypeInfo>(
     build().unwrap_or_else(|_| PyOSError::new_err(format!("{err:#}")))
 }
 
+/// Run the `knf` command line and exit. The installed script is a thin wrapper
+/// around this. Its process was started by Python, so the arguments are
+/// `sys.argv`, not `std::env::args`.
+#[pyfunction]
+fn cli(py: Python<'_>) -> PyResult<()> {
+    let argv: Vec<String> = py.import("sys")?.getattr("argv")?.extract()?;
+    cli_bin::main_from(argv);
+    Ok(())
+}
+
 #[pymodule]
 fn _knf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deep_merge, m)?)?;
+    m.add_function(wrap_pyfunction!(cli, m)?)?;
     m.add("ParseError", m.py().get_type::<ParseError>())?;
     Ok(())
 }

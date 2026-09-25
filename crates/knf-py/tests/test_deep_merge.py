@@ -1,9 +1,11 @@
-"""`knf.deep_merge`, as an installed wheel exposes it."""
+"""`knf.deep_merge` and the `knf` executable, as an installed wheel exposes them."""
 
 import datetime
 import errno
 import json
 import os
+import shutil
+import subprocess
 from collections import UserDict
 
 import pytest
@@ -215,6 +217,20 @@ def test_a_value_shared_by_two_keys_is_not_a_cycle():
         "a": [1, {"x": 2}],
         "b": [1, {"x": 2}],
     }
+
+
+def test_the_knf_executable_comes_with_the_wheel(write):
+    """The pyknf wheel installs the `knf` binary; it does not depend on another package."""
+    knf = shutil.which("knf")
+    assert knf is not None
+    path = write("a.json", '{"a": 1}')
+    out = subprocess.run(
+        [knf, str(path), "--set", "b=2", "--compact"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert out.stdout.strip() == '{"a":1,"b":2}'
 
 
 def test_a_bare_str_is_not_a_list_of_files(write):

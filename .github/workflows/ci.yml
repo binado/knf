@@ -73,4 +73,6 @@ jobs:
           python -m venv /tmp/knf-wheel-test
           /tmp/knf-wheel-test/bin/pip install --no-index --find-links dist pyknf
           /tmp/knf-wheel-test/bin/pip install pytest
+          /tmp/knf-wheel-test/bin/knf --version
+          test "$(/tmp/knf-wheel-test/bin/knf --set smoke=true --compact)" = '{"smoke":true}'
           PATH="/tmp/knf-wheel-test/bin:$PATH" /tmp/knf-wheel-test/bin/python -m pytest crates/knf-py/tests

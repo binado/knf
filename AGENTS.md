@@ -42,8 +42,11 @@ knf/         CLI (published as knf-cli): binary only, argv and stderr
 knf-py/      Python module `knf._knf` (pyo3): arguments and exceptions
 ```
 
-One PyPI wheel, `pyknf` (`knf-py/pyproject.toml`, the pyo3 module). The `knf`
-executable is `cargo install knf-cli`, not a second wheel. `pyknf` publishes from
+One PyPI wheel, `pyknf` (`knf-py/pyproject.toml`). It carries the pyo3 module and
+the `knf` command: a script entry point calls the same `crates/knf/src/main.rs`
+that `knf-cli` compiles, so clap stays out of `knf-core` and pyo3 stays out of
+`knf-cli`. `cargo install knf-cli` still builds that crate on its own. `pyknf`
+publishes from
 `release-plz.yml` on a `knf-cli-v*` tag and on `workflow_dispatch`; the PyPI
 trusted publisher names that workflow file and the `pypi` environment. A
 release-plz run dispatches the workflow after pushing the tag, because a
@@ -100,4 +103,5 @@ reusable goes in `knf-core`; `knf-cli` has no library target; pyo3 appears only 
   becomes reachable through the public surface.
 - `knf/tests/cli.rs`: runs the real binary in a tempdir; set env vars via `with_env`,
   never read the ambient environment.
-- `knf-py/tests/test_deep_merge.py`: pytest against the installed pyknf wheel.
+- `knf-py/tests/test_deep_merge.py`: pytest against the installed pyknf wheel, including
+  the `knf` executable the wheel installs.
