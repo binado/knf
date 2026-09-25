@@ -2,7 +2,7 @@
 //!
 //! Everything argv-shaped lives in this binary: the flag grammar ([`cli`]), the
 //! `help:` lines that name a flag ([`explain`]), and the output-format decision
-//! below. The pipeline itself is `knf-config`, which knows nothing about any of
+//! below. The pipeline itself is `knf-core`, which knows nothing about any of
 //! it.
 
 mod cli;
@@ -12,7 +12,9 @@ use std::io::Write;
 
 use anyhow::bail;
 use clap::Parser;
-use knf::{Format, Map, MergeOpts, PathLeaf, format, load_layers, merge_layers};
+use knf::{
+    Format, MergeOptions, PathLeaf, ProcessEnv, Value, format, interpolate, load_layers, merge,
+};
 
 use cli::Cli;
 use explain::{explain_pipeline, name_the_set_flag};
@@ -39,32 +41,44 @@ fn main() {
 fn run(cli: Cli) -> anyhow::Result<()> {
     // Before anything is read: a malformed --set is a mistake in the command
     // line, and saying so must not wait on the files existing or parsing.
-    let opts = merge_opts(&cli)?;
+    let overlays = overlays(&cli)?;
 
     // Between the parse and the fold: the output format is a decision about
     // argv, and the formats it needs are known as soon as the inputs are read.
     // Deciding it after the merge would make a forgotten `-f` queue behind
     // every error in the documents themselves.
     let (layers, input_formats) =
-        load_layers(&cli.files, opts.input_format).map_err(explain_pipeline)?;
+        load_layers(&cli.files, cli.input_format.map(Format::from)).map_err(explain_pipeline)?;
     let out_format = resolve_output_format(cli.format.map(Format::from), &input_formats)?;
 
-    let merged = merge_layers(layers, opts, &knf::ProcessEnv).map_err(explain_pipeline)?;
+    // One flat, strictly-left fold: --set layers are appended after every file.
+    let opts = MergeOptions {
+        strict: cli.strict,
+        shallow: cli.shallow,
+    };
+    let layers = layers.into_iter().chain(overlays);
+    let merged = merge(layers, &opts).map_err(explain_pipeline)?;
+    // After the merge, before the emit, and never per layer.
+    let merged = if cli.interpolate {
+        interpolate(merged, &ProcessEnv).map_err(explain_pipeline)?
+    } else {
+        merged
+    };
     let text = format::emit(merged, out_format, !cli.compact, cli.null_as.as_deref())
         .map_err(explain_pipeline)?;
     write_stdout(&text)
 }
 
-/// Builds the merge knobs, validating every `--set` expression up front.
+/// Builds the `--set` layers, validating every expression up front.
 ///
 /// Fallible, and called before any input is read: the expressions come from
 /// argv alone, so nothing about the files can change whether they are legal.
-fn merge_opts(cli: &Cli) -> anyhow::Result<MergeOpts> {
+fn overlays(cli: &Cli) -> anyhow::Result<Vec<Value>> {
     // --set layers are terminal: appended after every file. The RHS parses as
-    // JSON with a string fallback, which is `knf-config`'s job. The conversion
+    // JSON with a string fallback, which is `knf-core`'s job. The conversion
     // is also where a bracketed path is rejected, so it runs up front, not
     // after the files exist or parse.
-    let mut overlays: Vec<Map> = Vec::with_capacity(cli.set.len());
+    let mut overlays: Vec<Value> = Vec::with_capacity(cli.set.len());
     for path_leaf in &cli.set {
         let typed = PathLeaf::<serde_json::Value>::from(path_leaf.clone());
         let json = serde_json::Value::try_from(typed).map_err(name_the_set_flag)?;
@@ -73,16 +87,9 @@ fn merge_opts(cli: &Cli) -> anyhow::Result<MergeOpts> {
             // grammar rejects an empty path — so it is always an object.
             unreachable!("a --set expression expands to a nested object")
         };
-        overlays.push(knf::value::object_from_json(obj));
+        overlays.push(Value::Object(knf::value::object_from_json(obj)));
     }
-
-    Ok(MergeOpts {
-        input_format: cli.input_format.map(Format::from),
-        strict: cli.strict,
-        shallow: cli.shallow,
-        overlays,
-        interpolate: cli.interpolate,
-    })
+    Ok(overlays)
 }
 
 /// Decides the output format from `-f` and the inputs.

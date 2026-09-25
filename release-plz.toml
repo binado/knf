@@ -6,6 +6,5 @@ semver_check = false
 
 [[package]]
 name = "knf-cli"
-# The merge core, the pipeline and reference resolution live in sibling crates;
-# their commits belong in the CLI changelog.
-changelog_include = ["knf-core", "knf-interp", "knf-config"]
+# The library lives in a sibling crate; its commits belong in the CLI changelog.
+changelog_include = ["knf-core"]

@@ -19,10 +19,11 @@ use knf::{
 /// there is one place a library error can pick up a flag name, rather than one
 /// per call site. Downcasts rather than matching on a wrapper enum, because the
 /// pipeline's errors arrive inside `anyhow` and each typed error is decorated by
-/// a different rule. Note the hazard: if `knf-config` ever wraps these in one
+/// a different rule. Note the hazard: if `knf-core` ever wraps these in one
 /// error type of its own, every downcast below starts missing and nothing here
 /// fails to compile — the tests that pin this stderr are what would catch it.
-pub fn explain_pipeline(err: anyhow::Error) -> anyhow::Error {
+pub fn explain_pipeline(err: impl Into<anyhow::Error>) -> anyhow::Error {
+    let err = err.into();
     let err = match err.downcast::<LoadError>() {
         Ok(err) => return explain_load(err),
         Err(err) => err,
@@ -59,7 +60,7 @@ pub fn explain_pipeline(err: anyhow::Error) -> anyhow::Error {
 
 /// Names the two flags that get a document with a null out through TOML.
 ///
-/// `knf-config` reports where the nulls are and stops: emitting JSON instead
+/// `knf-core` reports where the nulls are and stops: emitting JSON instead
 /// and substituting a string are both things an *interface* offers, and it has
 /// none. The report is deliberately newline-free at the end so this line lands
 /// flush against its last `-->`.
@@ -70,7 +71,7 @@ fn explain_null(err: NullInToml) -> anyhow::Error {
 /// Names the flag that emits an integer TOML has no spelling for.
 ///
 /// The other half of [`explain_null`]'s bargain, and the same division of labour:
-/// `knf-config` says which keys hold an integer past `i64::MAX`, and the one
+/// `knf-core` says which keys hold an integer past `i64::MAX`, and the one
 /// remedy — emit JSON, where the digits survive exactly — is a flag, so it is
 /// ours to name.
 fn explain_integer(err: IntegerOutOfRange) -> anyhow::Error {
@@ -89,7 +90,7 @@ fn explain_non_finite(err: NonFiniteFloat) -> anyhow::Error {
 
 /// Names the flag that resolves an input whose format could not be settled.
 ///
-/// `knf-config` states the problem — stdin has no extension, this file's
+/// `knf-core` states the problem — stdin has no extension, this file's
 /// extension says nothing, this path is a directory — and stops there. The
 /// remedy is always a flag or a different argv, so it is always ours.
 fn explain_load(err: LoadError) -> anyhow::Error {
@@ -118,7 +119,7 @@ pub fn name_the_set_flag(err: PathError) -> anyhow::Error {
 
 /// The same division of labour for interpolation.
 ///
-/// `knf-interp` names key paths and reference spellings; it has never heard of
+/// Interpolation names key paths and reference spellings; it has never heard of
 /// `--interpolate`, so the flag only appears here.
 fn explain_interp(err: InterpError) -> anyhow::Error {
     let mut help = String::new();

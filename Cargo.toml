@@ -28,8 +28,6 @@ serde = "1"
 # version is required so `cargo publish` can rewrite the path dep to a crates.io
 # requirement. Keep it equal to [workspace.package].version.
 knf-core = { path = "crates/knf-core", version = "0.2.0" }
-knf-interp = { path = "crates/knf-interp", version = "0.2.0" }
-knf-config = { path = "crates/knf-config", version = "0.2.0" }
 
 [profile.release]
 lto = "thin"

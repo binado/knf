@@ -7,12 +7,6 @@
 //! exported on its own as [`json_or_string`], for callers that need the same
 //! typing without a path.
 //!
-//! This module lives here rather than beside [`RefPath`] in `knf-core` for a
-//! reason the compiler enforces: `impl FromStr for PathLeaf<serde_json::Value>`
-//! and its siblings name no local type unless `PathLeaf` itself is local, so
-//! the JSON impls and the struct cannot be separated. `knf-core` must not gain
-//! `serde_json`, which settles which side of the boundary both land on.
-//!
 //! [`TryFrom<PathLeaf<Value>>`](TryFrom) expands to a nested object:
 //! `server.port=8080` → `{"server":{"port":8080}}`. There are deliberately no
 //! `Serialize`/`Deserialize` impls — a `PathLeaf` is an expression, and
@@ -22,7 +16,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use knf_core::{PathError, RefPath, Seg};
+use crate::{PathError, RefPath, Seg};
 use serde_json::{Map, Value};
 
 /// A leaf value addressed by a parsed path.

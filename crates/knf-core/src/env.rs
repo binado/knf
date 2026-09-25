@@ -1,10 +1,10 @@
-//! The process environment, as `knf-interp` wants to see it.
+//! The process environment, as interpolation wants to see it.
 //!
-//! The only place `std::env` appears in the workspace. `knf-interp` takes its environment through
-//! a trait so that it stays deterministic and testable without touching process
-//! state; this is the implementation that does not.
+//! The only place `std::env` appears in the workspace. Interpolation takes its
+//! environment through a trait so that it stays deterministic and testable
+//! without touching process state; this is the implementation that does not.
 
-use knf_interp::{Env, EnvValue};
+use crate::{Env, EnvValue};
 
 use crate::{set, value};
 

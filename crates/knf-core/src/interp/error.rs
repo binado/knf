@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use crate::scan::Syntax;
+use super::scan::Syntax;
 use crate::{Seg, render_path};
 
 /// Why interpolation failed.

@@ -22,7 +22,7 @@
 //! containing a literal dot, which the dotted grammar has always split.
 //!
 //! Parsing is pure text: nothing here reads a [`Value`](crate::Value), and the
-//! walkers that do — `knf-interp`'s `lookup`, this crate's `merge_at` — build
+//! walkers that do — interpolation, `merge_at` — build
 //! or consume these types rather than living in them. Provenance is the
 //! caller's job too: a [`PathError`] carries the path text and never a flag
 //! name or a filename.
@@ -36,6 +36,8 @@
 use std::fmt;
 use std::str::FromStr;
 
+use crate::Value;
+
 /// Why a path expression was rejected.
 ///
 /// Carries the path text and nothing else — no `--set`, no `--interpolate`,
@@ -43,9 +45,9 @@ use std::str::FromStr;
 ///
 /// [`IndexInKeyPath`](PathError::IndexInKeyPath) is raised by
 /// [`RefPath::try_into_keys`] alone, never by parsing.
-/// [`MissingEquals`](PathError::MissingEquals) has no producer in this crate at
-/// all — a bare [`RefPath`] has no `=` to miss. It belongs to `knf-config`'s
-/// `PathLeaf`, which parses `key.path=value` over this grammar and shares this
+/// [`MissingEquals`](PathError::MissingEquals) has no producer in this module
+/// — a bare [`RefPath`] has no `=` to miss. It belongs to
+/// [`PathLeaf`](crate::PathLeaf), which parses `key.path=value` over this grammar and shares this
 /// error rather than wrapping it, so one spelling of a bad path reads the same
 /// wherever it was typed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -274,9 +276,27 @@ pub(crate) fn render_keys(path: &[String]) -> String {
     }
 }
 
+/// The node at `path`, or `None` if nothing lives there.
+///
+/// Only interpolation reads a document by path — the merge descends by
+/// recursion — and it indexes in both directions: where a reference *lives*
+/// and where it *points*, since `${servers[0]}` parses to an [`Seg::Index`].
+pub(crate) fn lookup<'a>(root: &'a Value, path: &[Seg]) -> Option<&'a Value> {
+    let mut node = root;
+    for seg in path {
+        node = match (seg, node) {
+            (Seg::Key(k), Value::Object(map)) => map.get(k)?,
+            (Seg::Index(i), Value::Array(items)) => items.get(*i)?,
+            _ => return None,
+        };
+    }
+    Some(node)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Map, Number};
 
     /// A witness may mix keys and indices.
     #[test]
@@ -405,5 +425,44 @@ mod tests {
     fn equals_is_an_ordinary_key_character() {
         let parsed: RefPath = "a=b".parse().unwrap();
         assert_eq!(parsed.try_into_keys().unwrap(), ["a=b"]);
+    }
+
+    fn doc() -> Value {
+        let mut inner = Map::new();
+        inner.insert("host".into(), Value::String("h".into()));
+        let mut root = Map::new();
+        root.insert("db".into(), Value::Object(inner));
+        root.insert(
+            "tags".into(),
+            Value::Array(vec![Value::Number(Number::I64(1))]),
+        );
+        Value::Object(root)
+    }
+
+    #[test]
+    fn lookup_walks_objects_and_arrays() {
+        let doc = doc();
+        assert_eq!(lookup(&doc, &[]), Some(&doc));
+        assert_eq!(
+            lookup(&doc, &[Seg::Key("db".into()), Seg::Key("host".into())]),
+            Some(&Value::String("h".into()))
+        );
+        assert_eq!(
+            lookup(&doc, &[Seg::Key("tags".into()), Seg::Index(0)]),
+            Some(&Value::Number(Number::I64(1)))
+        );
+    }
+
+    /// A missing key and a segment of the wrong shape are both simply absent —
+    /// the caller reports one unresolved reference either way.
+    #[test]
+    fn lookup_misses_are_none() {
+        let doc = doc();
+        assert_eq!(lookup(&doc, &[Seg::Key("nope".into())]), None);
+        assert_eq!(lookup(&doc, &[Seg::Key("db".into()), Seg::Index(0)]), None);
+        assert_eq!(
+            lookup(&doc, &[Seg::Key("tags".into()), Seg::Index(9)]),
+            None
+        );
     }
 }

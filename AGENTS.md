@@ -8,8 +8,8 @@ interpolation, or error text.
 
 ```bash
 cargo test --workspace                  # everything
-cargo test -p knf-core                  # fast inner loop: no filesystem, no process
-cargo test -p knf-config --test library # the public API, as a consumer sees it
+cargo test -p knf-core --lib            # fast inner loop: unit tests only
+cargo test -p knf-core --test library   # the public API, as a consumer sees it
 cargo test -p knf-cli --test cli <name> # one CLI test by name substring
 cargo run -p knf-cli -- base.toml prod.toml --strict
 
@@ -17,28 +17,29 @@ prek run --all-files                    # cargo fmt --check + clippy -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --lib  # --lib: lib and bin are both `knf`
 cargo insta review                      # snapshots in crates/knf/tests/snapshots/
 
-# Dependency boundaries, checked in CI (--edges normal skips dev-deps)
-cargo tree -p knf-core   --depth 1 --edges normal   # indexmap, thiserror only
-cargo tree -p knf-interp --depth 1 --edges normal   # knf-core, thiserror only
-cargo tree -p knf-config --depth 1 --edges normal   # never clap
+cargo tree -p knf-core --depth 1 --edges normal     # never clap (checked in CI)
 ```
 
-CI runs fmt, clippy, tests, the `cargo tree` checks and `cargo doc` on Rust 1.88 and
+CI runs fmt, clippy, tests, the `cargo tree` check and `cargo doc` on Rust 1.88 and
 stable, so don't use anything newer than the 1.88 MSRV. Snapshots capture multi-line
 stderr where the *formatting* is under test: read the diff, don't accept it blindly.
 
 ## Crates
 
 ```
-knf-core/    merge core, `Value`, path vocabulary (Seg/RefPath) — indexmap + thiserror
-knf-interp/  `${...}` resolution for --interpolate — knf-core + thiserror
-knf-config/  pipeline: I/O, JSON/TOML, `--set`, `merge`/`MergeOpts`. Lib name `knf`. No clap
+knf-core/    the library, lib name `knf`. No clap
+  ir.rs        `Value`/`Map`/`Number`
+  merge.rs     the fold: `merge`, `merge_into`, `MergeOptions`, strict mode
+  path.rs      path vocabulary (`Seg`/`RefPath`) and `lookup`
+  interp/      `${...}` resolution for --interpolate
+  format.rs    detect/parse/emit; value.rs: JSON/TOML <-> IR; set.rs: `key.path=value`
+  lib.rs       `load_layers` (I/O) and the re-exports
 knf/         CLI (published as knf-cli): binary only, argv and stderr
 ```
 
-The split is compiler-enforced separation: `use toml::…` in the core should be a build
-error. No new dependencies without a deliberate reason, and no cargo features.
-Anything reusable goes in `knf-config`; `knf-cli` has no library target.
+The public API is three composable steps: `load_layers` → `merge` → `interpolate`.
+No new dependencies without a deliberate reason, and no cargo features. Anything
+reusable goes in `knf-core`; `knf-cli` has no library target.
 
 ## Code rules
 
@@ -47,9 +48,11 @@ Anything reusable goes in `knf-config`; `knf-cli` has no library target.
 - Library error `Display`s end **without** a trailing newline so the CLI can append
   `help:` flush against them; `TomlError` is `#[error("{0}")]` with no `#[from]`/`#[source]`.
   CLI snapshots pin both.
-- Format conversions live only in `knf-config/src/value.rs`, called only from `format.rs`.
-- `ProcessEnv` (`knf-config/src/env.rs`) is the only `std::env::var` in the workspace;
-  `knf-interp` gets the environment through the `Env` trait.
+- `serde_json`/`toml` appear only in `format.rs`, `value.rs` and `set.rs`; `merge.rs`,
+  `ir.rs`, `path.rs` and `interp/` never name a format. Format conversions live only in
+  `value.rs`, called only from `format.rs`.
+- `ProcessEnv` (`knf-core/src/env.rs`) is the only `std::env::var` in the workspace;
+  `interp/` gets the environment through the `Env` trait.
 - One path grammar (`RefPath`); writers take keys only, checked once via
   `RefPath::try_into_keys` before any I/O.
 - Construct `Number::U64` via `Number::from_u64` (it demotes to `I64` when it fits).
@@ -72,11 +75,10 @@ Anything reusable goes in `knf-config`; `knf-cli` has no library target.
 ## Tests
 
 - `knf-core/tests/cases.rs`: table-driven, one line per merge case in `CASES`.
-  Its JSON helper in `tests/common/mod.rs` duplicates code from `knf-config` on purpose.
-- `knf-core/tests/props.rs`, `knf-interp/tests/props.rs`: proptests; strategies exclude
-  floats so equality stays total.
-- `knf-interp` unit tests use a `HashMap` stub `Env`, never the process environment.
-- `knf-config/tests/library.rs`: public-API behaviour suite.
+- `knf-core/tests/props.rs`, `knf-core/tests/interp_props.rs`: proptests; strategies
+  exclude floats so equality stays total.
+- `interp/` unit tests use a `HashMap` stub `Env`, never the process environment.
+- `knf-core/tests/library.rs`: public-API behaviour suite.
 - `knf/tests/public_api.rs`: catches missing re-exports — name a type there once it
   becomes reachable through the public surface.
 - `knf/tests/cli.rs`: runs the real binary in a tempdir; set env vars via `with_env`,
