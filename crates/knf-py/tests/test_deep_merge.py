@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from collections import UserDict
 
 import pytest
@@ -233,8 +234,23 @@ def test_the_knf_executable_comes_with_the_wheel(write):
     assert out.stdout.strip() == '{"a":1,"b":2}'
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux accepts raw bytes in filenames")
+def test_the_knf_executable_accepts_non_utf8_filename(tmp_path):
+    knf = shutil.which("knf")
+    assert knf is not None
+    path = os.fsencode(tmp_path) + b"/name-\xff.json"
+    with open(path, "wb") as file:
+        file.write(b'{"a":1}')
+
+    out = subprocess.run(
+        [os.fsencode(knf), path, b"--compact"],
+        capture_output=True,
+        check=True,
+    )
+    assert out.stdout.strip() == b'{"a":1}'
+
+
 def test_a_bare_str_is_not_a_list_of_files(write):
     path = write("a.json", "{}")
     with pytest.raises(TypeError):
         deep_merge(str(path))
-

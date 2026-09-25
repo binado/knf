@@ -7,6 +7,8 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
 #[path = "../../knf/src/main.rs"]
 mod cli_bin;
@@ -136,7 +138,22 @@ fn os_error<E: PyTypeInfo>(
 /// `sys.argv`, not `std::env::args`.
 #[pyfunction]
 fn cli(py: Python<'_>) -> PyResult<()> {
-    let argv: Vec<String> = py.import("sys")?.getattr("argv")?.extract()?;
+    let sys_argv = py.import("sys")?.getattr("argv")?;
+    // Python decodes Unix argv with surrogateescape. Extracting it as Rust
+    // Strings rejects filenames containing bytes that are not valid UTF-8.
+    #[cfg(unix)]
+    let argv = {
+        let fsencode = py.import("os")?.getattr("fsencode")?;
+        sys_argv
+            .try_iter()?
+            .map(|arg| {
+                let bytes: Vec<u8> = fsencode.call1((arg?,))?.extract()?;
+                Ok(OsString::from_vec(bytes))
+            })
+            .collect::<PyResult<Vec<_>>>()?
+    };
+    #[cfg(not(unix))]
+    let argv: Vec<String> = sys_argv.extract()?;
     cli_bin::main_from(argv);
     Ok(())
 }
