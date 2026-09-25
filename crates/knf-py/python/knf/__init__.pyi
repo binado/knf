@@ -1,5 +1,5 @@
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any, Union
 
 class KnfError(Exception):
@@ -8,7 +8,7 @@ class KnfError(Exception):
 def deep_merge(
     files: Sequence[Union[str, os.PathLike[str]]],
     *,
-    override: Union[Mapping[str, Any], None] = None,
+    override: Union[dict[str, Any], None] = None,
 ) -> dict[str, Any]:
     """Merge layered JSON and TOML files into one ``dict``.
 

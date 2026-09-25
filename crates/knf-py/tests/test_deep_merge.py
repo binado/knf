@@ -4,6 +4,7 @@ import datetime
 import json
 import shutil
 import subprocess
+from collections import UserDict
 
 import pytest
 
@@ -112,6 +113,7 @@ def test_bad_override_is_reported_before_files_are_read(tmp_path):
     ("override", "error", "message"),
     [
         ([("a", 1)], TypeError, "dict"),
+        (UserDict({"a": 1}), TypeError, "dict"),
         ({1: "a"}, TypeError, "keys must be str"),
         ({"a": {2: "b"}}, TypeError, "under `a`"),
         ({"xs": [1, 2**64]}, ValueError, r"`xs\[1\]`"),
