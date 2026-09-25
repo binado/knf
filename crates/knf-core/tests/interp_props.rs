@@ -1,7 +1,6 @@
 //! The property the opt-in flag exists to protect.
 
-use knf_core::{Map, Number, Value};
-use knf_interp::{Env, EnvValue, interpolate};
+use knf::{Env, EnvValue, Map, Number, Value, interpolate};
 use proptest::prelude::*;
 
 /// An environment that has nothing in it. The property below never reaches a
@@ -16,10 +15,8 @@ impl Env for NoEnv {
 }
 
 /// Arbitrary IR values over an alphabet with no `$` in it, and no floats — the
-/// same exclusion `knf-core`'s `props.rs` makes, so equality stays total.
-///
-/// This is a second, smaller copy of that generator on purpose: test-only
-/// strategies do not cross crate boundaries.
+/// same exclusion `props.rs` makes, so equality stays total. A second, smaller
+/// copy of that generator, with `$` kept out of the string alphabet.
 fn arb_value() -> impl Strategy<Value = Value> {
     let leaf = prop_oneof![
         Just(Value::Null),

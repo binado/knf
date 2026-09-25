@@ -1,4 +1,4 @@
-//! `${key.path}` and `${env:VAR}` resolution over the [`knf_core`] merge IR.
+//! `${key.path}` and `${env:VAR}` resolution over the merged [`Value`].
 //!
 //! One pass over a merged document, replacing references in string values. Keys
 //! are never interpolated; values only.
@@ -14,31 +14,24 @@
 //! `$$` is a literal `$`. A `$` followed by anything but `$` or `{` is ordinary
 //! text.
 //!
-//! **No `std::env` here.** The environment is injected through [`Env`], so the
-//! crate is deterministic and testable without touching process state — the same
-//! property that makes `cargo test -p knf-core` a fast inner loop. It is also
-//! what keeps the JSON-or-string typing rule out of this crate: the caller
-//! parses and hands over a [`Value`].
-//!
-//! `knf-core` and `thiserror`. No format crate, no I/O, and in particular no
-//! `serde_json` — the path vocabulary comes from `knf-core`, which has none
-//! either, so nothing in this tree can type a value the way `--set` does.
-//! `cargo tree -p knf-interp --depth 1` is the enforcement.
+//! **No `std::env` here.** The environment is injected through [`Env`], so this
+//! module is deterministic and testable without touching process state. It is
+//! also what keeps the JSON-or-string typing rule out of resolution: the caller
+//! parses and hands over a [`Value`]. [`ProcessEnv`](crate::ProcessEnv) is the
+//! one implementation that reads the real environment.
 
 mod error;
-mod path;
 mod render;
 mod scan;
 
 use std::collections::HashMap;
 
-use knf_core::{Map, PathError, RefPath, Value};
+use crate::path::lookup;
+use crate::{Map, PathError, RefPath, Seg, Value};
 
 pub use error::{Cycle, InterpError, Problem};
-pub use knf_core::{Seg, render_path};
 pub use scan::Syntax;
 
-use path::lookup;
 use render::stringify;
 use scan::{Piece, Spelled, scan};
 
@@ -66,8 +59,9 @@ pub struct EnvValue {
 
 /// Where `${env:NAME}` reads from.
 ///
-/// A trait rather than a direct `std::env::var` call so that this crate never
-/// touches process state; the binary supplies the one implementation that does.
+/// A trait rather than a direct `std::env::var` call so that resolution never
+/// touches process state; [`ProcessEnv`](crate::ProcessEnv) is the one
+/// implementation that does.
 pub trait Env {
     /// The variable, or `None` if it is unset.
     fn lookup(&self, name: &str) -> Option<EnvValue>;
@@ -78,6 +72,12 @@ pub trait Env {
 /// By value because resolution builds a new tree rather than editing in place —
 /// a referent must be read in its pre-substitution form no matter which order
 /// the document is walked in.
+///
+/// Call it once, on the merged document, never per layer: a reference reads the
+/// document the caller is actually going to get. Overlays therefore interpolate
+/// like any other layer, and strict mode has already run — it compares the
+/// types values had when they were *written*, so a `"${port}"` was a string when
+/// it looked.
 ///
 /// Every unresolved reference and every malformed one is collected, so a run
 /// reports all of them. A cycle is the exception and returns alone: there is

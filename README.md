@@ -33,63 +33,49 @@ To build from source instead:
 cargo install knf-cli
 ```
 
-## Rust libraries
+## Rust library
 
-The whole pipeline — read paths, parse JSON and TOML, merge, interpolate — is
-`knf-config`, published separately from the command line so a Rust consumer or
+The whole pipeline (read paths, parse JSON and TOML, merge, interpolate) is
+`knf-core`. It's published separately from the command line, so a Rust consumer or
 a language binding never pulls in `clap`:
-
-```bash
-cargo add knf-config
-```
-
-```rust
-use knf::{MergeOpts, merge};
-
-let merged = merge(&["base.toml", "prod.toml"], MergeOpts::default())?;
-```
-
-`MergeOpts` also accepts strict mode, shallow merge, in-memory terminal
-overlays, an input-format override, and opt-in interpolation. An overlay is a
-`knf::Map` rather than a value, for the reason a file layer must be an object at
-the top level: a scalar layer would replace the whole document instead of
-shadowing a key. The result is the format-independent `knf::Value`, ready for a
-native adapter or language binding to convert without parsing rendered stdout;
-`knf::format::emit` renders it when you do want text.
-
-With `interpolate` set, `merge` resolves `${env:NAME}` against the process
-environment; left unset, references are not substituted at all. Pass your own
-environment with `merge_with_env`, and the output is a function of the inputs
-alone:
-
-```rust
-let opts = MergeOpts { interpolate: true, ..MergeOpts::default() };
-let merged = knf::merge_with_env(&paths, opts, &my_env)?;
-```
-
-Errors carry typed causes rather than prose — `LoadError`, `MergeError`,
-`InterpError`, `TomlError` — and name no command-line flags, since a library
-caller has no command line to act on. A null reaching TOML, for instance, is
-reported as the paths it was found at; whether the remedy is spelled `-f json`
-is your interface's business, not the library's.
-
-`Map`, `Value`, `Format`, `Env` and every error type are
-re-exported from `knf`, along with what they are made of — `Number` inside
-`Value::Number`, `Cycle` and `Syntax` inside `InterpError` — so a consumer needs
-no direct dependency on `knf-core` or `knf-interp` to write any of it down.
-
-For merging values that are already in memory, use the smaller core crate — it
-has no file I/O and no format crates, only `indexmap` and `thiserror`:
 
 ```bash
 cargo add knf-core
 ```
 
-```rust
-use knf_core::{Value, merge};
+The library is named `knf`. Loading, merging and interpolating are three
+functions, and you compose them:
 
-let merged = merge([base, overlay])?;
+```rust
+use knf::{MergeOptions, load_layers, merge};
+
+let (layers, _formats) = load_layers(&["base.toml", "prod.toml"], None)?;
+let merged = merge(layers, &MergeOptions::default())?;
 ```
+
+`load_layers` infers each file's format from its extension; pass `Some(Format::…)`
+to override (required for `-`, which reads stdin). It also returns the format
+each file was read as, so you can pick an output format before merging.
+
+`MergeOptions` sets strict mode and shallow merge. `merge` takes any list of
+`knf::Value`s, so in-memory overlays are just more layers appended after the
+files. An overlay should be a `Value::Object`: a scalar layer replaces the whole
+document instead of shadowing a key. The result is the format-independent
+`knf::Value`, ready for a native adapter or language binding to convert without
+parsing rendered stdout. `knf::format::emit` renders it when you do want text.
+
+Interpolation is a separate, opt-in step, run once on the merged document.
+Supply the environment yourself, or use `knf::ProcessEnv` for the real one:
+
+```rust
+let merged = knf::interpolate(merged, &knf::ProcessEnv)?;
+```
+
+Errors are typed rather than prose (`LoadError`, `MergeError`, `InterpError`,
+`TomlError`) and never name a command-line flag, since a library caller has no
+command line to act on. A null reaching TOML, for instance, is reported by the
+paths it was found at. Whether the remedy is spelled `-f json` is up to your
+interface, not the library.
 
 ## Merging
 
@@ -271,7 +257,7 @@ both emit their input unchanged.
 
 ```bash
 cargo test --workspace
-cargo test -p knf-core           # fast inner loop: no filesystem, no process
+cargo test -p knf-core --lib     # fast inner loop: unit tests only
 ```
 
 ## License

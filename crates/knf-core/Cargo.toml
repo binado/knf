@@ -1,21 +1,26 @@
 [package]
 name = "knf-core"
-description = "Layered merge over an owned JSON/TOML-superset value tree"
+description = "Load, merge and emit layered JSON and TOML configuration files"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-# thiserror and indexmap, and nothing else. No format crates, no anyhow, no clap,
-# no I/O — there are no features to gate because there is nothing to gate.
+# crates.io already has an unrelated `knf`; the library is still `knf`, so a
+# consumer writes `knf-core` in their manifest and `use knf::…` in their code.
+[lib]
+name = "knf"
+
+# No clap: the flag vocabulary is `knf-cli`'s, and an error raised in this crate
+# names key paths and file paths but never a command-line flag.
 # `cargo tree -p knf-core --depth 1` is the enforcement.
 [dependencies]
+anyhow.workspace = true
 indexmap = "2"
+serde_json.workspace = true
 thiserror.workspace = true
+toml.workspace = true
 
-# serde_json is a *dev*-dependency only: the table tests are written as JSON
-# literals for readability and converted to the IR in tests/common. Dev deps do
-# not propagate to consumers, so the no-format-deps promise still holds.
 [dev-dependencies]
 proptest = "1"
-serde_json = { workspace = true }
+tempfile = "3"

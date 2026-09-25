@@ -3,13 +3,13 @@
 
 use std::collections::HashMap;
 
-use knf_core::{Map, Number, Value};
+use crate::{Map, Number, Value};
 
 use super::*;
 
 /// A `HashMap` environment. `typed` is filled by a miniature of the caller's
-/// JSON-or-string rule — enough to exercise the raw/typed split without dragging
-/// `serde_json` into this crate's tree.
+/// JSON-or-string rule — enough to exercise the raw/typed split without
+/// depending on the real one, which is tested beside `--set`.
 #[derive(Default)]
 struct StubEnv(HashMap<String, String>);
 

@@ -3,12 +3,12 @@
 //! Only embedded references need this — a whole-string reference takes the
 //! referent's value *and type*, so nothing is rendered at all.
 //!
-//! Numbers are hand-rolled because this crate deliberately has no serializer:
+//! Numbers are hand-rolled because interpolation deliberately uses no serializer:
 //! Rust's [`Display`](std::fmt::Display) prints `1.0f64` as `1`, while both of
 //! `knf`'s emitters write `1.0`. Borrowing `Display` would make
 //! `"v${version}"` and `version = ${version}` disagree about the same value.
 
-use knf_core::{Number, Value};
+use crate::{Number, Value};
 
 /// The text an embedded reference splices in, or `None` when the value has no
 /// format-independent spelling.
@@ -48,19 +48,17 @@ fn number(n: Number) -> String {
 /// TOML's `inf` and `nan` literals — so they take their TOML spellings. The sign
 /// of a NaN is not meaningful, so every NaN renders `nan`.
 fn float(f: f64) -> String {
-    if f.is_nan() {
-        return "nan".to_string();
+    if f.is_finite() {
+        format!("{f:?}")
+    } else {
+        crate::value::nonfinite_spelling(f).to_string()
     }
-    if f.is_infinite() {
-        return if f.is_sign_positive() { "inf" } else { "-inf" }.to_string();
-    }
-    format!("{f:?}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use knf_core::Map;
+    use crate::Map;
 
     #[test]
     fn scalars_render() {

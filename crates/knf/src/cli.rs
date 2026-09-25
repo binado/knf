@@ -8,7 +8,7 @@ use knf::{Format, PathLeaf};
 /// `-f` and `--input-format`, as clap sees them.
 ///
 /// A local mirror of [`Format`] rather than a derive on `Format` itself:
-/// `knf-config` has no clap, and the orphan rule forbids implementing
+/// `knf-core` has no clap, and the orphan rule forbids implementing
 /// `ValueEnum` for a foreign type from here. clap takes its possible values
 /// from the variant idents, so `--help` reads `json`/`toml` either way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]

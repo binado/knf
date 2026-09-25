@@ -1,6 +1,6 @@
 //! Two cheap properties that catch real bugs in the recursion.
 
-use knf_core::{Map, MergeOptions, Number, Value, merge_into, merge_with};
+use knf::{Map, MergeOptions, Number, Value, merge, merge_into};
 use proptest::prelude::*;
 
 /// Arbitrary IR values, deliberately without floats so that equality is total —
@@ -76,7 +76,7 @@ proptest! {
     /// what the byte-level no-op of `knf --shallow a.json` rests on.
     #[test]
     fn a_single_layer_is_identity_under_shallow(a in arb_doc()) {
-        let got = merge_with([a.clone()], &MergeOptions::SHALLOW).expect("non-strict");
+        let got = merge([a.clone()], &MergeOptions::SHALLOW).expect("non-strict");
         prop_assert_eq!(got, a);
     }
 

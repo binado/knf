@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use knf::{Map, MergeOpts, Value, format::Format};
+use knf::{Map, MergeOptions, Value, format::Format};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -16,24 +16,30 @@ fn as_json(value: Value) -> serde_json::Value {
     knf::value::to_json(value).expect("no non-finite floats in these fixtures")
 }
 
-/// An overlay is a [`Map`]: the type is what keeps a scalar layer — which would
+/// An overlay is built from a [`Map`], which keeps a scalar layer — which would
 /// replace the whole document rather than shadow a key — out of the fold.
-fn overlay(json: serde_json::Value) -> Map {
+fn overlay(json: serde_json::Value) -> Value {
     let serde_json::Value::Object(map) = json else {
         panic!("an overlay fixture must be an object")
     };
-    knf::value::object_from_json(map)
+    Value::Object(knf::value::object_from_json(map))
+}
+
+/// The whole file pipeline, as a caller composes it: load, then fold.
+fn merge_files<P: AsRef<Path>>(paths: &[P], opts: &MergeOptions) -> anyhow::Result<Value> {
+    let (layers, _formats) = knf::load_layers(paths, None)?;
+    Ok(knf::merge(layers, opts)?)
 }
 
 #[test]
-fn merge_loads_parses_and_merges_paths_without_a_cli() {
+fn load_and_merge_paths_without_a_cli() {
     let dir = tree(&[
         ("base.toml", "[server]\nhost = \"local\"\nport = 80\n"),
         ("prod.json", r#"{"server":{"port":443},"debug":true}"#),
     ]);
     let paths = [dir.path().join("base.toml"), dir.path().join("prod.json")];
 
-    let merged = knf::merge(&paths, MergeOpts::default()).expect("merge succeeds");
+    let merged = merge_files(&paths, &MergeOptions::default()).expect("merge succeeds");
 
     assert_eq!(
         as_json(merged),
@@ -42,7 +48,7 @@ fn merge_loads_parses_and_merges_paths_without_a_cli() {
 }
 
 #[test]
-fn merge_options_cover_shallow_terminal_overlays_and_interpolation() {
+fn shallow_terminal_overlays_and_interpolation_compose() {
     let dir = tree(&[
         (
             "base.json",
@@ -53,16 +59,10 @@ fn merge_options_cover_shallow_terminal_overlays_and_interpolation() {
     let paths = [dir.path().join("base.json"), dir.path().join("prod.json")];
     let overlay = overlay(json!({"port": 443, "data": "${root}/data"}));
 
-    let merged = knf::merge(
-        &paths,
-        MergeOpts {
-            shallow: true,
-            overlays: vec![overlay],
-            interpolate: true,
-            ..MergeOpts::default()
-        },
-    )
-    .expect("configured merge succeeds");
+    let (mut layers, _) = knf::load_layers(&paths, None).expect("layers load");
+    layers.push(overlay);
+    let merged = knf::merge(layers, &MergeOptions::SHALLOW).expect("shallow merge succeeds");
+    let merged = knf::interpolate(merged, &knf::ProcessEnv).expect("document references resolve");
 
     assert_eq!(
         as_json(merged),
@@ -76,27 +76,16 @@ fn merge_options_cover_shallow_terminal_overlays_and_interpolation() {
 }
 
 #[test]
-fn strict_overlay_errors_preserve_the_core_error() {
+fn strict_overlay_errors_name_the_key_path() {
     let dir = tree(&[("base.json", r#"{"port":80}"#)]);
     let paths = [dir.path().join("base.json")];
     let overlay = overlay(json!({"port": "wrong kind"}));
 
-    let err = knf::merge(
-        &paths,
-        MergeOpts {
-            strict: true,
-            overlays: vec![overlay],
-            ..MergeOpts::default()
-        },
-    )
-    .expect_err("strict overlay must fail");
+    let (mut layers, _) = knf::load_layers(&paths, None).expect("layers load");
+    layers.push(overlay);
+    let err = knf::merge(layers, &MergeOptions::STRICT).expect_err("strict overlay must fail");
 
-    assert_eq!(
-        err.downcast_ref::<knf::MergeError>()
-            .expect("preserves the core error")
-            .path(),
-        ["port"]
-    );
+    assert_eq!(err.path(), ["port"]);
 }
 
 #[test]
@@ -104,24 +93,19 @@ fn input_format_can_override_paths_without_extensions() {
     let dir = tree(&[("base", r#"{"a":1}"#), ("over", r#"{"b":2}"#)]);
     let paths = [dir.path().join("base"), dir.path().join("over")];
 
-    let merged = knf::merge(
-        &paths,
-        MergeOpts {
-            input_format: Some(Format::Json),
-            ..MergeOpts::default()
-        },
-    )
-    .expect("explicit input format");
+    let (layers, formats) = knf::load_layers(&paths, Some(Format::Json)).expect("explicit format");
+    assert_eq!(formats, [Format::Json, Format::Json]);
+    let merged = knf::merge(layers, &MergeOptions::default()).expect("merge succeeds");
 
     assert_eq!(as_json(merged), json!({"a": 1, "b": 2}));
 }
 
 #[test]
-fn merge_accepts_borrowed_paths() {
+fn load_layers_accepts_borrowed_paths() {
     let dir = tree(&[("base.json", r#"{"a":1}"#)]);
     let path = dir.path().join("base.json");
 
-    let merged = knf::merge(&[Path::new(&path)], MergeOpts::default()).expect("borrowed path");
+    let merged = merge_files(&[Path::new(&path)], &MergeOptions::default()).expect("borrowed path");
 
     assert_eq!(as_json(merged), json!({"a": 1}));
 }
@@ -133,7 +117,7 @@ fn merge_accepts_borrowed_paths() {
 fn load_errors_are_typed_and_flag_free() {
     let dir = tree(&[("layer", "{}")]);
 
-    let err = knf::merge(&[dir.path().join("layer")], MergeOpts::default())
+    let err = knf::load_layers(&[dir.path().join("layer")], None)
         .expect_err("an extensionless path cannot be typed");
     let load = err
         .downcast_ref::<knf::LoadError>()
@@ -145,7 +129,7 @@ fn load_errors_are_typed_and_flag_free() {
         "a library error must not name a flag: {load}"
     );
 
-    let err = knf::merge(&[dir.path()], MergeOpts::default()).expect_err("a directory is no layer");
+    let err = knf::load_layers(&[dir.path()], None).expect_err("a directory is no layer");
     assert!(matches!(
         err.downcast_ref::<knf::LoadError>(),
         Some(knf::LoadError::Directory { .. })
@@ -155,7 +139,7 @@ fn load_errors_are_typed_and_flag_free() {
 /// `${env:...}` resolves against whatever the caller calls the environment.
 /// Nothing here reads process state, which is the whole point of the seam.
 #[test]
-fn merge_with_env_resolves_against_a_supplied_environment() {
+fn interpolate_resolves_against_a_supplied_environment() {
     struct StubEnv;
     impl knf::Env for StubEnv {
         fn lookup(&self, name: &str) -> Option<knf::EnvValue> {
@@ -170,28 +154,20 @@ fn merge_with_env_resolves_against_a_supplied_environment() {
         "base.json",
         r#"{"port":"${env:PORT}","url":"x:${env:PORT}"}"#,
     )]);
-    let merged = knf::merge_with_env(
-        &[dir.path().join("base.json")],
-        MergeOpts {
-            interpolate: true,
-            ..MergeOpts::default()
-        },
-        &StubEnv,
-    )
-    .expect("the stub supplies PORT");
+    let merged = merge_files(&[dir.path().join("base.json")], &MergeOptions::default())
+        .expect("merge succeeds");
+    let merged = knf::interpolate(merged, &StubEnv).expect("the stub supplies PORT");
 
     // Whole-string takes the typed value, embedded splices the raw text.
     assert_eq!(as_json(merged), json!({"port": 8080, "url": "x:8080"}));
 }
 
-/// Interpolation is opt-in, and the default has to keep saying so: `merge` with
-/// default options is a byte-level no-op over a document full of `${...}`.
+/// Interpolation is a separate step: `merge` alone is a byte-level no-op over a
+/// document full of `${...}`.
 #[test]
-fn interpolation_is_off_by_default() {
-    assert!(!MergeOpts::default().interpolate);
-
+fn merge_does_not_interpolate() {
     let dir = tree(&[("base.json", r#"{"a":"${b}","b":"literal"}"#)]);
-    let merged = knf::merge(&[dir.path().join("base.json")], MergeOpts::default())
+    let merged = merge_files(&[dir.path().join("base.json")], &MergeOptions::default())
         .expect("no references are resolved");
     assert_eq!(as_json(merged), json!({"a": "${b}", "b": "literal"}));
 }
@@ -206,7 +182,7 @@ fn interpolation_is_off_by_default() {
 #[test]
 fn the_null_in_toml_report_locates_the_nulls_and_names_no_flag() {
     let dir = tree(&[("base.json", r#"{"a":{"b":null},"c":[1,null]}"#)]);
-    let merged = knf::merge(&[dir.path().join("base.json")], MergeOpts::default())
+    let merged = merge_files(&[dir.path().join("base.json")], &MergeOptions::default())
         .expect("a null is an ordinary value up to the emit");
 
     let err = knf::format::emit(merged, Format::Toml, true, None)
@@ -239,14 +215,10 @@ fn a_hand_built_datetime_that_does_not_reparse_is_an_error_not_a_panic() {
     let mut overlay = Map::new();
     overlay.insert("created".to_string(), Value::Datetime("nope".to_string()));
 
-    let merged = knf::merge(
-        &[dir.path().join("base.toml")],
-        MergeOpts {
-            overlays: vec![overlay],
-            ..MergeOpts::default()
-        },
-    )
-    .expect("a datetime is an ordinary value right up to the emit");
+    let (mut layers, _) = knf::load_layers(&[dir.path().join("base.toml")], None).expect("toml");
+    layers.push(Value::Object(overlay));
+    let merged = knf::merge(layers, &MergeOptions::default())
+        .expect("a datetime is an ordinary value right up to the emit");
 
     let err = knf::format::emit(merged, Format::Toml, true, None)
         .expect_err("`nope` is not a TOML datetime");
@@ -278,7 +250,7 @@ fn a_hand_built_datetime_that_does_not_reparse_is_an_error_not_a_panic() {
 #[test]
 fn the_non_finite_report_locates_the_floats_and_names_no_flag() {
     let dir = tree(&[("base.toml", "timeout = inf\nbackoff = [1.0, nan]\n")]);
-    let merged = knf::merge(&[dir.path().join("base.toml")], MergeOpts::default())
+    let merged = merge_files(&[dir.path().join("base.toml")], &MergeOptions::default())
         .expect("inf is an ordinary value up to the emit");
 
     let err = knf::format::emit(merged, Format::Json, true, None)
@@ -312,7 +284,7 @@ fn the_non_finite_report_locates_the_floats_and_names_no_flag() {
 #[test]
 fn the_integer_out_of_range_report_locates_the_integers_and_names_no_flag() {
     let dir = tree(&[("base.json", r#"{"id":10000000000000000001,"ok":42}"#)]);
-    let merged = knf::merge(&[dir.path().join("base.json")], MergeOpts::default())
+    let merged = merge_files(&[dir.path().join("base.json")], &MergeOptions::default())
         .expect("a large integer is an ordinary value up to the emit");
 
     let err = knf::format::emit(merged, Format::Toml, true, None)
