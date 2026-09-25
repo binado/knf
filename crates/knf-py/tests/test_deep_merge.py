@@ -168,6 +168,57 @@ def test_override_rejects_what_is_not_json_like(override, error, message):
         deep_merge([], override=override)
 
 
+def self_containing_dict():
+    d = {}
+    d["self"] = d
+    return d
+
+
+def self_containing_list():
+    xs = []
+    xs.append(xs)
+    return {"xs": xs}
+
+
+def indirect_cycle():
+    a = {}
+    a["b"] = {"a": a}
+    return a
+
+
+def nested(depth):
+    doc = 0
+    for _ in range(depth):
+        doc = {"k": doc}
+    return doc
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        (self_containing_dict(), r"`self` refers back .* \(a cycle\)"),
+        (self_containing_list(), r"`xs\[0\]` refers back"),
+        (indirect_cycle(), r"`b\.a` refers back"),
+        (nested(129), "deeper than 128 levels"),
+    ],
+)
+def test_override_cycles_and_runaway_nesting_raise_instead_of_crashing(override, message):
+    with pytest.raises(ValueError, match=message):
+        deep_merge([], override=override)
+
+
+def test_override_nesting_up_to_the_limit_converts():
+    assert deep_merge([], override=nested(128)) == nested(128)
+
+
+def test_a_value_shared_by_two_keys_is_not_a_cycle():
+    shared = [1, {"x": 2}]
+    assert deep_merge([], override={"a": shared, "b": shared}) == {
+        "a": [1, {"x": 2}],
+        "b": [1, {"x": 2}],
+    }
+
+
 def test_a_bare_str_is_not_a_list_of_files(write):
     path = write("a.json", "{}")
     with pytest.raises(TypeError):

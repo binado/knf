@@ -41,7 +41,7 @@ fn deep_merge<'py>(
     // Before any file is read: a bad override is a mistake in the arguments
     // alone, and saying so must not wait on the files existing or parsing.
     let overlay = r#override
-        .map(|dict| object_from_py(dict, &mut Vec::new()))
+        .map(|dict| object_from_py(dict, &mut Walk::default()))
         .transpose()?;
 
     let merged = py
@@ -136,9 +136,53 @@ fn _knf(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 // --- Python → IR ----------------------------------------------------------
 
+/// How deep an override may nest: the limit `serde_json` already applies to
+/// JSON files. Recursion past it could overflow the stack, which aborts the
+/// interpreter rather than raising.
+const MAX_DEPTH: usize = 128;
+
+/// Where the conversion is: the key path, for error messages, and the
+/// containers it is inside, by identity, so a container that contains itself
+/// is reported instead of recursed into until the stack overflows.
+///
+/// Only the chain being walked is kept, not everything visited, so a value
+/// shared by two keys is fine. The pointers are compared, never dereferenced,
+/// and every object on the chain stays alive while the caller's dict is
+/// borrowed.
+#[derive(Default)]
+struct Walk {
+    path: Vec<Seg>,
+    ancestors: Vec<*mut pyo3::ffi::PyObject>,
+}
+
+impl Walk {
+    /// Called before descending into a dict, list or tuple.
+    fn enter(&mut self, container: &Bound<'_, PyAny>) -> PyResult<()> {
+        let ptr = container.as_ptr();
+        if self.ancestors.contains(&ptr) {
+            return Err(PyValueError::new_err(format!(
+                "override: `{}` refers back to a value that contains it (a cycle)",
+                render_path(&self.path)
+            )));
+        }
+        if self.ancestors.len() == MAX_DEPTH {
+            // No path: at this depth it would be the whole message.
+            return Err(PyValueError::new_err(format!(
+                "override: nests deeper than {MAX_DEPTH} levels"
+            )));
+        }
+        self.ancestors.push(ptr);
+        Ok(())
+    }
+
+    fn leave(&mut self) {
+        self.ancestors.pop();
+    }
+}
+
 /// A JSON-like Python value as a layer. Anything else is rejected by path —
 /// including `datetime`, since a `Value::Datetime` only ever comes from TOML.
-fn value_from_py(obj: &Bound<'_, PyAny>, path: &mut Vec<Seg>) -> PyResult<Value> {
+fn value_from_py(obj: &Bound<'_, PyAny>, walk: &mut Walk) -> PyResult<Value> {
     // `bool` before `int`: `True` is an `int` to Python.
     if obj.is_none() {
         Ok(Value::Null)
@@ -152,7 +196,7 @@ fn value_from_py(obj: &Bound<'_, PyAny>, path: &mut Vec<Seg>) -> PyResult<Value>
         } else {
             return Err(PyValueError::new_err(format!(
                 "override: integer at `{}` does not fit in 64 bits",
-                render_path(path)
+                render_path(&walk.path)
             )));
         };
         Ok(Value::Number(number))
@@ -161,39 +205,43 @@ fn value_from_py(obj: &Bound<'_, PyAny>, path: &mut Vec<Seg>) -> PyResult<Value>
     } else if let Ok(s) = obj.cast::<PyString>() {
         Ok(Value::String(s.to_cow()?.into_owned()))
     } else if let Ok(dict) = obj.cast::<PyDict>() {
-        Ok(Value::Object(object_from_py(dict, path)?))
+        Ok(Value::Object(object_from_py(dict, walk)?))
     } else if obj.is_instance_of::<PyList>() || obj.is_instance_of::<PyTuple>() {
+        walk.enter(obj)?;
         let mut items = Vec::new();
         for (i, item) in obj.try_iter()?.enumerate() {
-            path.push(Seg::Index(i));
-            items.push(value_from_py(&item?, path)?);
-            path.pop();
+            walk.path.push(Seg::Index(i));
+            items.push(value_from_py(&item?, walk)?);
+            walk.path.pop();
         }
+        walk.leave();
         Ok(Value::Array(items))
     } else {
         Err(PyTypeError::new_err(format!(
             "override: `{}` is a {}, which has no place in a config",
-            render_path(path),
+            render_path(&walk.path),
             obj.get_type().name()?
         )))
     }
 }
 
-fn object_from_py(dict: &Bound<'_, PyDict>, path: &mut Vec<Seg>) -> PyResult<Map> {
+fn object_from_py(dict: &Bound<'_, PyDict>, walk: &mut Walk) -> PyResult<Map> {
+    walk.enter(dict.as_any())?;
     let mut map = Map::with_capacity(dict.len());
     for (key, value) in dict.iter() {
         let Ok(key) = key.extract::<String>() else {
             return Err(PyTypeError::new_err(format!(
                 "override: keys must be str, got {} under `{}`",
                 key.get_type().name()?,
-                render_path(path)
+                render_path(&walk.path)
             )));
         };
-        path.push(Seg::Key(key.clone()));
-        let value = value_from_py(&value, path)?;
-        path.pop();
+        walk.path.push(Seg::Key(key.clone()));
+        let value = value_from_py(&value, walk)?;
+        walk.path.pop();
         map.insert(key, value);
     }
+    walk.leave();
     Ok(map)
 }
 
