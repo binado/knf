@@ -59,6 +59,21 @@ jobs:
         run: cargo package --workspace --locked --no-verify
       - name: Verify local CLI installation
         run: cargo install --path crates/knf --locked
+      - name: PEP 517 source build stages the CLI
+        # No stage-cli.sh: pip/build must produce a wheel with the executable.
+        run: |
+          test ! -e crates/knf-py/data/scripts/knf
+          python3 -m venv /tmp/pep517-build
+          /tmp/pep517-build/bin/pip install -U pip build
+          /tmp/pep517-build/bin/python -m build --wheel --outdir /tmp/pep517-dist
+          python3 - <<'PY'
+          import zipfile, pathlib
+          names = zipfile.ZipFile(next(pathlib.Path("/tmp/pep517-dist").glob("*.whl"))).namelist()
+          assert any(n.endswith("data/scripts/knf") for n in names), names
+          PY
+          python3 -m venv /tmp/pep517
+          /tmp/pep517/bin/pip install /tmp/pep517-dist/*.whl
+          test "$(/tmp/pep517/bin/knf --set smoke=true --compact)" = '{"smoke":true}'
       - name: Build Python wheel
         uses: PyO3/maturin-action@v1
         with:
