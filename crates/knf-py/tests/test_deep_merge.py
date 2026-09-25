@@ -131,7 +131,8 @@ def test_a_bare_str_is_not_a_list_of_files(write):
         deep_merge(str(path))
 
 
-def test_the_wheel_installs_the_knf_executable(write):
+def test_the_knf_executable_comes_with_it(write):
+    """pyknf depends on knf-cli, so installing one installs the executable."""
     knf = shutil.which("knf")
     assert knf is not None
     path = write("a.json", '{"a": 1}')

@@ -4,8 +4,7 @@
 !CHANGELOG.md
 !AGENTS.md
 !CLAUDE.md
-# Python: the staged `knf` binary (stage-cli.sh) and what `maturin develop` builds in place.
-/crates/knf-py/data/
+# Python: what `maturin develop` builds in place.
 /crates/knf-py/python/knf/*.so
 /crates/knf-py/python/knf/*.pyd
 __pycache__/

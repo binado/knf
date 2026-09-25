@@ -1,9 +1,8 @@
 //! `knf.deep_merge`: the `knf-core` pipeline as one Python function.
 //!
 //! A frontend, sibling to `knf-cli`: that one is argv and stderr, this one is
-//! arguments and exceptions. The wheel built from this crate also carries the
-//! `knf` binary, compiled from `knf-cli` and staged by `stage-cli.sh`, so
-//! `pip install knf-cli` gives both.
+//! arguments and exceptions. Published to PyPI as `pyknf`, which depends on the
+//! `knf-cli` wheel, so `pip install pyknf` gives both.
 
 use std::path::PathBuf;
 

@@ -10,8 +10,8 @@ name = "knf-cli"
 # belong in the CLI changelog, since knf-cli is what ships both.
 changelog_include = ["knf-core", "knf-py"]
 
-# The Python module inside the knf-cli wheel. Never on crates.io, and versioned
-# by the workspace, so there is nothing of its own to release.
+# The Python module, published to PyPI as `pyknf` by release-plz.yml alongside
+# the knf-cli wheel. Never on crates.io, and versioned by the workspace.
 [[package]]
 name = "knf-py"
 release = false
