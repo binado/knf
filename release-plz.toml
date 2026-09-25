@@ -10,8 +10,8 @@ name = "knf-cli"
 # belong in the CLI changelog, since knf-cli is what ships both.
 changelog_include = ["knf-core", "knf-py"]
 
-# The Python module, published to PyPI as `pyknf` by release-plz.yml alongside
-# the knf-cli wheel. Never on crates.io, and versioned by the workspace.
+# The Python module, published to PyPI as `pyknf` from release-plz.yml when the
+# knf-cli-v* tag is pushed. Never on crates.io, and versioned by the workspace.
 # A package entry defaults publish to true, which release-plz rejects when
 # Cargo.toml sets publish = false, so both flags have to be explicit.
 [[package]]
