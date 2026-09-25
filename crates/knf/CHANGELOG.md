@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/binado/knf/compare/knf-cli-v0.3.0...knf-cli-v0.3.1) - 2026-09-25
+
+### Other
+
+- publish only the pyknf wheel ([#30](https://github.com/binado/knf/pull/30))
+
 ## [0.3.0](https://github.com/binado/knf/compare/knf-cli-v0.2.0...knf-cli-v0.3.0) - 2026-09-25
 
 ### Added
