@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/binado/knf/compare/knf-cli-v0.2.0...knf-cli-v0.3.0) - 2026-09-25
+
+### Added
+
+- [**breaking**] replace per-path merge rules with --shallow ([#22](https://github.com/binado/knf/pull/22))
+
+### Other
+
+- [**breaking**] merge knf-interp and knf-config into knf-core ([#25](https://github.com/binado/knf/pull/25))
+
 ## [0.2.0](https://github.com/binado/knf/compare/knf-cli-v0.1.3...knf-cli-v0.2.0) - 2026-08-28
 
 ### Other
