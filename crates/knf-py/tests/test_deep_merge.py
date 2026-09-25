@@ -1,14 +1,16 @@
 """`knf.deep_merge` and the `knf` executable, as an installed wheel exposes them."""
 
 import datetime
+import errno
 import json
+import os
 import shutil
 import subprocess
 from collections import UserDict
 
 import pytest
 
-from knf import KnfError, deep_merge
+from knf import ParseError, deep_merge
 
 
 @pytest.fixture
@@ -88,20 +90,59 @@ def test_non_finite_floats_pass_through(write):
 @pytest.mark.parametrize(
     ("name", "text", "message"),
     [
-        ("a.json", "{", "a.json"),
-        ("a.toml", "x = ", "a.toml"),
-        ("a.yaml", "x: 1", "cannot infer a format"),
-        ("a.json", "[1, 2]", "a.json"),
+        ("a.json", "{", "a.json: invalid JSON"),
+        ("a.toml", "x = ", "a.toml: invalid TOML"),
+        ("a.json", "[1, 2]", "a.json: expected an object"),
     ],
 )
-def test_bad_files_raise_knf_error(write, name, text, message):
-    with pytest.raises(KnfError, match=message):
+def test_invalid_documents_raise_parse_error(write, name, text, message):
+    with pytest.raises(ParseError, match=message) as info:
         deep_merge([write(name, text)])
+    assert isinstance(info.value, ValueError)
 
 
-def test_missing_file_raises_knf_error(tmp_path):
-    with pytest.raises(KnfError, match="nope.json"):
-        deep_merge([tmp_path / "nope.json"])
+def test_non_utf8_text_raises_parse_error(tmp_path):
+    path = tmp_path / "a.json"
+    path.write_bytes(b'{"a": "\xff"}')
+    with pytest.raises(ParseError, match="a.json"):
+        deep_merge([path])
+
+
+def test_unknown_extension_is_a_value_error_not_a_parse_error(write):
+    with pytest.raises(ValueError, match="cannot infer a format") as info:
+        deep_merge([write("a.yaml", "x: 1")])
+    assert not isinstance(info.value, ParseError)
+
+
+def test_missing_file_raises_like_open(write, tmp_path):
+    missing = tmp_path / "nope.json"
+    with pytest.raises(FileNotFoundError) as info:
+        deep_merge([write("a.json", "{}"), missing])
+    assert info.value.errno == errno.ENOENT
+    assert info.value.filename == str(missing)
+    assert str(info.value) == f"[Errno {errno.ENOENT}] {os.strerror(errno.ENOENT)}: {str(missing)!r}"
+
+
+def test_directory_raises_is_a_directory_error(tmp_path):
+    with pytest.raises(IsADirectoryError) as info:
+        deep_merge([tmp_path])
+    assert info.value.errno == errno.EISDIR
+    assert info.value.filename == str(tmp_path)
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="needs POSIX permissions, which root ignores",
+)
+def test_unreadable_file_raises_permission_error(write):
+    path = write("a.json", "{}")
+    path.chmod(0)
+    try:
+        with pytest.raises(PermissionError) as info:
+            deep_merge([path])
+    finally:
+        path.chmod(0o600)
+    assert info.value.filename == str(path)
 
 
 def test_bad_override_is_reported_before_files_are_read(tmp_path):

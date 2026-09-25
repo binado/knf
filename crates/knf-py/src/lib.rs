@@ -4,19 +4,26 @@
 //! arguments and exceptions. Published to PyPI as `pyknf`, which depends on the
 //! `knf-cli` wheel, so `pip install pyknf` gives both.
 
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 
-use knf::{Map, MergeOptions, Number, Seg, Value, load_layers, merge, render_path};
+use knf::{
+    LoadError, Map, MergeError, MergeOptions, Number, Seg, Value, load_layers, merge, render_path,
+};
+use pyo3::PyTypeInfo;
 use pyo3::create_exception;
-use pyo3::exceptions::{PyException, PyTypeError, PyValueError};
+use pyo3::exceptions::{
+    PyFileNotFoundError, PyIsADirectoryError, PyOSError, PyPermissionError, PyTypeError,
+    PyValueError,
+};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 
 create_exception!(
     knf,
-    KnfError,
-    PyException,
-    "A file could not be read, parsed or merged."
+    ParseError,
+    PyValueError,
+    "A file is not valid JSON or TOML, or is not an object at the top level."
 );
 
 /// Merge layered JSON and TOML files into one `dict`.
@@ -38,21 +45,92 @@ fn deep_merge<'py>(
         .transpose()?;
 
     let merged = py
-        .detach(move || -> anyhow::Result<Value> {
-            let (mut layers, _formats) = load_layers(&files, None)?;
+        .detach(move || -> Result<Value, Failure> {
+            // One file at a time, so a failure knows its path without anyone
+            // parsing it back out of an error message.
+            let mut layers = Vec::with_capacity(files.len() + 1);
+            for path in files {
+                match load_layers(std::slice::from_ref(&path), None) {
+                    Ok((loaded, _formats)) => layers.extend(loaded),
+                    Err(err) => return Err(Failure::File(path, err)),
+                }
+            }
             layers.extend(overlay.map(Value::Object));
-            Ok(merge(layers, &MergeOptions::default())?)
+            merge(layers, &MergeOptions::default()).map_err(Failure::Merge)
         })
-        // `{:#}` is the whole cause chain on one line: "reading `x`: No such file".
-        .map_err(|err| KnfError::new_err(format!("{err:#}")))?;
+        .map_err(|failure| match failure {
+            Failure::File(path, err) => file_error(py, &path, err),
+            // Only strict mode reports a conflict, and it is not exposed.
+            Failure::Merge(err) => PyValueError::new_err(err.to_string()),
+        })?;
 
     value_to_py(py, merged)
+}
+
+enum Failure {
+    File(PathBuf, anyhow::Error),
+    Merge(MergeError),
+}
+
+/// The exception Python's own I/O and parsers would raise for the same
+/// failure: `OSError` subclasses the way `open()` raises them, `ValueError`
+/// for a path knf cannot read as a layer, and [`ParseError`] — a `ValueError`,
+/// like `json.JSONDecodeError` — for a file that is not a valid document.
+fn file_error(py: Python<'_>, path: &Path, err: anyhow::Error) -> PyErr {
+    if let Some(load) = err.downcast_ref::<LoadError>() {
+        return match load {
+            LoadError::Directory { .. } => {
+                os_error::<PyIsADirectoryError>(py, "EISDIR", path, &err)
+            }
+            _ => PyValueError::new_err(load.to_string()),
+        };
+    }
+    if let Some(io) = err.chain().find_map(|c| c.downcast_ref::<io::Error>()) {
+        match io.kind() {
+            io::ErrorKind::NotFound => {
+                return os_error::<PyFileNotFoundError>(py, "ENOENT", path, &err);
+            }
+            io::ErrorKind::PermissionDenied => {
+                return os_error::<PyPermissionError>(py, "EACCES", path, &err);
+            }
+            // `read_to_string` on bytes that are not UTF-8: the content's fault.
+            io::ErrorKind::InvalidData => {}
+            _ => return PyOSError::new_err(format!("{err:#}")),
+        }
+    }
+    // `{:#}` is the whole chain on one line: "a.json: invalid JSON: …".
+    ParseError::new_err(format!("{err:#}"))
+}
+
+/// `E(errno, strerror, filename)`, which is how `open()` raises, so `.errno`,
+/// `.strerror` and `.filename` are all set.
+///
+/// By [`io::ErrorKind`] rather than [`io::Error::raw_os_error`]: on Windows the
+/// raw code is not an errno, and passing it through would pick the wrong
+/// `OSError` subclass. The errno comes from Python's own `errno` module.
+fn os_error<E: PyTypeInfo>(
+    py: Python<'_>,
+    errno_name: &str,
+    path: &Path,
+    err: &anyhow::Error,
+) -> PyErr {
+    let build = || -> PyResult<PyErr> {
+        let errno = py.import("errno")?.getattr(errno_name)?;
+        let strerror = py.import("os")?.call_method1("strerror", (&errno,))?;
+        let filename = path.to_string_lossy().into_owned();
+        Ok(PyErr::new::<E, _>((
+            errno.unbind(),
+            strerror.unbind(),
+            filename,
+        )))
+    };
+    build().unwrap_or_else(|_| PyOSError::new_err(format!("{err:#}")))
 }
 
 #[pymodule]
 fn _knf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deep_merge, m)?)?;
-    m.add("KnfError", m.py().get_type::<KnfError>())?;
+    m.add("ParseError", m.py().get_type::<ParseError>())?;
     Ok(())
 }
 

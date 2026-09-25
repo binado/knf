@@ -22,8 +22,10 @@ version of `--set`. It must be a `dict` of JSON-like values: `None`, `bool`,
 `str` keys. Anything else raises `TypeError` or `ValueError` naming the key
 path, before any file is read.
 
-A file that can't be read, parsed or merged raises `knf.KnfError`. TOML
-datetimes come back as their TOML spelling in a `str`.
+A file that can't be read raises `FileNotFoundError`, `PermissionError` or
+`IsADirectoryError`, as `open()` would. Invalid JSON or TOML raises
+`knf.ParseError`, a `ValueError` like `json.JSONDecodeError`. TOML datetimes
+come back as their TOML spelling in a `str`.
 
 See the [project README](https://github.com/binado/knf#merging) for the merge
 semantics in full.
