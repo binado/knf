@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Builds the `knf` binary and stages it in maturin's `data` directory, which the
 # `knf-cli` wheel installs as a script. Run from the repository root, before
-# `maturin build`; maturin refuses to build if this has not run, so a wheel
+# `maturin build` / `maturin develop`. PEP 517 paths (`pip wheel .`,
+# `python -m build`) go through `knf_build.py`, which does this itself.
+# maturin refuses to build if the data directory is missing, so a wheel
 # without the executable cannot be published by accident.
 #
 #   crates/knf-py/stage-cli.sh                       # host target

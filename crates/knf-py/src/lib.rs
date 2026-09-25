@@ -2,7 +2,8 @@
 //!
 //! A frontend, sibling to `knf-cli`: that one is argv and stderr, this one is
 //! arguments and exceptions. The wheel built from this crate also carries the
-//! `knf` binary, compiled from `knf-cli` and staged by `stage-cli.sh`, so
+//! `knf` binary, compiled from `knf-cli` and staged by the PEP 517 backend
+//! (or `stage-cli.sh` before a direct `maturin` invocation), so
 //! `pip install knf-cli` gives both.
 
 use std::path::PathBuf;

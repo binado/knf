@@ -1,6 +1,9 @@
 [build-system]
 requires = ["maturin>=1.14,<2"]
-build-backend = "maturin"
+# In-tree wrapper around maturin: stages knf-cli into data/scripts/ so
+# `pip wheel .` / `python -m build` produce a wheel with the executable.
+build-backend = "knf_build"
+backend-path = ["crates/knf-py"]
 
 [project]
 name = "knf-cli"
@@ -26,14 +29,19 @@ Issues = "https://github.com/binado/knf/issues"
 [tool.maturin]
 # One wheel, two things: `import knf` is the pyo3 module built from
 # crates/knf-py, and the `knf` executable is knf-cli's binary, which maturin
-# cannot build alongside a pyo3 module. `crates/knf-py/stage-cli.sh` builds it
-# into `data/scripts/`, which the wheel installs onto PATH; without that step
-# the data directory is missing and maturin refuses to build.
+# cannot build alongside a pyo3 module. The PEP 517 backend stages it into
+# `data/scripts/` before calling maturin; `maturin build` / `maturin develop`
+# still need `crates/knf-py/stage-cli.sh` first. Without a staged binary the
+# data directory is missing and maturin refuses to build, so a wheel without
+# the executable cannot ship by accident.
 bindings = "pyo3"
 manifest-path = "crates/knf-py/Cargo.toml"
 module-name = "knf._knf"
 python-source = "crates/knf-py/python"
 data = "crates/knf-py/data"
+# The sdist must contain knf-cli and knf-core, not only the knf-py crate
+# cargo-package would emit.
+sdist-generator = "git"
 exclude = ["**/__pycache__/**"]
 locked = true
 strip = true

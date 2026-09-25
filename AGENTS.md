@@ -21,7 +21,9 @@ cargo tree -p knf-core --depth 1 --edges normal     # never clap (checked in CI)
 cargo tree -p knf-cli --edges normal                # never pyo3 (checked in CI)
 
 # Python: build the knf-cli wheel into a venv, then test it as installed
-crates/knf-py/stage-cli.sh              # stage the `knf` binary (maturin requires it)
+# `pip wheel .` / `python -m build` stage the knf binary via the PEP 517 backend.
+# `maturin develop` still needs it staged first:
+crates/knf-py/stage-cli.sh
 maturin develop && pytest crates/knf-py/tests
 ```
 
@@ -44,11 +46,12 @@ knf-py/      Python module `knf._knf` (pyo3, never on crates.io): arguments and 
 ```
 
 The `knf-cli` **wheel** is built from `knf-py` (root `pyproject.toml`): the pyo3
-module, plus knf-cli's binary that `stage-cli.sh` puts in maturin's `data/scripts/`,
-because maturin can't build a bin next to a pyo3 module. `knf-py` has no Rust tests:
-its tests are `knf-py/tests/*.py`, and they run against an installed wheel.
-Building it with plain cargo needs `PYO3_BUILD_EXTENSION_MODULE=1` (set in CI) unless
-libpython is installed.
+module, plus knf-cli's binary that the PEP 517 backend (`knf_build.py`) — or
+`stage-cli.sh` before a direct `maturin` invocation — puts in maturin's
+`data/scripts/`, because maturin can't build a bin next to a pyo3 module.
+`knf-py` has no Rust tests: its tests are `knf-py/tests/*.py`, and they run
+against an installed wheel. Building it with plain cargo needs
+`PYO3_BUILD_EXTENSION_MODULE=1` (set in CI) unless libpython is installed.
 
 The public API is three composable steps: `load_layers` → `merge` → `interpolate`.
 No new dependencies without a deliberate reason, and no cargo features. Anything
