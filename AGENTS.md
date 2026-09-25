@@ -44,8 +44,12 @@ knf-py/      Python module `knf._knf` (pyo3): arguments and exceptions
 
 Two PyPI wheels: `knf-cli` (root `pyproject.toml`, the binary only) and `pyknf`
 (`knf-py/pyproject.toml`, the pyo3 module, depending on `knf-cli`). maturin can't
-put a bin next to a pyo3 module, hence two. `knf-py` is never on crates.io and has
-no Rust tests: its tests are `knf-py/tests/*.py`, run against an installed wheel.
+put a bin next to a pyo3 module, hence two. They publish from `release-plz.yml`
+on a `knf-cli-v*` tag and on `workflow_dispatch`; the PyPI trusted publisher names
+that workflow file and the `pypi` environment. A release-plz run dispatches the
+workflow after pushing the tag, because a `GITHUB_TOKEN` tag push does not start
+a run. `knf-py` is never on crates.io and has no Rust tests: its tests are
+`knf-py/tests/*.py`, run against an installed wheel.
 Building it with plain cargo needs `PYO3_BUILD_EXTENSION_MODULE=1` (set in CI) unless
 libpython is installed.
 

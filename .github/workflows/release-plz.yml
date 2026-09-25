@@ -4,19 +4,35 @@ on:
   push:
     branches:
       - main
+    # release-plz tags knf-cli-v<version> when a Release PR merges. A tag push
+    # from GITHUB_TOKEN does not start a run, so the release job dispatches
+    # this workflow on that tag. A tag pushed by a person starts it directly.
+    tags: ["knf-cli-v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Distributions to upload. A tag release uploads both. pyknf alone is for shipping the module when knf-cli of this version is already on PyPI."
+        type: choice
+        options:
+          - pyknf
+          - knf-cli
+          - both
+        default: pyknf
 
 jobs:
   # Tag and GitHub-release whatever the last Release PR bumped.
   release-plz-release:
     name: Release-plz release
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'binado' }}
+    if: ${{ github.repository_owner == 'binado' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     outputs:
       knf_released: ${{ steps.knf-release.outputs.released }}
       knf_version: ${{ steps.knf-release.outputs.version }}
     permissions:
       contents: write
       pull-requests: read
+      # Dispatching the PyPI jobs below. The tag push itself does not.
+      actions: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -45,11 +61,62 @@ jobs:
           else
             echo "released=false" >> "$GITHUB_OUTPUT"
           fi
+      - name: Start the PyPI publish
+        if: ${{ steps.knf-release.outputs.released == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.knf-release.outputs.version }}
+        run: gh workflow run release-plz.yml --ref "knf-cli-v${VERSION}" -f publish=both
+
+  # Which distributions this run uploads, and the workspace version they must match.
+  resolve-pypi:
+    name: Resolve PyPI publish
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'binado' && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/knf-cli-v')) }}
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      publish: ${{ steps.plan.outputs.publish }}
+      attest_paths: ${{ steps.plan.outputs.attest_paths }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Plan the upload
+        id: plan
+        env:
+          INPUT_PUBLISH: ${{ inputs.publish }}
+        run: |
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          if [[ "$GITHUB_REF" == refs/tags/knf-cli-v* ]]; then
+            tag="${GITHUB_REF_NAME#knf-cli-v}"
+            if [[ "$tag" != "$version" ]]; then
+              echo "::error::tag knf-cli-v${tag} does not match Cargo.toml version ${version}"
+              exit 1
+            fi
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            publish=both
+          else
+            publish="${INPUT_PUBLISH:-pyknf}"
+          fi
+          case "$publish" in
+            both) attest_paths="dist/knf-cli dist/pyknf" ;;
+            knf-cli) attest_paths="dist/knf-cli" ;;
+            pyknf) attest_paths="dist/pyknf" ;;
+            *)
+              echo "::error::publish must be both, knf-cli, or pyknf"
+              exit 1
+              ;;
+          esac
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
+          echo "attest_paths=${attest_paths}" >> "$GITHUB_OUTPUT"
 
   build-pypi-wheels:
     name: PyPI wheel (${{ matrix.platform.family }}, ${{ matrix.platform.target }})
-    needs: release-plz-release
-    if: ${{ needs.release-plz-release.outputs.knf_released == 'true' }}
+    needs: resolve-pypi
+    if: ${{ github.repository_owner == 'binado' && needs.resolve-pypi.result == 'success' }}
     runs-on: ${{ matrix.platform.runner }}
     permissions:
       contents: read
@@ -155,16 +222,15 @@ jobs:
           if-no-files-found: error
 
   # Both distributions, from one job: each PyPI project's trusted publisher
-  # names this workflow and the `pypi` environment.
+  # names this workflow file and the `pypi` environment.
   publish-pypi:
-    name: Publish knf-cli and pyknf to PyPI
-    needs: [release-plz-release, build-pypi-wheels]
-    if: ${{ needs.release-plz-release.outputs.knf_released == 'true' }}
+    name: Publish to PyPI
+    needs: [resolve-pypi, build-pypi-wheels]
+    if: ${{ github.repository_owner == 'binado' && needs.resolve-pypi.result == 'success' && needs.build-pypi-wheels.result == 'success' }}
     runs-on: ubuntu-latest
-    # PyPI's trusted publisher must name this workflow and environment exactly.
     environment: pypi
     concurrency:
-      group: pypi-${{ needs.release-plz-release.outputs.knf_version }}
+      group: pypi-${{ needs.resolve-pypi.outputs.version }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -185,7 +251,7 @@ jobs:
       - name: Verify wheel sets
         shell: bash
         env:
-          VERSION: ${{ needs.release-plz-release.outputs.knf_version }}
+          VERSION: ${{ needs.resolve-pypi.outputs.version }}
         run: |
           test "$(find dist -type f -name '*.tar.gz' -print | wc -l)" -eq 0
           for pair in knf-cli:knf_cli pyknf:pyknf; do
@@ -206,18 +272,34 @@ jobs:
       - name: Generate PyPI attestations
         uses: astral-sh/attest-action@v0.0.6
         with:
-          paths: dist/knf-cli dist/pyknf
+          paths: ${{ needs.resolve-pypi.outputs.attest_paths }}
       # knf-cli first: pyknf depends on it.
       - name: Publish wheels
+        env:
+          PUBLISH: ${{ needs.resolve-pypi.outputs.publish }}
         run: |
-          uv publish --trusted-publishing always dist/knf-cli/*.whl
-          uv publish --trusted-publishing always dist/pyknf/*.whl
+          case "$PUBLISH" in
+            both)
+              uv publish --trusted-publishing always dist/knf-cli/*.whl
+              uv publish --trusted-publishing always dist/pyknf/*.whl
+              ;;
+            knf-cli)
+              uv publish --trusted-publishing always dist/knf-cli/*.whl
+              ;;
+            pyknf)
+              uv publish --trusted-publishing always dist/pyknf/*.whl
+              ;;
+            *)
+              echo "unexpected publish selection: $PUBLISH" >&2
+              exit 1
+              ;;
+          esac
 
   # Open or refresh the PR that bumps versions and the changelog.
   release-plz-pr:
     name: Release-plz PR
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'binado' }}
+    if: ${{ github.repository_owner == 'binado' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     permissions:
       contents: write
       pull-requests: write
