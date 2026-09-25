@@ -6,5 +6,12 @@ semver_check = false
 
 [[package]]
 name = "knf-cli"
-# The library lives in a sibling crate; its commits belong in the CLI changelog.
-changelog_include = ["knf-core"]
+# The library and the Python module live in sibling crates; their commits
+# belong in the CLI changelog, since knf-cli is what ships both.
+changelog_include = ["knf-core", "knf-py"]
+
+# The Python module inside the knf-cli wheel. Never on crates.io, and versioned
+# by the workspace, so there is nothing of its own to release.
+[[package]]
+name = "knf-py"
+release = false

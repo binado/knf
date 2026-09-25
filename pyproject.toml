@@ -5,16 +5,18 @@ build-backend = "maturin"
 [project]
 name = "knf-cli"
 dynamic = ["version"]
-description = "Merge layered configuration files and print the result"
+description = "Merge layered configuration files: the knf command line and a Python function"
 readme = "README.md"
-requires-python = ">=3.8"
+# abi3-py39: one wheel per platform serves every CPython from 3.9 on.
+requires-python = ">=3.9"
 license = "MIT"
-keywords = ["configuration", "json", "toml", "cli"]
+keywords = ["configuration", "json", "toml", "cli", "merge"]
 classifiers = [
   "Environment :: Console",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Rust",
   "Topic :: Utilities",
+  "Typing :: Typed",
 ]
 
 [project.urls]
@@ -22,9 +24,17 @@ Repository = "https://github.com/binado/knf"
 Issues = "https://github.com/binado/knf/issues"
 
 [tool.maturin]
-bindings = "bin"
-manifest-path = "crates/knf/Cargo.toml"
-targets = [{ name = "knf", kind = "bin" }]
+# One wheel, two things: `import knf` is the pyo3 module built from
+# crates/knf-py, and the `knf` executable is knf-cli's binary, which maturin
+# cannot build alongside a pyo3 module. `crates/knf-py/stage-cli.sh` builds it
+# into `data/scripts/`, which the wheel installs onto PATH; without that step
+# the data directory is missing and maturin refuses to build.
+bindings = "pyo3"
+manifest-path = "crates/knf-py/Cargo.toml"
+module-name = "knf._knf"
+python-source = "crates/knf-py/python"
+data = "crates/knf-py/data"
+exclude = ["**/__pycache__/**"]
 locked = true
 strip = true
 compatibility = "pypi"

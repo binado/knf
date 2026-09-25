@@ -60,42 +60,50 @@ jobs:
           - family: manylinux
             runner: ubuntu-22.04
             target: x86_64
+            rust_target: x86_64-unknown-linux-gnu
             manylinux: "2_17"
             docker_platform: linux/amd64
             test_image: python:3.12-bookworm
           - family: manylinux
             runner: ubuntu-22.04
             target: aarch64
+            rust_target: aarch64-unknown-linux-gnu
             manylinux: "2_17"
             docker_platform: linux/arm64
             test_image: python:3.12-bookworm
           - family: musllinux
             runner: ubuntu-22.04
             target: x86_64
+            rust_target: x86_64-unknown-linux-musl
             manylinux: musllinux_1_2
             docker_platform: linux/amd64
             test_image: python:3.12-alpine
           - family: musllinux
             runner: ubuntu-22.04
             target: aarch64
+            rust_target: aarch64-unknown-linux-musl
             manylinux: musllinux_1_2
             docker_platform: linux/arm64
             test_image: python:3.12-alpine
           - family: macos
             runner: macos-15-intel
             target: x86_64
+            rust_target: x86_64-apple-darwin
             manylinux: "off"
           - family: macos
             runner: macos-15
             target: aarch64
+            rust_target: aarch64-apple-darwin
             manylinux: "off"
           - family: windows
             runner: windows-latest
             target: x64
+            rust_target: x86_64-pc-windows-msvc
             manylinux: "off"
           - family: windows
             runner: windows-11-arm
             target: aarch64
+            rust_target: aarch64-pc-windows-msvc
             manylinux: "off"
     steps:
       - name: Checkout repository
@@ -105,6 +113,23 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+      # The wheel's `knf` executable is knf-cli's binary, which maturin cannot
+      # build next to a pyo3 module; stage-cli.sh builds it into the wheel's
+      # data directory first. On Linux that happens in maturin-action's
+      # container (before-script-linux below), so the binary shares the wheel's
+      # manylinux/musllinux baseline; elsewhere the runner is the build host.
+      - name: Install Rust toolchain
+        if: ${{ matrix.platform.family == 'macos' || matrix.platform.family == 'windows' }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.rust_target }}
+      - name: Stage knf binary
+        if: ${{ matrix.platform.family == 'macos' || matrix.platform.family == 'windows' }}
+        shell: bash
+        env:
+          # Match [tool.maturin.target.*] in pyproject.toml; ignored off macOS.
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.platform.target == 'x86_64' && '10.12' || '11.0' }}
+        run: crates/knf-py/stage-cli.sh ${{ matrix.platform.rust_target }}
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
@@ -114,6 +139,9 @@ jobs:
           maturin-version: v1.14.1
           args: --release --locked --compatibility pypi --out dist
           sccache: true
+          # maturin-action forwards RUSTC_WRAPPER=sccache into the container but
+          # installs sccache only after this script, so it builds unwrapped.
+          before-script-linux: RUSTC_WRAPPER= crates/knf-py/stage-cli.sh ${{ matrix.platform.rust_target }}
       - name: Smoke-test native wheel
         if: ${{ matrix.platform.family == 'macos' || matrix.platform.family == 'windows' }}
         shell: bash
@@ -121,6 +149,7 @@ jobs:
           python -m pip install --force-reinstall --no-deps dist/*.whl
           knf --version
           test "$(knf --set smoke=true --compact)" = '{"smoke":true}'
+          python -c "import knf; assert knf.deep_merge([], override={'a': 1}) == {'a': 1}"
       - name: Smoke-test Linux wheel
         if: ${{ matrix.platform.family == 'manylinux' || matrix.platform.family == 'musllinux' }}
         shell: bash
@@ -128,7 +157,7 @@ jobs:
           docker run --rm --platform "${{ matrix.platform.docker_platform }}" \
             -v "${{ github.workspace }}/dist:/dist" \
             "${{ matrix.platform.test_image }}" \
-            sh -c 'python -m pip install --no-deps /dist/*.whl && knf --version && knf --set smoke=true --compact >/dev/null'
+            sh -c 'python -m pip install --no-deps /dist/*.whl && knf --version && knf --set smoke=true --compact >/dev/null && python -c "import knf; assert knf.deep_merge([], override={\"a\": 1}) == {\"a\": 1}"'
       - name: Upload wheel
         uses: actions/upload-artifact@v6
         with:

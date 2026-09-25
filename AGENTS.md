@@ -18,6 +18,11 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --lib  # --lib: lib a
 cargo insta review                      # snapshots in crates/knf/tests/snapshots/
 
 cargo tree -p knf-core --depth 1 --edges normal     # never clap (checked in CI)
+cargo tree -p knf-cli --edges normal                # never pyo3 (checked in CI)
+
+# Python: build the knf-cli wheel into a venv, then test it as installed
+crates/knf-py/stage-cli.sh              # stage the `knf` binary (maturin requires it)
+maturin develop && pytest crates/knf-py/tests
 ```
 
 CI runs fmt, clippy, tests, the `cargo tree` check and `cargo doc` on Rust 1.88 and
@@ -35,11 +40,20 @@ knf-core/    the library, lib name `knf`. No clap
   format.rs    detect/parse/emit; value.rs: JSON/TOML <-> IR; set.rs: `key.path=value`
   lib.rs       `load_layers` (I/O) and the re-exports
 knf/         CLI (published as knf-cli): binary only, argv and stderr
+knf-py/      Python module `knf._knf` (pyo3, never on crates.io): arguments and exceptions
 ```
+
+The `knf-cli` **wheel** is built from `knf-py` (root `pyproject.toml`): the pyo3
+module, plus knf-cli's binary that `stage-cli.sh` puts in maturin's `data/scripts/`,
+because maturin can't build a bin next to a pyo3 module. `knf-py` has no Rust tests:
+its tests are `knf-py/tests/*.py`, and they run against an installed wheel.
+Building it with plain cargo needs `PYO3_BUILD_EXTENSION_MODULE=1` (set in CI) unless
+libpython is installed.
 
 The public API is three composable steps: `load_layers` → `merge` → `interpolate`.
 No new dependencies without a deliberate reason, and no cargo features. Anything
-reusable goes in `knf-core`; `knf-cli` has no library target.
+reusable goes in `knf-core`; `knf-cli` has no library target; pyo3 appears only in
+`knf-py`.
 
 ## Code rules
 
@@ -83,3 +97,5 @@ reusable goes in `knf-core`; `knf-cli` has no library target.
   becomes reachable through the public surface.
 - `knf/tests/cli.rs`: runs the real binary in a tempdir; set env vars via `with_env`,
   never read the ambient environment.
+- `knf-py/tests/test_deep_merge.py`: pytest against the installed wheel, including
+  the bundled `knf` executable.
