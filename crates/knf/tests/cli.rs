@@ -68,6 +68,274 @@ fn with_env<'a>(cmd: &'a mut Command, vars: &[(&str, Option<&str>)]) -> &'a mut 
     cmd
 }
 
+// --- cascading discovery -------------------------------------------------
+
+#[test]
+fn cascade_matches_explicit_layers_and_lists_in_order() {
+    // Create files out of order. The target sorts first but must apply last.
+    let dir = tree(&[
+        ("foo/z.toml", "value = 2\n"),
+        ("foo/bar/z.toml", "value = 3\n"),
+        ("foo/a.toml", "value = 1\n"),
+        ("foo/.hidden.TOML", "hidden = true\n"),
+        ("foo/bar/00-target.toml", "value = 4\n"),
+        ("root.toml", "invalid ignored root"),
+        ("foo/ignored.json", "invalid ignored format"),
+        ("foo/other/ignored.toml", "invalid ignored branch"),
+        (
+            "foo/directory.toml/ignored.toml",
+            "invalid ignored directory",
+        ),
+    ]);
+    let files = [
+        "foo/.hidden.TOML",
+        "foo/a.toml",
+        "foo/z.toml",
+        "foo/bar/z.toml",
+        "foo/bar/00-target.toml",
+    ];
+    assert_eq!(
+        run(&dir, &["-r", "./foo/./bar/00-target.toml"]),
+        run(&dir, &files)
+    );
+    let expected = files
+        .iter()
+        .map(|path| std::path::Path::new(path).display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    assert_eq!(
+        run(
+            &dir,
+            &["--cascade", "foo/bar/00-target.toml", "--list-files"]
+        ),
+        expected
+    );
+    assert!(run(&dir, &["-r", "foo/bar/00-target.toml"]).contains("value = 4"));
+}
+
+#[test]
+fn cascade_json_keeps_a_non_associative_flat_fold() {
+    // Grouping the last two layers would retain "old" from the first layer.
+    let dir = tree(&[
+        ("foo/a.json", r#"{"branch":{"old":1}}"#),
+        ("foo/middle/b.JSON", r#"{"branch":false}"#),
+        ("foo/middle/deep/target.json", r#"{"branch":{"new":2}}"#),
+        ("foo/ignored.toml", "invalid ignored format"),
+    ]);
+    assert_eq!(
+        run(&dir, &["-r", "foo/middle/deep/target.json", "--compact"]),
+        "{\"branch\":{\"new\":2}}\n"
+    );
+}
+
+#[test]
+fn cascade_empty_intermediate_directories_and_cwd_target() {
+    let dir = tree(&[
+        ("foo/empty/deep/target.toml", "value = 1\n"),
+        ("target.toml", "value = 2\n"),
+        ("other.toml", "invalid ignored root"),
+    ]);
+    for target in ["foo/empty/deep/target.toml", "target.toml"] {
+        assert_eq!(run(&dir, &["-r", target]), run(&dir, &[target]));
+    }
+    assert_eq!(
+        run(&dir, &["-r", "./target.toml", "--list-files"]),
+        "target.toml\n"
+    );
+}
+
+#[test]
+fn cascade_uses_the_existing_merge_and_interpolation_pipeline() {
+    let dir = tree(&[
+        ("foo/base.toml", "[db]\nhost = \"base\"\nport = 80\n"),
+        (
+            "foo/bar/target.toml",
+            "url = \"${db.host}\"\n[db]\nhost = \"target\"\n",
+        ),
+    ]);
+    for flags in [
+        vec!["--strict"],
+        vec!["--shallow"],
+        vec!["--set", "db.port=8080"],
+        vec!["--interpolate", "-f", "json", "--compact"],
+    ] {
+        let mut cascade = vec!["-r", "foo/bar/target.toml"];
+        cascade.extend(&flags);
+        let mut explicit = vec!["foo/base.toml", "foo/bar/target.toml"];
+        explicit.extend(&flags);
+        assert_eq!(run(&dir, &cascade), run(&dir, &explicit));
+    }
+    assert_eq!(
+        run(
+            &dir,
+            &[
+                "-r",
+                "foo/bar/target.toml",
+                "--interpolate",
+                "-f",
+                "json",
+                "--compact"
+            ]
+        ),
+        "{\"db\":{\"host\":\"target\",\"port\":80},\"url\":\"target\"}\n"
+    );
+    let dir = tree(&[
+        ("foo/base.json", r#"{"branch":{}}"#),
+        ("foo/target.json", r#"{"branch":false}"#),
+    ]);
+    assert_eq!(
+        run_err(&dir, &["-r", "foo/target.json", "--strict"]),
+        run_err(&dir, &["foo/base.json", "foo/target.json", "--strict"])
+    );
+}
+
+#[test]
+fn cascade_input_format_changes_parsing_only() {
+    let dir = tree(&[
+        ("foo/base.toml", r#"{"base":1}"#),
+        ("foo/bar/target.TOML", r#"{"target":2}"#),
+        ("foo/ignored.json", "invalid ignored format"),
+    ]);
+    assert_eq!(
+        run(
+            &dir,
+            &[
+                "-r",
+                "foo/bar/target.TOML",
+                "--input-format",
+                "json",
+                "--compact"
+            ]
+        ),
+        "{\"base\":1,\"target\":2}\n"
+    );
+}
+
+#[test]
+fn cascade_listing_does_not_parse_or_resolve_files() {
+    let dir = tree(&[
+        ("foo/base.toml", "invalid TOML"),
+        ("foo/target.toml", "value = \"${missing}\"\n"),
+    ]);
+    let expected = format!(
+        "{}\n{}\n",
+        std::path::Path::new("foo/base.toml").display(),
+        std::path::Path::new("foo/target.toml").display()
+    );
+    assert_eq!(
+        run(
+            &dir,
+            &[
+                "-r",
+                "foo/target.toml",
+                "--list-files",
+                "--interpolate",
+                "--strict",
+                "-f",
+                "json"
+            ]
+        ),
+        expected
+    );
+    assert!(run_err(&dir, &["-r", "foo/target.toml"]).contains("foo/base.toml: invalid TOML"));
+}
+
+#[test]
+fn cascade_usage_is_validated_before_filesystem_access() {
+    let dir = tree(&[]);
+    let absolute = dir.path().join("abs.toml").display().to_string();
+    for (args, expected) in [
+        (vec!["-r"], "exactly one file target"),
+        (vec!["-r", "a.toml", "b.toml"], "exactly one file target"),
+        (vec!["-r", "-"], "does not accept stdin"),
+        (vec!["-r", "foo/../a.toml"], "without .. components"),
+        (vec!["-r", absolute.as_str()], "relative target path"),
+        (
+            vec!["-r", "a.yaml", "--input-format", "toml"],
+            "JSON or TOML extension",
+        ),
+        (vec!["--list-files", "a.toml"], "--cascade"),
+    ] {
+        let out = knf(&dir).args(&args).output().expect("spawn");
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        assert!(out.stdout.is_empty());
+        let stderr = String::from_utf8(out.stderr).expect("utf-8");
+        assert!(stderr.contains(expected), "{args:?}: {stderr}");
+    }
+    let error = run_err(&dir, &["-r", "missing.toml", "--set", "a[0]=1"]);
+    assert!(error.contains("--set takes KEY.PATH=VALUE"));
+    assert!(!error.contains("inspecting"));
+}
+
+#[test]
+fn cascade_filesystem_errors_do_not_produce_partial_lists() {
+    let dir = tree(&[("foo/base.toml", "value = 1\n")]);
+    for target in ["foo/missing.toml", "missing.toml"] {
+        let error = run_err(&dir, &["-r", target, "--list-files"]);
+        assert!(error.contains(target));
+    }
+    std::fs::create_dir(dir.path().join("foo/directory.toml")).unwrap();
+    insta::assert_snapshot!(
+        "cascade_directory_target",
+        run_err(&dir, &["-r", "foo/directory.toml"])
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cascade_follows_symlinks_without_deduplicating_aliases() {
+    use std::os::unix::fs::symlink;
+    let dir = tree(&[
+        ("outside/base.toml", "base = 1\n"),
+        ("outside/target.toml", "target = 2\n"),
+    ]);
+    symlink("outside", dir.path().join("foo")).unwrap();
+    symlink("target.toml", dir.path().join("outside/alias.toml")).unwrap();
+    assert_eq!(
+        run(&dir, &["-r", "foo/target.toml", "--list-files"]),
+        "foo/alias.toml\nfoo/base.toml\nfoo/target.toml\n"
+    );
+    assert_eq!(
+        run(&dir, &["-r", "foo/target.toml"]),
+        run(
+            &dir,
+            &["foo/alias.toml", "foo/base.toml", "foo/target.toml"]
+        )
+    );
+    symlink("missing", dir.path().join("outside/broken.toml")).unwrap();
+    let out = knf(&dir)
+        .args(["-r", "foo/target.toml", "--list-files"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+    assert!(
+        String::from_utf8(out.stderr)
+            .unwrap()
+            .contains("foo/broken.toml")
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cascade_preserves_non_utf8_paths() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    let dir = tree(&[("foo/base.json", r#"{"base":1}"#)]);
+    let filename = OsString::from_vec(b"target-\xff.json".to_vec());
+    let relative = std::path::Path::new("foo").join(filename);
+    std::fs::write(dir.path().join(&relative), r#"{"target":2}"#).unwrap();
+    let out = knf(&dir)
+        .arg("-r")
+        .arg(relative)
+        .arg("--compact")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(out.stdout, b"{\"base\":1,\"target\":2}\n");
+}
+
 // --- round-trips ----------------------------------------------------------
 
 const DATED: &str = "\

@@ -5,6 +5,7 @@
 //! below. The pipeline itself is `knf-core`, which knows nothing about any of
 //! it.
 
+mod cascade;
 mod cli;
 mod explain;
 
@@ -37,6 +38,9 @@ where
 {
     // clap handles --help/--version and exits 2 on usage errors.
     let cli = Cli::parse_from(args);
+    if let Err(err) = cli.validate() {
+        err.exit();
+    }
 
     if let Err(err) = run(cli) {
         // Some errors are deliberately multi-line: the null-in-TOML report and
@@ -58,12 +62,26 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     // line, and saying so must not wait on the files existing or parsing.
     let overlays = overlays(&cli)?;
 
+    let files = if cli.cascade {
+        cascade::expand(&cli.files[0])?
+    } else {
+        cli.files.clone()
+    };
+    if cli.list_files {
+        let mut text = String::new();
+        for path in &files {
+            use std::fmt::Write;
+            writeln!(text, "{}", path.display()).expect("writing to a String cannot fail");
+        }
+        return write_stdout(&text);
+    }
+
     // Between the parse and the fold: the output format is a decision about
     // argv, and the formats it needs are known as soon as the inputs are read.
     // Deciding it after the merge would make a forgotten `-f` queue behind
     // every error in the documents themselves.
     let (layers, input_formats) =
-        load_layers(&cli.files, cli.input_format.map(Format::from)).map_err(explain_pipeline)?;
+        load_layers(&files, cli.input_format.map(Format::from)).map_err(explain_pipeline)?;
     let out_format = resolve_output_format(cli.format.map(Format::from), &input_formats)?;
 
     // One flat, strictly-left fold: --set layers are appended after every file.
