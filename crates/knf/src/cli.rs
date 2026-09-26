@@ -75,14 +75,15 @@ Symlinks follow ordinary filesystem semantics.
     )]
     pub accumulate: Option<crate::accumulate::AccumulateTarget>,
 
-    /// List discovered paths in merge order without reading their contents
+    /// Print the file list in merge order without reading contents
     #[arg(
         long,
-        requires = "accumulate",
         long_help = "\
-Print the complete discovered file list, one relative path per line, and exit.
-Requires --accumulate. Checks filesystem access and target existence, but does not
-read configuration contents, merge, interpolate or emit a configuration."
+Print the file list, one path per line, and exit.
+
+The list is the positional files, or the files --accumulate discovered. Does not
+read configuration contents, merge, interpolate or emit a configuration.
+Discovery still checks filesystem access and that the target exists."
     )]
     pub list_files: bool,
 

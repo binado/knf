@@ -175,17 +175,24 @@ paths and `..` components are rejected. `./foo/bar/conf4.toml` is normalized to
 only that file. Missing or non-file targets and filesystem inspection errors
 fail rather than silently skipping files.
 
-Inspect the complete merge order without reading configuration contents:
+Inspect the file list without reading configuration contents:
 
 ```bash
+knf foo/conf1.toml foo/conf2.toml foo/bar/conf4.toml --list-files
+# foo/conf1.toml
+# foo/conf2.toml
+# foo/bar/conf4.toml
+
 knf -a foo/bar/conf4.toml --list-files
 # foo/conf1.toml
 # foo/conf2.toml
 # foo/bar/conf4.toml
 ```
 
-`--list-files` requires `--accumulate`, prints one relative path per line, and
-exits without parsing files, merging, interpolating or emitting a configuration.
+`--list-files` prints one path per line and exits without parsing files, merging,
+interpolating or emitting a configuration. The list is the positional files, or
+the files `--accumulate` discovered. Discovery still checks that the target
+exists and is a regular file.
 As elsewhere in diagnostic output, filenames that are not UTF-8 are displayed
 with replacement characters; file operations preserve the original names.
 

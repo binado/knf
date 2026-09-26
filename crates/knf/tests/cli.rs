@@ -242,6 +242,16 @@ fn accumulate_listing_does_not_parse_or_resolve_files() {
 }
 
 #[test]
+fn list_files_prints_positional_paths_without_reading_them() {
+    let dir = tree(&[("foo.toml", "invalid TOML")]);
+    assert_eq!(
+        run(&dir, &["--list-files", "./foo.toml", "missing.toml"]),
+        "./foo.toml\nmissing.toml\n"
+    );
+    assert_eq!(run(&dir, &["--list-files"]), "");
+}
+
+#[test]
 fn accumulate_usage_is_validated_before_filesystem_access() {
     let dir = tree(&[]);
     let absolute = dir.path().join("abs.toml").display().to_string();
@@ -255,7 +265,6 @@ fn accumulate_usage_is_validated_before_filesystem_access() {
             vec!["-a", "a.yaml", "--input-format", "toml"],
             "JSON or TOML extension",
         ),
-        (vec!["--list-files", "a.toml"], "--accumulate"),
     ] {
         let out = knf(&dir).args(&args).output().expect("spawn");
         assert_eq!(out.status.code(), Some(2), "{args:?}");
