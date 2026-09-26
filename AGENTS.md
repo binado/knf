@@ -1,107 +1,54 @@
 # AGENTS.md
 
-Guidance for AI agents working in this repository. `README.md` documents user-facing
-semantics; keep it in step with any change to merge behaviour, `--set` typing,
-interpolation, or error text.
+Guidance for AI agents working in this repo:
+
+- Commits must follow Conventional Commits.
+- Keep `README.md` in sync with any changes to merge behaviour, `--set` typing, interpolation, or error text.
 
 ## Commands
 
+MSRV is Rust 1.88.
+
 ```bash
-cargo test --workspace                  # everything
+just ci                                 # format-check + lint + test + build + doc
+just test-py                            # maturin develop + pytest in active venv
+just review                             # review stderr snapshots (cargo insta review)
 cargo test -p knf-core --lib            # fast inner loop: unit tests only
-cargo test -p knf-core --test library   # the public API, as a consumer sees it
-cargo test -p knf-cli --test cli <name> # one CLI test by name substring
-cargo run -p knf-cli -- base.toml prod.toml --strict
-
-prek run --all-files                    # cargo fmt --check + clippy -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --lib  # --lib: lib and bin are both `knf`
-cargo insta review                      # snapshots in crates/knf/tests/snapshots/
-
-cargo tree -p knf-core --depth 1 --edges normal     # never clap (checked in CI)
-cargo tree -p knf-cli --edges normal                # never pyo3 (checked in CI)
-
-# Python (pyknf): build into the active venv, then test it as installed
-cd crates/knf-py && maturin develop && pytest tests
+cargo test -p knf-cli --test cli <name> # run a single CLI integration test
 ```
-
-CI runs fmt, clippy, tests, the `cargo tree` check and `cargo doc` on Rust 1.88 and
-stable, so don't use anything newer than the 1.88 MSRV. Snapshots capture multi-line
-stderr where the *formatting* is under test: read the diff, don't accept it blindly.
 
 ## Crates
 
-```
-knf-core/    the library, lib name `knf`. No clap
-  ir.rs        `Value`/`Map`/`Number`
-  merge.rs     the fold: `merge`, `merge_into`, `MergeOptions`, strict mode
-  path.rs      path vocabulary (`Seg`/`RefPath`) and `lookup`
-  interp/      `${...}` resolution for --interpolate
-  format.rs    detect/parse/emit; value.rs: JSON/TOML <-> IR; set.rs: `key.path=value`
-  lib.rs       `load_layers` (I/O) and the re-exports
-knf/         CLI (published as knf-cli): binary only, argv and stderr
-knf-py/      Python module `knf._knf` (pyo3): arguments and exceptions
-```
+- `knf-core/`: The library (crate name `knf`). Pipeline: `load_layers` → `merge` → `interpolate`. No `clap`.
+- `knf/`: The CLI binary (`knf-cli`). Argv parsing and stderr formatting. No `pyo3`.
+- `knf-py/`: Python bindings (`pyknf` wheel, module `knf._knf`). Tested via `just test-py`.
 
-One PyPI wheel, `pyknf` (`knf-py/pyproject.toml`). It carries the pyo3 module and
-the `knf` command: a script entry point calls the same `crates/knf/src/main.rs`
-that `knf-cli` compiles, so clap stays out of `knf-core` and pyo3 stays out of
-`knf-cli`. `cargo install knf-cli` still builds that crate on its own. `pyknf`
-publishes from
-`release-plz.yml` on a `knf-cli-v*` tag and on `workflow_dispatch`; the PyPI
-trusted publisher names that workflow file and the `pypi` environment. A
-release-plz run dispatches the workflow after pushing the tag, because a
-`GITHUB_TOKEN` tag push does not start a run. `knf-py` is never on crates.io and
-has no Rust tests: its tests are `knf-py/tests/*.py`, run against an installed
-wheel.
-Building it with plain cargo needs `PYO3_BUILD_EXTENSION_MODULE=1` (set in CI) unless
-libpython is installed.
+No cargo features; no new dependencies without deliberate reason. Reusable logic belongs in `knf-core`.
 
-The public API is three composable steps: `load_layers` → `merge` → `interpolate`.
-No new dependencies without a deliberate reason, and no cargo features. Anything
-reusable goes in `knf-core`; `knf-cli` has no library target; pyo3 appears only in
-`knf-py`.
+## Code Rules
 
-## Code rules
-
-- **Library errors never name a CLI flag, file or layer** — only key paths. Every
-  `help:` line naming a flag lives in `crates/knf/src/explain.rs`.
-- Library error `Display`s end **without** a trailing newline so the CLI can append
-  `help:` flush against them; `TomlError` is `#[error("{0}")]` with no `#[from]`/`#[source]`.
-  CLI snapshots pin both.
-- `serde_json`/`toml` appear only in `format.rs`, `value.rs` and `set.rs`; `merge.rs`,
-  `ir.rs`, `path.rs` and `interp/` never name a format. Format conversions live only in
-  `value.rs`, called only from `format.rs`.
-- `ProcessEnv` (`knf-core/src/env.rs`) is the only `std::env::var` in the workspace;
-  `interp/` gets the environment through the `Env` trait.
-- One path grammar (`RefPath`); writers take keys only, checked once via
-  `RefPath::try_into_keys` before any I/O.
-- Construct `Number::U64` via `Number::from_u64` (it demotes to `I64` when it fits).
-- `Value::Datetime` may only originate in the TOML parser — never synthesize one from text.
+- **Library errors never name CLI flags, files, or layers** — only key paths. Flag-specific `help:` lines belong in `crates/knf/src/explain.rs`.
+- Library error `Display` implementations must **not** end with a newline (CLI appends `help:` flush against them).
+- Format conversions (`serde_json`, `toml`) live strictly in `format.rs`, `value.rs`, and `set.rs`. Core modules (`merge.rs`, `ir.rs`, `path.rs`, `interp/`) must remain format-agnostic.
+- `ProcessEnv` (`knf-core/src/env.rs`) is the only `std::env::var` caller in the workspace; `interp/` uses the `Env` trait.
+- Key paths use `RefPath`; writers take keys only, validated via `RefPath::try_into_keys` prior to I/O.
+- Construct `Number::U64` with `Number::from_u64` (demotes to `I64` when it fits).
+- `Value::Datetime` originates only from the TOML parser; never synthesize from text.
 
 ## Invariants
 
-- The fold is strictly left over a flat layer list; merge is not associative, so never
-  merge subgroups and combine.
-- Arrays replace wholesale. Null is an ordinary value, not a delete.
-  `knf a.json` is a byte-level no-op (proptested).
-- Default merge is deep (jq `*`); `--shallow` is jq `+`. No per-path rules.
-- Interpolation is opt-in and runs once, on the merged document. Env values are
-  terminal (never re-scanned); container references are whole-string only.
-- Values a format cannot represent (TOML: null, ints past `i64::MAX`, bad datetimes;
-  JSON: non-finite floats) are rejected by path, never silently substituted.
-- Every input is an object at top level; output format is never guessed for mixed
-  inputs (`-f` required), and is resolved before the merge so argv errors come first.
+- **Merge fold:** Strictly left-fold over a flat layer list (merge is not associative).
+- **Arrays & Null:** Arrays replace wholesale (never merged by index or concatenated). Null is an ordinary value that overwrites, not a delete.
+- **Deep by default:** Default merge is deep (`jq *`); `--shallow` is `jq +`.
+- **Interpolation:** Opt-in, runs once over the merged document. Env values are terminal; container references are whole-string only.
+- **Format representation:** Unsupported values (TOML: null, `> i64::MAX`, datetimes; JSON: `NaN`/`inf`) error with path; never silently substituted.
+- **Input/Output:** Every input is a top-level object. Output format is never guessed for mixed inputs (`-f` required).
 
 ## Tests
 
-- `knf-core/tests/cases.rs`: table-driven, one line per merge case in `CASES`.
-- `knf-core/tests/props.rs`, `knf-core/tests/interp_props.rs`: proptests; strategies
-  exclude floats so equality stays total.
-- `interp/` unit tests use a `HashMap` stub `Env`, never the process environment.
-- `knf-core/tests/library.rs`: public-API behaviour suite.
-- `knf/tests/public_api.rs`: catches missing re-exports — name a type there once it
-  becomes reachable through the public surface.
-- `knf/tests/cli.rs`: runs the real binary in a tempdir; set env vars via `with_env`,
-  never read the ambient environment.
-- `knf-py/tests/test_deep_merge.py`: pytest against the installed pyknf wheel, including
-  the `knf` executable the wheel installs.
+- `knf-core/tests/cases.rs`: Table-driven merge test cases.
+- `knf-core/tests/*props.rs`: Proptests (floats excluded to ensure total equality).
+- `knf-core/tests/library.rs`: Public library API suite.
+- `knf/tests/public_api.rs`: Guards against missing re-exports.
+- `knf/tests/cli.rs`: CLI integration tests (use `with_env`, never ambient env).
+- `interp/` unit tests: Must use `HashMap` stub `Env`, never process env.
