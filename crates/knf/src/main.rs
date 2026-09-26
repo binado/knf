@@ -39,9 +39,6 @@ where
 {
     // clap handles --help/--version and exits 2 on usage errors.
     let cli = Cli::parse_from(args);
-    if let Err(err) = cli.validate() {
-        err.exit();
-    }
 
     if let Err(err) = run(cli) {
         // Some errors are deliberately multi-line: the null-in-TOML report and
@@ -61,8 +58,8 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     // line, and saying so must not wait on the files existing or parsing.
     let overlays = overlays(&cli)?;
 
-    let files = if cli.accumulate {
-        accumulate::accumulate(&cli.files[0])?
+    let files = if let Some(target) = &cli.accumulate {
+        accumulate::accumulate(target)?
     } else {
         cli.files.clone()
     };
