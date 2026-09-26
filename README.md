@@ -130,6 +130,71 @@ $ knf a.json b.json --strict
 error: type conflict at `server`: object would be replaced by number
 ```
 
+### Accumulating layers from a target path
+
+`-a`, or `--accumulate`, is a discovery operator: it expands one relative target
+path into an ordered list of file inputs, then processes them exactly like
+explicit file arguments:
+
+```text
+cwd/
+  foo/
+    conf1.toml
+    conf2.toml
+    bar/
+      conf4.toml
+```
+
+From `cwd`, these commands merge the same layers:
+
+```bash
+knf -a foo/bar/conf4.toml
+knf foo/conf1.toml foo/conf2.toml foo/bar/conf4.toml
+```
+
+Discovery starts at the first directory (`foo`), excluding files directly in
+`cwd`. It visits only directories on the target's path, from shallowest to
+deepest, collecting matching regular files directly inside each one. Files in
+other branches and directories with matching extensions are ignored. Empty
+matching directories contribute no layers.
+
+The target's extension selects JSON or TOML, case-insensitively. Only files of
+that format are discovered, including hidden files. `--input-format` overrides
+how those files are parsed; it does not change which files are selected.
+
+Files within each directory are sorted by filename using native string order,
+without locale or numeric sorting. Other matching files in the target's
+directory are included. The named target is included exactly once, **last**,
+even if its filename sorts first. Symlinks follow ordinary filesystem semantics;
+different filenames pointing to the same file are separate layers. The supplied
+path controls directory selection, rather than enforcing filesystem containment.
+
+Exactly one target is required, with a JSON or TOML extension. Stdin, absolute
+paths and `..` components are rejected. `./foo/bar/conf4.toml` is normalized to
+`foo/bar/conf4.toml`. A target directly in `cwd`, such as `-a conf4.toml`, merges
+only that file. Missing or non-file targets and filesystem inspection errors
+fail rather than silently skipping files.
+
+Inspect the complete merge order without reading configuration contents:
+
+```bash
+knf -a foo/bar/conf4.toml --list-files
+# foo/conf1.toml
+# foo/conf2.toml
+# foo/bar/conf4.toml
+```
+
+`--list-files` requires `--accumulate`, prints one relative path per line, and
+exits without parsing files, merging, interpolating or emitting a configuration.
+As elsewhere in diagnostic output, filenames that are not UTF-8 are displayed
+with replacement characters; file operations preserve the original names.
+
+Normal merging flags work with accumulate mode: `--set` layers apply after all
+files, `--strict` and `--shallow` use the discovered order, interpolation runs
+once on the merged result, and `-f` controls the output format. Accumulate is a
+command-line option; the Rust library and Python `deep_merge` still take
+explicit file lists.
+
 ### Shallow merge
 
 The default is a deep merge. `--shallow` merges top-level keys only: a later

@@ -1,0 +1,5 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"-a\", \"foo/directory.toml\"])"
+---
+error: `foo/directory.toml` is not a regular file

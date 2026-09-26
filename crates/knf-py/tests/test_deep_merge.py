@@ -207,6 +207,34 @@ def test_the_knf_executable_comes_with_the_wheel(write):
     assert out.stdout.strip() == '{"a":1,"b":2}'
 
 
+def test_the_knf_executable_accumulates_and_lists_files(tmp_path):
+    knf = shutil.which("knf")
+    assert knf is not None
+    (tmp_path / "foo" / "bar").mkdir(parents=True)
+    (tmp_path / "foo" / "base.toml").write_text("base = 1\nvalue = 1\n")
+    (tmp_path / "foo" / "bar" / "target.toml").write_text("value = 2\n")
+    (tmp_path / "ignored.toml").write_text("invalid ignored root")
+    out = subprocess.run(
+        [knf, "-a", "foo/bar/target.toml", "-f", "json", "--compact"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(out.stdout) == {"base": 1, "value": 2}
+    out = subprocess.run(
+        [knf, "-a", "foo/bar/target.toml", "--list-files"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert out.stdout.splitlines() == [
+        os.path.join("foo", "base.toml"),
+        os.path.join("foo", "bar", "target.toml"),
+    ]
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux accepts raw bytes in filenames")
 def test_the_knf_executable_accepts_non_utf8_filename(tmp_path):
     knf = shutil.which("knf")

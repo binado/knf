@@ -5,10 +5,12 @@
 //! below. The pipeline itself is `knf-core`, which knows nothing about any of
 //! it.
 
+mod accumulate;
 mod cli;
 mod explain;
 
 use std::io::Write;
+use std::path::PathBuf;
 
 use anyhow::bail;
 use clap::Parser;
@@ -37,6 +39,9 @@ where
 {
     // clap handles --help/--version and exits 2 on usage errors.
     let cli = Cli::parse_from(args);
+    if let Err(err) = cli.validate() {
+        err.exit();
+    }
 
     if let Err(err) = run(cli) {
         // Some errors are deliberately multi-line: the null-in-TOML report and
@@ -50,20 +55,39 @@ where
     }
 }
 
-/// One pipeline regardless of the formats involved: every layer becomes a
-/// `Value`, the fold runs once, and the output format is only consulted at emit.
-/// Nothing about JSON or TOML reaches the merge.
+/// Prepare explicit file inputs and terminal overlays for the shared pipeline.
 fn run(cli: Cli) -> anyhow::Result<()> {
     // Before anything is read: a malformed --set is a mistake in the command
     // line, and saying so must not wait on the files existing or parsing.
     let overlays = overlays(&cli)?;
 
+    let files = if cli.accumulate {
+        accumulate::accumulate(&cli.files[0])?
+    } else {
+        cli.files.clone()
+    };
+    if cli.list_files {
+        let mut text = String::new();
+        for path in &files {
+            use std::fmt::Write;
+            writeln!(text, "{}", path.display()).expect("writing to a String cannot fail");
+        }
+        return write_stdout(&text);
+    }
+
+    run_pipeline(&cli, &files, overlays)
+}
+
+/// One pipeline for explicit and discovered files: every layer becomes a
+/// `Value`, the fold runs once, and the output format is only consulted at emit.
+/// Nothing about JSON or TOML reaches the merge.
+fn run_pipeline(cli: &Cli, files: &[PathBuf], overlays: Vec<Value>) -> anyhow::Result<()> {
     // Between the parse and the fold: the output format is a decision about
     // argv, and the formats it needs are known as soon as the inputs are read.
     // Deciding it after the merge would make a forgotten `-f` queue behind
     // every error in the documents themselves.
     let (layers, input_formats) =
-        load_layers(&cli.files, cli.input_format.map(Format::from)).map_err(explain_pipeline)?;
+        load_layers(files, cli.input_format.map(Format::from)).map_err(explain_pipeline)?;
     let out_format = resolve_output_format(cli.format.map(Format::from), &input_formats)?;
 
     // One flat, strictly-left fold: --set layers are appended after every file.
