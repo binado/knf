@@ -345,6 +345,334 @@ fn accumulate_preserves_non_utf8_paths() {
     assert_eq!(out.stdout, b"{\"base\":1,\"target\":2}\n");
 }
 
+// --- glob filters --------------------------------------------------------
+
+#[test]
+fn glob_modes_match_paths_or_filenames_and_preserve_order_and_duplicates() {
+    let dir = tree(&[
+        ("config/a.prod.toml", "value = 1\n"),
+        ("config/b.prod.toml", "value = 2\n"),
+        ("config/c.dev.toml", "invalid ignored TOML"),
+    ]);
+    for flag in ["-G", "--glob-filename"] {
+        assert_eq!(
+            run(
+                &dir,
+                &[
+                    "config/b.prod.toml",
+                    "config/c.dev.toml",
+                    "config/a.prod.toml",
+                    "config/b.prod.toml",
+                    flag,
+                    "*.prod.toml",
+                    "--list-files"
+                ]
+            ),
+            "config/b.prod.toml\nconfig/a.prod.toml\nconfig/b.prod.toml\n"
+        );
+        assert_eq!(
+            run(
+                &dir,
+                &[
+                    "config/a.prod.toml",
+                    "config/c.dev.toml",
+                    "config/b.prod.toml",
+                    flag,
+                    "*.prod.toml"
+                ]
+            ),
+            run(&dir, &["config/a.prod.toml", "config/b.prod.toml"])
+        );
+    }
+    for flag in ["-g", "--glob"] {
+        assert_eq!(
+            run(
+                &dir,
+                &["config/a.prod.toml", flag, "*.prod.toml", "--list-files"]
+            ),
+            ""
+        );
+        assert_eq!(
+            run(
+                &dir,
+                &[
+                    "config/a.prod.toml",
+                    flag,
+                    "config/**/*.prod.toml",
+                    "--list-files"
+                ]
+            ),
+            "config/a.prod.toml\n"
+        );
+        assert_eq!(
+            run(
+                &dir,
+                &[
+                    "./config/a.prod.toml",
+                    flag,
+                    "config/*.prod.toml",
+                    "--list-files"
+                ]
+            ),
+            ""
+        );
+        assert_eq!(
+            run(
+                &dir,
+                &[
+                    "./config/a.prod.toml",
+                    flag,
+                    "./config/*.prod.toml",
+                    "--list-files"
+                ]
+            ),
+            "./config/a.prod.toml\n"
+        );
+    }
+}
+
+#[test]
+fn glob_supports_case_sensitive_names_braces_classes_and_negation() {
+    let dir = tree(&[]);
+    let inputs = [
+        "foo/defaults.toml",
+        "foo/prod.toml",
+        "foo/Prod.toml",
+        "foo/dev.toml",
+    ];
+    for (pattern, expected) in [
+        ("{defaults,prod}.toml", "foo/defaults.toml\nfoo/prod.toml\n"),
+        ("[pd]??.toml", "foo/dev.toml\n"),
+        ("!*.toml", ""),
+        ("!{defaults,prod}.toml", "foo/Prod.toml\nfoo/dev.toml\n"),
+        ("prod.toml", "foo/prod.toml\n"),
+        (".prod.toml", ""),
+    ] {
+        let mut args = inputs.to_vec();
+        args.extend(["-G", pattern, "--list-files"]);
+        assert_eq!(run(&dir, &args), expected, "{pattern}");
+    }
+    // Even a negated pattern cannot match an input without a filename.
+    assert_eq!(
+        run(&dir, &[".", "..", "-G", "!prod.toml", "--list-files"]),
+        ""
+    );
+    assert_eq!(run(&dir, &["é.toml", "-G", "?.toml", "--list-files"]), "");
+    assert_eq!(
+        run(&dir, &["é.toml", "-G", "??.toml", "--list-files"]),
+        "é.toml\n"
+    );
+}
+
+#[test]
+fn glob_excluded_inputs_are_not_loaded_or_used_for_format_inference() {
+    let dir = tree(&[("prod.toml", "value = 1\n"), ("bad.json", "invalid JSON")]);
+    assert_eq!(
+        run(
+            &dir,
+            &["bad.json", "missing.json", "prod.toml", "-G", "*.toml"]
+        ),
+        run(&dir, &["prod.toml"])
+    );
+    assert_eq!(
+        run(
+            &dir,
+            &[
+                "bad.json",
+                "missing.json",
+                "prod.toml",
+                "-G",
+                "*.toml",
+                "--set",
+                "value=2"
+            ]
+        ),
+        "value = 2\n"
+    );
+}
+
+#[test]
+fn glob_empty_selections_keep_existing_empty_input_and_set_behaviour() {
+    let dir = tree(&[]);
+    for flag in ["-g", "-G"] {
+        assert_eq!(
+            run(&dir, &["missing.toml", flag, "*.json", "--compact"]),
+            "{}\n"
+        );
+        assert_eq!(
+            run(
+                &dir,
+                &[
+                    "missing.toml",
+                    flag,
+                    "*.json",
+                    "--set",
+                    "value=2",
+                    "--compact"
+                ]
+            ),
+            "{\"value\":2}\n"
+        );
+        assert_eq!(
+            run(&dir, &["missing.toml", flag, "*.json", "--list-files"]),
+            ""
+        );
+        assert_eq!(run(&dir, &[flag, "*.json", "--compact"]), "{}\n");
+    }
+}
+
+#[test]
+fn glob_filters_accumulated_targets_without_changing_discovery_errors() {
+    let dir = tree(&[
+        ("foo/defaults.toml", "value = 1\n"),
+        ("foo/bad.toml", "invalid ignored TOML"),
+        ("foo/bar/defaults.toml", "value = 2\n"),
+        ("foo/bar/prod.toml", "value = 3\n"),
+    ]);
+    assert_eq!(
+        run(
+            &dir,
+            &[
+                "-a",
+                "foo/bar/prod.toml",
+                "-G",
+                "defaults.toml",
+                "--list-files"
+            ]
+        ),
+        format!(
+            "{}\n{}\n",
+            std::path::Path::new("foo/defaults.toml").display(),
+            std::path::Path::new("foo/bar/defaults.toml").display()
+        )
+    );
+    assert_eq!(
+        run(&dir, &["-a", "foo/bar/prod.toml", "-G", "defaults.toml"]),
+        "value = 2\n"
+    );
+    assert_eq!(
+        run(
+            &dir,
+            &[
+                "-a",
+                "foo/bar/prod.toml",
+                "-g",
+                "foo/**/{defaults,prod}.toml"
+            ]
+        ),
+        "value = 3\n"
+    );
+    assert!(
+        run_err(
+            &dir,
+            &["-a", "foo/missing.toml", "-G", "none", "--list-files"]
+        )
+        .contains("inspecting")
+    );
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("missing", dir.path().join("foo/broken.toml")).unwrap();
+        assert!(
+            run_err(&dir, &["-a", "foo/bar/prod.toml", "-G", "defaults.toml"])
+                .contains("foo/broken.toml")
+        );
+    }
+}
+
+#[test]
+fn glob_treats_stdin_as_a_literal_candidate() {
+    let dir = tree(&[]);
+    for flag in ["-g", "-G"] {
+        let out = knf(&dir)
+            .args([
+                "-",
+                flag,
+                "{*.json,-}",
+                "--input-format",
+                "json",
+                "--compact",
+            ])
+            .write_stdin(r#"{"value":1}"#)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        assert_eq!(out.stdout, b"{\"value\":1}\n");
+        assert_eq!(run(&dir, &["-", flag, "*.toml", "--compact"]), "{}\n");
+        assert_eq!(run(&dir, &["-", flag, "-", "--list-files"]), "-\n");
+    }
+}
+
+#[test]
+fn glob_usage_errors_precede_filesystem_access() {
+    let dir = tree(&[]);
+    for args in [
+        vec!["-g"],
+        vec!["-G"],
+        vec!["-g", "*", "-G", "*"],
+        vec!["-g", "*", "-g", "*"],
+        vec!["-G", "*", "-G", "*"],
+        vec!["-a", "missing.toml", "-g", "[broken"],
+        vec!["missing.toml", "-G", "{broken"],
+        vec!["missing.toml", "-g", "trailing\\"],
+    ] {
+        let out = knf(&dir).args(&args).output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        assert!(out.stdout.is_empty());
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert!(!stderr.contains("inspecting"));
+        assert!(!stderr.contains("reading"));
+    }
+    assert!(
+        run_err(&dir, &["missing.toml", "-G", "none", "--set", "a[0]=1"])
+            .contains("--set takes KEY.PATH=VALUE")
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn glob_normalizes_windows_separators_only_for_matching() {
+    let dir = tree(&[]);
+    assert_eq!(
+        run(
+            &dir,
+            &[
+                r".\config\prod.toml",
+                "-g",
+                "./config/*.toml",
+                "--list-files"
+            ]
+        ),
+        ".\\config\\prod.toml\n"
+    );
+    assert_eq!(
+        run(
+            &dir,
+            &[r"config\prod.toml", "-G", "prod.toml", "--list-files"]
+        ),
+        "config\\prod.toml\n"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn glob_preserves_non_utf8_filenames_and_matches_native_bytes() {
+    use std::os::unix::ffi::OsStringExt;
+    let dir = tree(&[]);
+    let path = std::path::Path::new("config")
+        .join(std::ffi::OsString::from_vec(b"prod-\xff.json".to_vec()));
+    std::fs::create_dir(dir.path().join("config")).unwrap();
+    std::fs::write(dir.path().join(&path), r#"{"value":1}"#).unwrap();
+    for (flag, pattern) in [("-g", "config/prod-?.json"), ("-G", "prod-?.json")] {
+        let out = knf(&dir)
+            .arg(&path)
+            .args([flag, pattern, "--compact"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        assert_eq!(out.stdout, b"{\"value\":1}\n");
+    }
+}
+
 // --- round-trips ----------------------------------------------------------
 
 const DATED: &str = "\

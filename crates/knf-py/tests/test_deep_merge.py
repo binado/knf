@@ -235,6 +235,44 @@ def test_the_knf_executable_accumulates_and_lists_files(tmp_path):
     ]
 
 
+@pytest.mark.parametrize(
+    ("flag", "pattern"),
+    [("--glob", "config/*.prod.toml"), ("--glob-filename", "*.prod.toml")],
+)
+def test_the_knf_executable_filters_inputs(tmp_path, flag, pattern):
+    knf = shutil.which("knf")
+    assert knf is not None
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "a.prod.toml").write_text("value = 1\n")
+    (tmp_path / "config" / "b.prod.toml").write_text("value = 2\n")
+    (tmp_path / "config" / "bad.json").write_text("invalid ignored JSON")
+    args = [
+        knf,
+        "config/b.prod.toml",
+        "config/bad.json",
+        "config/missing.json",
+        "config/a.prod.toml",
+        flag,
+        pattern,
+    ]
+    out = subprocess.run(
+        args + ["-f", "json", "--compact"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(out.stdout) == {"value": 1}
+    out = subprocess.run(
+        args + ["--list-files"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert out.stdout.splitlines() == ["config/b.prod.toml", "config/a.prod.toml"]
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux accepts raw bytes in filenames")
 def test_the_knf_executable_accepts_non_utf8_filename(tmp_path):
     knf = shutil.which("knf")

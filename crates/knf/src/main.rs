@@ -8,6 +8,7 @@
 mod accumulate;
 mod cli;
 mod explain;
+mod filter;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -58,11 +59,16 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     // line, and saying so must not wait on the files existing or parsing.
     let overlays = overlays(&cli)?;
 
-    let files = if let Some(target) = &cli.accumulate {
+    let mut files = if let Some(target) = &cli.accumulate {
         accumulate::accumulate(target)?
     } else {
         cli.files.clone()
     };
+    if let Some(pattern) = &cli.glob {
+        files.retain(|path| pattern.matches_path(path));
+    } else if let Some(pattern) = &cli.glob_filename {
+        files.retain(|path| pattern.matches_filename(path));
+    }
     if cli.list_files {
         let mut text = String::new();
         for path in &files {

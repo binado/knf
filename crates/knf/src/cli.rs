@@ -51,6 +51,48 @@ pub struct Cli {
     #[arg(value_name = "FILE")]
     pub files: Vec<PathBuf>,
 
+    /// Filter inputs by a case-sensitive glob matching the whole path
+    #[arg(
+        short = 'g',
+        long,
+        value_name = "PATTERN",
+        conflicts_with = "glob_filename",
+        long_help = "\
+Filter the resolved inputs by a case-sensitive glob matching the whole path.
+Quote the pattern to prevent shell expansion. Does not discover files, sort,
+deduplicate or read excluded inputs. Matches positional inputs or the list
+from --accumulate, including its target. --list-files shows the filtered list.
+
+Preserves lexical components such as ./; Windows separators match as /.
+Stdin is matched as the literal path -. An empty selection is allowed: only
+--set layers remain, or an empty object if none were supplied.
+
+Patterns support *, **, ?, character classes, braces and leading ! negation.
+Matching uses native encoded bytes; ? matches one byte, not a Unicode character.
+Invalid patterns are usage errors. Accepts one pattern and conflicts with
+--glob-filename.
+
+  knf config/**/*.toml -g 'config/**/prod.toml'"
+    )]
+    pub glob: Option<super::filter::GlobPattern>,
+
+    /// Filter inputs by a case-sensitive glob matching just the filename
+    #[arg(
+        short = 'G',
+        long,
+        value_name = "PATTERN",
+        conflicts_with = "glob",
+        long_help = "\
+Like --glob, but match only the filename, ignoring directories. Inputs without
+a filename do not match. Stdin is matched as the literal filename -.
+Quote the pattern to prevent shell expansion. Accepts one pattern and conflicts
+with --glob.
+
+  knf config/**/*.toml -G '*.prod.toml'
+  knf -a services/api/prod.toml -G '{defaults,prod}.toml'"
+    )]
+    pub glob_filename: Option<super::filter::GlobPattern>,
+
     /// Accumulate same-format layers along one relative target path
     #[arg(
         short = 'a',
@@ -62,7 +104,8 @@ pub struct Cli {
 Accumulate same-format files along one relative target path, starting at its first
 directory and excluding files directly in the working directory. Visit each
 directory on the path in order; sort its matching files by filename. Include
-files in the target's directory, then apply the named target exactly once, last.
+files in the target's directory, then apply the named target exactly once, last
+if retained by --glob or --glob-filename.
 
 The target is this option's argument. It must have a JSON or TOML extension
 (case-insensitive) and cannot be combined with positional files. --input-format
@@ -81,7 +124,8 @@ Symlinks follow ordinary filesystem semantics.
         long_help = "\
 Print the file list, one path per line, and exit.
 
-The list is the positional files, or the files --accumulate discovered. Does not
+The list is the positional files, or the files --accumulate discovered, after
+--glob or --glob-filename filtering. An empty list prints nothing. Does not
 read configuration contents, merge, interpolate or emit a configuration.
 Discovery still checks filesystem access and that the target exists."
     )]
