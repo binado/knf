@@ -1,17 +1,15 @@
-"""`knf.deep_merge` and the `knf` executable, as an installed wheel exposes them."""
+"""`knf.load` and the `knf` executable, as an installed wheel exposes them."""
 
-import datetime
 import errno
 import json
 import os
 import shutil
 import subprocess
 import sys
-from collections import UserDict
 
 import pytest
 
-from knf import InterpolationError, ParseError, deep_merge
+from knf import InterpolationError, ParseError, load
 
 
 @pytest.fixture
@@ -27,7 +25,7 @@ def write(tmp_path):
 def test_one_file_is_the_identity(write):
     doc = {"b": 1, "a": {"z": [1, 2], "y": None}, "c": 1.5}
     path = write("a.json", json.dumps(doc))
-    merged = deep_merge([path])
+    merged = load([path])
     assert merged == doc
     assert list(merged) == ["b", "a", "c"]
 
@@ -35,57 +33,35 @@ def test_one_file_is_the_identity(write):
 def test_files_fold_left_to_right_across_formats(write):
     base = write("base.toml", 'name = "app"\n[server]\nhost = "localhost"\nport = 80\n')
     prod = write("prod.json", '{"server": {"port": 443}}')
-    assert deep_merge([base, prod]) == {
+    assert load([base, prod]) == {
         "name": "app",
         "server": {"host": "localhost", "port": 443},
     }
-    assert deep_merge([prod, base])["server"]["port"] == 80
+    assert load([prod, base])["server"]["port"] == 80
 
 
 def test_paths_may_be_str(write):
     path = write("a.json", '{"a": 1}')
-    assert deep_merge([str(path)]) == {"a": 1}
+    assert load([str(path)]) == {"a": 1}
 
 
-def test_override_is_merged_last(write):
-    path = write("a.json", '{"server": {"host": "h", "port": 80}}')
-    merged = deep_merge([path], override={"server": {"port": 8080}, "debug": True})
-    assert merged == {"server": {"host": "h", "port": 8080}, "debug": True}
+def test_empty_file_list_returns_empty_dict():
+    assert load([]) == {}
 
 
-def test_override_alone():
-    override = {"a": [1, "two", 3.0, None, {"b": False}], "t": (1, 2)}
-    assert deep_merge([], override=override) == {
-        "a": [1, "two", 3.0, None, {"b": False}],
-        "t": [1, 2],
-    }
-
-
-def test_arrays_replace_and_none_overwrites(write):
+def test_arrays_and_none_load_from_document(write):
     path = write("a.json", '{"xs": [1, 2, 3], "k": {"v": 1}}')
-    merged = deep_merge([path], override={"xs": [9], "k": None})
-    assert merged == {"xs": [9], "k": None}
-
-
-def test_bool_stays_bool():
-    merged = deep_merge([], override={"t": True, "one": 1})
-    assert merged["t"] is True
-    assert type(merged["one"]) is int
-
-
-@pytest.mark.parametrize("n", [-(2**63), 2**63 - 1, 2**64 - 1])
-def test_64_bit_integers_survive(n):
-    assert deep_merge([], override={"n": n}) == {"n": n}
+    assert load([path]) == {"xs": [1, 2, 3], "k": {"v": 1}}
 
 
 def test_toml_datetime_is_its_toml_spelling(write):
     path = write("a.toml", "at = 1979-05-27T07:32:00Z\nday = 1979-05-27\n")
-    assert deep_merge([path]) == {"at": "1979-05-27T07:32:00Z", "day": "1979-05-27"}
+    assert load([path]) == {"at": "1979-05-27T07:32:00Z", "day": "1979-05-27"}
 
 
 def test_non_finite_floats_pass_through(write):
     path = write("a.toml", "x = inf\n")
-    assert deep_merge([path]) == {"x": float("inf")}
+    assert load([path]) == {"x": float("inf")}
 
 
 @pytest.mark.parametrize(
@@ -98,7 +74,7 @@ def test_non_finite_floats_pass_through(write):
 )
 def test_invalid_documents_raise_parse_error(write, name, text, message):
     with pytest.raises(ParseError, match=message) as info:
-        deep_merge([write(name, text)])
+        load([write(name, text)])
     assert isinstance(info.value, ValueError)
 
 
@@ -106,19 +82,19 @@ def test_non_utf8_text_raises_parse_error(tmp_path):
     path = tmp_path / "a.json"
     path.write_bytes(b'{"a": "\xff"}')
     with pytest.raises(ParseError, match="a.json"):
-        deep_merge([path])
+        load([path])
 
 
 def test_unknown_extension_is_a_value_error_not_a_parse_error(write):
     with pytest.raises(ValueError, match="cannot infer a format") as info:
-        deep_merge([write("a.yaml", "x: 1")])
+        load([write("a.yaml", "x: 1")])
     assert not isinstance(info.value, ParseError)
 
 
 def test_missing_file_raises_like_open(write, tmp_path):
     missing = tmp_path / "nope.json"
     with pytest.raises(FileNotFoundError) as info:
-        deep_merge([write("a.json", "{}"), missing])
+        load([write("a.json", "{}"), missing])
     assert info.value.errno == errno.ENOENT
     assert info.value.filename == str(missing)
     assert str(info.value) == f"[Errno {errno.ENOENT}] {os.strerror(errno.ENOENT)}: {str(missing)!r}"
@@ -126,7 +102,7 @@ def test_missing_file_raises_like_open(write, tmp_path):
 
 def test_directory_raises_is_a_directory_error(tmp_path):
     with pytest.raises(IsADirectoryError) as info:
-        deep_merge([tmp_path])
+        load([tmp_path])
     assert info.value.errno == errno.EISDIR
     assert info.value.filename == str(tmp_path)
 
@@ -140,91 +116,17 @@ def test_unreadable_file_raises_permission_error(write):
     path.chmod(0)
     try:
         with pytest.raises(PermissionError) as info:
-            deep_merge([path])
+            load([path])
     finally:
         path.chmod(0o600)
     assert info.value.filename == str(path)
 
 
-def test_bad_override_is_reported_before_files_are_read(tmp_path):
-    with pytest.raises(TypeError, match="`a.b`"):
-        deep_merge([tmp_path / "nope.json"], override={"a": {"b": object()}})
-
-
-@pytest.mark.parametrize(
-    ("override", "error", "message"),
-    [
-        ([("a", 1)], TypeError, "dict"),
-        (UserDict({"a": 1}), TypeError, "dict"),
-        ({1: "a"}, TypeError, "keys must be str"),
-        ({"a": {2: "b"}}, TypeError, "under `a`"),
-        ({"xs": [1, 2**64]}, ValueError, r"`xs\[1\]`"),
-        ({"n": -(2**63) - 1}, ValueError, "64 bits"),
-        ({"at": datetime.datetime(2020, 1, 1)}, TypeError, "datetime"),
-        ({"s": {1, 2}}, TypeError, "set"),
-    ],
-)
-def test_override_rejects_what_is_not_json_like(override, error, message):
-    with pytest.raises(error, match=message):
-        deep_merge([], override=override)
-
-
-def self_containing_dict():
-    d = {}
-    d["self"] = d
-    return d
-
-
-def self_containing_list():
-    xs = []
-    xs.append(xs)
-    return {"xs": xs}
-
-
-def indirect_cycle():
-    a = {}
-    a["b"] = {"a": a}
-    return a
-
-
-def nested(depth):
-    doc = 0
-    for _ in range(depth):
-        doc = {"k": doc}
-    return doc
-
-
-@pytest.mark.parametrize(
-    ("override", "message"),
-    [
-        (self_containing_dict(), r"`self` refers back .* \(a cycle\)"),
-        (self_containing_list(), r"`xs\[0\]` refers back"),
-        (indirect_cycle(), r"`b\.a` refers back"),
-        (nested(129), "deeper than 128 levels"),
-    ],
-)
-def test_override_cycles_and_runaway_nesting_raise_instead_of_crashing(override, message):
-    with pytest.raises(ValueError, match=message):
-        deep_merge([], override=override)
-
-
-def test_override_nesting_up_to_the_limit_converts():
-    assert deep_merge([], override=nested(128)) == nested(128)
-
-
-def test_a_value_shared_by_two_keys_is_not_a_cycle():
-    shared = [1, {"x": 2}]
-    assert deep_merge([], override={"a": shared, "b": shared}) == {
-        "a": [1, {"x": 2}],
-        "b": [1, {"x": 2}],
-    }
-
-
 def test_interpolation_is_opt_in(write):
     path = write("refs.json", '{"port": 8080, "copy": "${port}"}')
-    assert deep_merge([path])["copy"] == "${port}"
-    assert deep_merge([path], interpolate=False)["copy"] == "${port}"
-    assert deep_merge([path], interpolate=True)["copy"] == 8080
+    assert load([path])["copy"] == "${port}"
+    assert load([path], interpolate=False)["copy"] == "${port}"
+    assert load([path], interpolate=True)["copy"] == 8080
 
 
 def test_interpolation_sees_final_layers_and_nested_values(write):
@@ -240,31 +142,26 @@ def test_interpolation_sees_final_layers_and_nested_values(write):
             "final": "${next}",
         }),
     )
-    prod = write("prod.toml", '[server]\nhost = "prod"\n')
-    merged = deep_merge(
-        [base, prod],
-        override={"server": {"port": 443}, "from_override": "${server.port}"},
-        interpolate=True,
-    )
+    prod = write("prod.toml", '[server]\nhost = "prod"\nport = 443\n')
+    merged = load([base, prod], interpolate=True)
     assert merged["url"] == "http://prod:443/"
     assert merged["copy"] == {"host": "prod", "port": 443}
     assert merged["first"] == "first"
     assert merged["final"] == "http://prod:443/"
-    assert merged["from_override"] == 443
-    assert type(merged["from_override"]) is int
+    assert type(merged["server"]["port"]) is int
 
 
-def test_interpolation_reads_process_environment(monkeypatch):
+def test_interpolation_reads_process_environment(monkeypatch, write):
     monkeypatch.setenv("KNF_PY_TEST_PORT", "8080")
-    merged = deep_merge(
-        [],
-        override={
+    path = write(
+        "env.json",
+        json.dumps({
             "port": "${env:KNF_PY_TEST_PORT}",
             "url": "http://localhost:${env:KNF_PY_TEST_PORT}/",
             "literal": "$${env:KNF_PY_TEST_PORT}",
-        },
-        interpolate=True,
+        }),
     )
+    merged = load([path], interpolate=True)
     assert merged == {
         "port": 8080,
         "url": "http://localhost:8080/",
@@ -273,7 +170,7 @@ def test_interpolation_reads_process_environment(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("override", "message"),
+    ("doc", "message"),
     [
         ({"a": "${missing}"}, "unresolved reference\n  --> a: `missing`"),
         ({"a": "${}"}, "invalid reference\n  --> a: empty reference"),
@@ -281,19 +178,18 @@ def test_interpolation_reads_process_environment(monkeypatch):
         ({"box": {"x": 1}, "text": "box=${box}"}, "text: `box` is an object"),
     ],
 )
-def test_interpolation_errors_are_value_errors_with_paths(override, message):
+def test_interpolation_errors_are_value_errors_with_paths(write, doc, message):
+    path = write("errors.json", json.dumps(doc))
     with pytest.raises(InterpolationError) as info:
-        deep_merge([], override=override, interpolate=True)
+        load([path], interpolate=True)
     assert isinstance(info.value, ValueError)
     assert message in str(info.value)
 
 
-def test_interpolation_keeps_file_and_override_error_precedence(tmp_path):
+def test_interpolation_reports_file_errors(tmp_path):
     missing = tmp_path / "missing.json"
-    with pytest.raises(TypeError, match="`a`"):
-        deep_merge([missing], override={"a": object()}, interpolate=True)
     with pytest.raises(FileNotFoundError) as info:
-        deep_merge([missing], interpolate=True)
+        load([missing], interpolate=True)
     assert info.value.filename == str(missing)
 
 
@@ -330,4 +226,4 @@ def test_the_knf_executable_accepts_non_utf8_filename(tmp_path):
 def test_a_bare_str_is_not_a_list_of_files(write):
     path = write("a.json", "{}")
     with pytest.raises(TypeError):
-        deep_merge(str(path))
+        load(str(path))

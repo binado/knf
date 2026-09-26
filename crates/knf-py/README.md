@@ -1,6 +1,6 @@
 # pyknf
 
-Merge layered JSON and TOML configuration files into a `dict`. This is the same
+Load and merge layered JSON and TOML configuration files into a `dict`. This is the same
 Rust merge the [`knf`](https://github.com/binado/knf) command line runs, called
 natively.
 
@@ -9,16 +9,16 @@ pip install pyknf    # the module, and the `knf` executable
 ```
 
 ```python
-from knf import deep_merge
+from knf import load
 
-config = deep_merge(["base.toml", "prod.json"], override={"server": {"port": 8080}})
+config = load(["base.toml", "prod.json"])
+config["server"]["port"] = 8080
 ```
 
-Pass `interpolate=True` to resolve references after all files and the override
-have been merged:
+Pass `interpolate=True` to resolve references after all files have been merged:
 
 ```python
-config = deep_merge(["base.toml", "prod.json"], interpolate=True)
+config = load(["base.toml", "prod.json"], interpolate=True)
 ```
 
 `${key.path}` reads a value from the final config, including nested keys and
@@ -33,13 +33,9 @@ Invalid or missing references and cycles raise `knf.InterpolationError`, a
 `ValueError`, with the affected key paths.
 
 Files are merged left to right, exactly like `knf base.toml prod.json`.
-Objects merge key by key. Arrays, scalars and `None` replace wholesale. If you
-pass `override`, it is merged last as one more layer, which makes it the
-Python version of `--set`. It must be a `dict` of JSON-like values: `None`,
-`bool`, `int` (within 64 bits), `float`, `str`, `list`/`tuple` and nested
-`dict`s with `str` keys, at most 128 levels deep and without cycles. Anything
-else raises `TypeError` or `ValueError` naming the key path, before any file
-is read.
+Objects merge key by key. Arrays, scalars and `None` replace wholesale. Make
+additional changes to the returned dict in Python; for example,
+`config["server"]["port"] = 8080` updates a nested setting.
 
 A file that can't be read raises `FileNotFoundError`, `PermissionError` or
 `IsADirectoryError`, as `open()` would. Invalid JSON or TOML raises
