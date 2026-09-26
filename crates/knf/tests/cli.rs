@@ -71,7 +71,7 @@ fn with_env<'a>(cmd: &'a mut Command, vars: &[(&str, Option<&str>)]) -> &'a mut 
 // --- cascading discovery -------------------------------------------------
 
 #[test]
-fn cascade_matches_explicit_layers_and_lists_in_order() {
+fn accumulate_matches_explicit_layers_and_lists_in_order() {
     // Create files out of order. The target sorts first but must apply last.
     let dir = tree(&[
         ("foo/z.toml", "value = 2\n"),
@@ -115,7 +115,7 @@ fn cascade_matches_explicit_layers_and_lists_in_order() {
 }
 
 #[test]
-fn cascade_json_keeps_a_non_associative_flat_fold() {
+fn accumulate_json_keeps_a_non_associative_flat_fold() {
     // Grouping the last two layers would retain "old" from the first layer.
     let dir = tree(&[
         ("foo/a.json", r#"{"branch":{"old":1}}"#),
@@ -130,7 +130,7 @@ fn cascade_json_keeps_a_non_associative_flat_fold() {
 }
 
 #[test]
-fn cascade_empty_intermediate_directories_and_cwd_target() {
+fn accumulate_empty_intermediate_directories_and_cwd_target() {
     let dir = tree(&[
         ("foo/empty/deep/target.toml", "value = 1\n"),
         ("target.toml", "value = 2\n"),
@@ -146,7 +146,7 @@ fn cascade_empty_intermediate_directories_and_cwd_target() {
 }
 
 #[test]
-fn cascade_uses_the_existing_merge_and_interpolation_pipeline() {
+fn accumulate_uses_the_existing_merge_and_interpolation_pipeline() {
     let dir = tree(&[
         ("foo/base.toml", "[db]\nhost = \"base\"\nport = 80\n"),
         (
@@ -191,7 +191,7 @@ fn cascade_uses_the_existing_merge_and_interpolation_pipeline() {
 }
 
 #[test]
-fn cascade_input_format_changes_parsing_only() {
+fn accumulate_input_format_changes_parsing_only() {
     let dir = tree(&[
         ("foo/base.toml", r#"{"base":1}"#),
         ("foo/bar/target.TOML", r#"{"target":2}"#),
@@ -213,7 +213,7 @@ fn cascade_input_format_changes_parsing_only() {
 }
 
 #[test]
-fn cascade_listing_does_not_parse_or_resolve_files() {
+fn accumulate_listing_does_not_parse_or_resolve_files() {
     let dir = tree(&[
         ("foo/base.toml", "invalid TOML"),
         ("foo/target.toml", "value = \"${missing}\"\n"),
@@ -242,7 +242,7 @@ fn cascade_listing_does_not_parse_or_resolve_files() {
 }
 
 #[test]
-fn cascade_usage_is_validated_before_filesystem_access() {
+fn accumulate_usage_is_validated_before_filesystem_access() {
     let dir = tree(&[]);
     let absolute = dir.path().join("abs.toml").display().to_string();
     for (args, expected) in [
@@ -269,7 +269,7 @@ fn cascade_usage_is_validated_before_filesystem_access() {
 }
 
 #[test]
-fn cascade_filesystem_errors_do_not_produce_partial_lists() {
+fn accumulate_filesystem_errors_do_not_produce_partial_lists() {
     let dir = tree(&[("foo/base.toml", "value = 1\n")]);
     for target in ["foo/missing.toml", "missing.toml"] {
         let error = run_err(&dir, &["-a", target, "--list-files"]);
@@ -284,7 +284,7 @@ fn cascade_filesystem_errors_do_not_produce_partial_lists() {
 
 #[cfg(unix)]
 #[test]
-fn cascade_follows_symlinks_without_deduplicating_aliases() {
+fn accumulate_follows_symlinks_without_deduplicating_aliases() {
     use std::os::unix::fs::symlink;
     let dir = tree(&[
         ("outside/base.toml", "base = 1\n"),
@@ -319,7 +319,7 @@ fn cascade_follows_symlinks_without_deduplicating_aliases() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn cascade_preserves_non_utf8_paths() {
+fn accumulate_preserves_non_utf8_paths() {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
     let dir = tree(&[("foo/base.json", r#"{"base":1}"#)]);

@@ -207,7 +207,7 @@ def test_the_knf_executable_comes_with_the_wheel(write):
     assert out.stdout.strip() == '{"a":1,"b":2}'
 
 
-def test_the_knf_executable_cascades_and_lists_files(tmp_path):
+def test_the_knf_executable_accumulates_and_lists_files(tmp_path):
     knf = shutil.which("knf")
     assert knf is not None
     (tmp_path / "foo" / "bar").mkdir(parents=True)

@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, bail};
 use knf::Format;
 
-pub fn expand(target: &Path) -> anyhow::Result<Vec<PathBuf>> {
+pub fn accumulate(target: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let target: PathBuf = target
         .components()
         .filter(|component| !matches!(component, Component::CurDir))

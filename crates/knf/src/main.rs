@@ -5,7 +5,7 @@
 //! below. The pipeline itself is `knf-core`, which knows nothing about any of
 //! it.
 
-mod cascade;
+mod accumulate;
 mod cli;
 mod explain;
 
@@ -62,7 +62,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     let overlays = overlays(&cli)?;
 
     let files = if cli.accumulate {
-        cascade::expand(&cli.files[0])?
+        accumulate::accumulate(&cli.files[0])?
     } else {
         cli.files.clone()
     };
