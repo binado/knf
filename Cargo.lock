@@ -59,6 +59,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "arrayvec"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
+
+[[package]]
 name = "assert_cmd"
 version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -203,6 +209,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast-glob"
+version = "1.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a044ed96eb57253e806d08b74260638af189687e583f04947a5e11e75e0b0d1"
+dependencies = [
+ "arrayvec",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -290,6 +305,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
+ "fast-glob",
  "insta",
  "knf-core",
  "serde_json",
@@ -315,6 +331,7 @@ version = "0.3.2"
 dependencies = [
  "anyhow",
  "clap",
+ "fast-glob",
  "knf-core",
  "pyo3",
  "serde_json",

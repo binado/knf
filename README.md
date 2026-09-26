@@ -130,6 +130,45 @@ $ knf a.json b.json --strict
 error: type conflict at `server`: object would be replaced by number
 ```
 
+### Filtering inputs with globs
+
+`-g`, or `--glob`, filters the whole input path. `-G`, or `--glob-filename`,
+filters only the filename, ignoring directories. Each accepts one pattern;
+they cannot be repeated or combined. Quote the pattern so knf receives it
+without shell expansion:
+
+```bash
+knf config/**/*.toml -g 'config/**/prod.toml'
+knf config/**/*.toml -G '*.prod.toml'
+knf -a services/api/prod.toml -G '{defaults,prod}.toml'
+```
+
+The positional glob in the first two examples is expanded by your shell. knf's
+filter does not discover files: it removes inputs from the positional list or
+the list produced by `--accumulate`, preserving order, spelling and duplicates.
+Filtering happens before reading configuration contents, so excluded positional
+inputs need not exist or parse successfully. Output format inference uses only
+retained inputs. `--list-files` shows the filtered list.
+
+Matching is case-sensitive and covers the entire path or filename: `.prod.toml`
+matches that exact name, while `*.prod.toml` matches names ending in `.prod.toml`.
+Patterns support `*`, `?`, character classes such as `[a-z]`, alternatives such
+as `{defaults,prod}.toml`, and leading `!` negation. `*` does not cross `/`;
+`**` can cross directories when it occupies a complete path segment. Matching
+uses native encoded bytes without replacement characters; `?` matches one byte,
+not a Unicode character. Malformed patterns are usage errors (exit code 2).
+
+Whole-path matching preserves lexical components such as `./`; on Windows,
+path separators match as `/`, without altering paths used for I/O or listing.
+Filename matching excludes paths without a filename. Stdin's `-` is matched
+literally in both modes; include it with a pattern such as `{*.toml,-}`.
+
+An empty selection is allowed: the result is an empty object, or only the
+`--set` layers when supplied. `--list-files` prints nothing for an empty list.
+With `--accumulate`, the filter can also exclude the named target; discovery
+still checks that it exists and inspects directories before filtering, so
+discovery inspection errors are not suppressed.
+
 ### Accumulating layers from a target path
 
 `-a`, or `--accumulate`, is a discovery operator: it expands one relative target
@@ -165,8 +204,10 @@ how those files are parsed; it does not change which files are selected.
 Files within each directory are sorted by filename using native string order,
 without locale or numeric sorting. Other matching files in the target's
 directory are included. The named target is included exactly once, **last**,
-even if its filename sorts first. Symlinks follow ordinary filesystem semantics;
-different filenames pointing to the same file are separate layers. The supplied
+even if its filename sorts first. A glob filter can then remove any layer,
+including the target; the target stays last if retained. Symlinks follow
+ordinary filesystem semantics; different filenames pointing to the same file
+are separate layers. The supplied
 path controls directory selection, rather than enforcing filesystem containment.
 
 Exactly one target is required, with a JSON or TOML extension. Stdin, absolute
@@ -191,16 +232,16 @@ knf -a foo/bar/conf4.toml --list-files
 
 `--list-files` prints one path per line and exits without parsing files, merging,
 interpolating or emitting a configuration. The list is the positional files, or
-the files `--accumulate` discovered. Discovery still checks that the target
-exists and is a regular file.
+the files `--accumulate` discovered, after any glob filter. Discovery still
+checks that the target exists and is a regular file.
 As elsewhere in diagnostic output, filenames that are not UTF-8 are displayed
 with replacement characters; file operations preserve the original names.
 
 Normal merging flags work with accumulate mode: `--set` layers apply after all
 files, `--strict` and `--shallow` use the discovered order, interpolation runs
-once on the merged result, and `-f` controls the output format. Accumulate is a
-command-line option; the Rust library and Python `deep_merge` still take
-explicit file lists.
+once on the merged result, and `-f` controls the output format. Accumulate and
+glob filtering are command-line options; the Rust library and Python `load`
+still take explicit file lists.
 
 ### Shallow merge
 
