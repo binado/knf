@@ -19,7 +19,7 @@ simple operation. `knf <files>` should need no explanation.
 ## Installation
 
 ```bash
-pip install pyknf      # `from knf import deep_merge`, and the `knf` executable
+pip install pyknf      # `from knf import load`, and the `knf` executable
 cargo install knf-cli  # the executable alone, without Python
 ```
 
@@ -30,13 +30,14 @@ toolchain is needed to install a wheel.
 
 ## Python
 
-`pip install pyknf`. `deep_merge` runs the same merge as the command line, natively, and returns a
+`pip install pyknf`. `load` runs the same merge as the command line, natively, and returns a
 `dict`:
 
 ```python
-from knf import deep_merge
+from knf import load
 
-config = deep_merge(["base.toml", "prod.json"], override={"server": {"port": 8080}})
+config = load(["base.toml", "prod.json"])
+config["server"]["port"] = 8080
 ```
 
 Set `interpolate=True` to resolve `${key.path}` references against the final
@@ -49,12 +50,9 @@ typing for whole-string references and raw text when embedded. Use `$$` for a
 literal `$`. Interpolation is off by default. Invalid or missing references
 and cycles raise `knf.InterpolationError`, a `ValueError`, with key paths.
 
-Files are merged left to right, exactly like `knf base.toml prod.json`. If you pass
-`override`, it is merged last as one more layer, which makes it the Python version
-of `--set`. It must be a `dict` of JSON-like values: `None`, `bool`, `int` (within
-64 bits), `float`, `str`, `list`/`tuple` and nested `dict`s with `str` keys, at most
-128 levels deep and without cycles. Anything else raises `TypeError` or `ValueError`
-naming the key path, before any file is read.
+Files are merged left to right, exactly like `knf base.toml prod.json`. Make
+additional changes to the returned `dict` in Python, including nested updates
+such as `config["server"]["port"] = 8080`.
 
 A file that can't be read raises `FileNotFoundError`, `PermissionError` or
 `IsADirectoryError`, as `open()` would. Invalid JSON or TOML raises
