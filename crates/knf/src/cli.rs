@@ -120,6 +120,7 @@ Symlinks follow ordinary filesystem semantics.
 
     /// Print the file list in merge order without reading contents
     #[arg(
+        short = 'l',
         long,
         long_help = "\
 Print the file list, one path per line, and exit.

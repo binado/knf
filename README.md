@@ -230,7 +230,7 @@ knf -a foo/bar/conf4.toml --list-files
 # foo/bar/conf4.toml
 ```
 
-`--list-files` prints one path per line and exits without parsing files, merging,
+`-l`, or `--list-files`, prints one path per line and exits without parsing files, merging,
 interpolating or emitting a configuration. The list is the positional files, or
 the files `--accumulate` discovered, after any glob filter. Discovery still
 checks that the target exists and is a regular file.
