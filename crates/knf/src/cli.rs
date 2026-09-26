@@ -56,7 +56,7 @@ pub struct Cli {
         short = 'a',
         long = "accumulate",
         value_name = "TARGET",
-        value_parser = crate::accumulate::parser(),
+        value_parser = super::accumulate::parser(),
         conflicts_with = "files",
         long_help = "\
 Accumulate same-format files along one relative target path, starting at its first
@@ -73,7 +73,7 @@ Symlinks follow ordinary filesystem semantics.
   knf -a foo/bar/config.toml
   knf -a foo/bar/config.toml --list-files"
     )]
-    pub accumulate: Option<crate::accumulate::AccumulateTarget>,
+    pub accumulate: Option<super::accumulate::AccumulateTarget>,
 
     /// Print the file list in merge order without reading contents
     #[arg(
