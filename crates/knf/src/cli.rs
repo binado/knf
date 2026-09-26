@@ -51,12 +51,12 @@ pub struct Cli {
     #[arg(value_name = "FILE")]
     pub files: Vec<PathBuf>,
 
-    /// Discover same-format layers along one relative target path
+    /// Accumulate same-format layers along one relative target path
     #[arg(
-        short = 'r',
-        long,
+        short = 'a',
+        long = "accumulate",
         long_help = "\
-Discover same-format files along one relative target path, starting at its first
+Accumulate same-format files along one relative target path, starting at its first
 directory and excluding files directly in the working directory. Visit each
 directory on the path in order; sort its matching files by filename. Include
 files in the target's directory, then apply the named target exactly once, last.
@@ -66,18 +66,18 @@ overrides parsing only, not discovery. --set layers still apply after all files.
 Exactly one target is required; stdin, absolute paths and .. are not allowed.
 Symlinks follow ordinary filesystem semantics.
 
-  knf -r foo/bar/config.toml
-  knf -r foo/bar/config.toml --list-files"
+  knf -a foo/bar/config.toml
+  knf -a foo/bar/config.toml --list-files"
     )]
-    pub cascade: bool,
+    pub accumulate: bool,
 
     /// List discovered paths in merge order without reading their contents
     #[arg(
         long,
-        requires = "cascade",
+        requires = "accumulate",
         long_help = "\
 Print the complete discovered file list, one relative path per line, and exit.
-Requires --cascade. Checks filesystem access and target existence, but does not
+Requires --accumulate. Checks filesystem access and target existence, but does not
 read configuration contents, merge, interpolate or emit a configuration."
     )]
     pub list_files: bool,
@@ -224,26 +224,26 @@ passed through as literal text."
 }
 
 impl Cli {
-    /// Validate cascade's argument shape before inspecting the filesystem.
+    /// Validate accumulate's argument shape before inspecting the filesystem.
     pub fn validate(&self) -> Result<(), clap::Error> {
-        if !self.cascade {
+        if !self.accumulate {
             return Ok(());
         }
         let message = if self.files.len() != 1 {
-            Some("--cascade requires exactly one file target")
+            Some("--accumulate requires exactly one file target")
         } else {
             let target = &self.files[0];
             if target.as_os_str() == knf::STDIN {
-                Some("--cascade does not accept stdin")
+                Some("--accumulate does not accept stdin")
             } else if target.components().any(|component| {
                 matches!(
                     component,
                     Component::RootDir | Component::Prefix(_) | Component::ParentDir
                 )
             }) {
-                Some("--cascade requires a relative target path without .. components")
+                Some("--accumulate requires a relative target path without .. components")
             } else if Format::from_path(target).is_none() {
-                Some("--cascade requires a target with a JSON or TOML extension")
+                Some("--accumulate requires a target with a JSON or TOML extension")
             } else {
                 None
             }

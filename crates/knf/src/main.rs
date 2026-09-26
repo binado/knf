@@ -62,7 +62,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     // line, and saying so must not wait on the files existing or parsing.
     let overlays = overlays(&cli)?;
 
-    let files = if cli.cascade {
+    let files = if cli.accumulate {
         cascade::expand(&cli.files[0])?
     } else {
         cli.files.clone()

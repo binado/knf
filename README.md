@@ -130,9 +130,9 @@ $ knf a.json b.json --strict
 error: type conflict at `server`: object would be replaced by number
 ```
 
-### Cascading file discovery
+### Accumulating layers from a target path
 
-`-r`, or `--cascade`, discovers layers along one relative target path:
+`-a`, or `--accumulate`, discovers layers along one relative target path:
 
 ```text
 cwd/
@@ -146,7 +146,7 @@ cwd/
 From `cwd`, these commands merge the same layers:
 
 ```bash
-knf -r foo/bar/conf4.toml
+knf -a foo/bar/conf4.toml
 knf foo/conf1.toml foo/conf2.toml foo/bar/conf4.toml
 ```
 
@@ -169,27 +169,27 @@ path controls directory selection, rather than enforcing filesystem containment.
 
 Exactly one target is required, with a JSON or TOML extension. Stdin, absolute
 paths and `..` components are rejected. `./foo/bar/conf4.toml` is normalized to
-`foo/bar/conf4.toml`. A target directly in `cwd`, such as `-r conf4.toml`, merges
+`foo/bar/conf4.toml`. A target directly in `cwd`, such as `-a conf4.toml`, merges
 only that file. Missing or non-file targets and filesystem inspection errors
 fail rather than silently skipping files.
 
 Inspect the complete merge order without reading configuration contents:
 
 ```bash
-knf -r foo/bar/conf4.toml --list-files
+knf -a foo/bar/conf4.toml --list-files
 # foo/conf1.toml
 # foo/conf2.toml
 # foo/bar/conf4.toml
 ```
 
-`--list-files` requires `--cascade`, prints one relative path per line, and
+`--list-files` requires `--accumulate`, prints one relative path per line, and
 exits without parsing files, merging, interpolating or emitting a configuration.
 As elsewhere in diagnostic output, filenames that are not UTF-8 are displayed
 with replacement characters; file operations preserve the original names.
 
-Normal merging flags work with cascade mode: `--set` layers apply after all
+Normal merging flags work with accumulate mode: `--set` layers apply after all
 files, `--strict` and `--shallow` use the discovered order, interpolation runs
-once on the merged result, and `-f` controls the output format. Cascade is a
+once on the merged result, and `-f` controls the output format. Accumulate is a
 command-line option; the Rust library and Python `deep_merge` still take
 explicit file lists.
 

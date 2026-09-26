@@ -215,7 +215,7 @@ def test_the_knf_executable_cascades_and_lists_files(tmp_path):
     (tmp_path / "foo" / "bar" / "target.toml").write_text("value = 2\n")
     (tmp_path / "ignored.toml").write_text("invalid ignored root")
     out = subprocess.run(
-        [knf, "-r", "foo/bar/target.toml", "-f", "json", "--compact"],
+        [knf, "-a", "foo/bar/target.toml", "-f", "json", "--compact"],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -223,7 +223,7 @@ def test_the_knf_executable_cascades_and_lists_files(tmp_path):
     )
     assert json.loads(out.stdout) == {"base": 1, "value": 2}
     out = subprocess.run(
-        [knf, "-r", "foo/bar/target.toml", "--list-files"],
+        [knf, "-a", "foo/bar/target.toml", "--list-files"],
         cwd=tmp_path,
         capture_output=True,
         text=True,
