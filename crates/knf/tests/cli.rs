@@ -68,7 +68,7 @@ fn with_env<'a>(cmd: &'a mut Command, vars: &[(&str, Option<&str>)]) -> &'a mut 
     cmd
 }
 
-// --- cascading discovery -------------------------------------------------
+// --- accumulate ----------------------------------------------------------
 
 #[test]
 fn accumulate_matches_explicit_layers_and_lists_in_order() {
@@ -242,12 +242,22 @@ fn accumulate_listing_does_not_parse_or_resolve_files() {
 }
 
 #[test]
+fn list_files_prints_positional_paths_without_reading_them() {
+    let dir = tree(&[("foo.toml", "invalid TOML")]);
+    assert_eq!(
+        run(&dir, &["--list-files", "./foo.toml", "missing.toml"]),
+        "./foo.toml\nmissing.toml\n"
+    );
+    assert_eq!(run(&dir, &["--list-files"]), "");
+}
+
+#[test]
 fn accumulate_usage_is_validated_before_filesystem_access() {
     let dir = tree(&[]);
     let absolute = dir.path().join("abs.toml").display().to_string();
     for (args, expected) in [
-        (vec!["-a"], "exactly one file target"),
-        (vec!["-a", "a.toml", "b.toml"], "exactly one file target"),
+        (vec!["-a"], "a value is required"),
+        (vec!["-a", "a.toml", "b.toml"], "cannot be used with"),
         (vec!["-a", "-"], "does not accept stdin"),
         (vec!["-a", "foo/../a.toml"], "without .. components"),
         (vec!["-a", absolute.as_str()], "relative target path"),
@@ -255,7 +265,6 @@ fn accumulate_usage_is_validated_before_filesystem_access() {
             vec!["-a", "a.yaml", "--input-format", "toml"],
             "JSON or TOML extension",
         ),
-        (vec!["--list-files", "a.toml"], "--accumulate"),
     ] {
         let out = knf(&dir).args(&args).output().expect("spawn");
         assert_eq!(out.status.code(), Some(2), "{args:?}");
@@ -277,7 +286,7 @@ fn accumulate_filesystem_errors_do_not_produce_partial_lists() {
     }
     std::fs::create_dir(dir.path().join("foo/directory.toml")).unwrap();
     insta::assert_snapshot!(
-        "cascade_directory_target",
+        "accumulate_directory_target",
         run_err(&dir, &["-a", "foo/directory.toml"])
     );
 }

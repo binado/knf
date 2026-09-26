@@ -1,8 +1,8 @@
 //! clap derive structs.
 
-use std::path::{Component, PathBuf};
+use std::path::PathBuf;
 
-use clap::{CommandFactory, Parser, error::ErrorKind};
+use clap::Parser;
 use knf::{Format, PathLeaf};
 
 /// `-f` and `--input-format`, as clap sees them.
@@ -55,30 +55,35 @@ pub struct Cli {
     #[arg(
         short = 'a',
         long = "accumulate",
+        value_name = "TARGET",
+        value_parser = super::accumulate::parser(),
+        conflicts_with = "files",
         long_help = "\
 Accumulate same-format files along one relative target path, starting at its first
 directory and excluding files directly in the working directory. Visit each
 directory on the path in order; sort its matching files by filename. Include
 files in the target's directory, then apply the named target exactly once, last.
 
-The target must have a JSON or TOML extension (case-insensitive). --input-format
+The target is this option's argument. It must have a JSON or TOML extension
+(case-insensitive) and cannot be combined with positional files. --input-format
 overrides parsing only, not discovery. --set layers still apply after all files.
-Exactly one target is required; stdin, absolute paths and .. are not allowed.
+Stdin, absolute paths and .. are not allowed.
 Symlinks follow ordinary filesystem semantics.
 
   knf -a foo/bar/config.toml
   knf -a foo/bar/config.toml --list-files"
     )]
-    pub accumulate: bool,
+    pub accumulate: Option<super::accumulate::AccumulateTarget>,
 
-    /// List discovered paths in merge order without reading their contents
+    /// Print the file list in merge order without reading contents
     #[arg(
         long,
-        requires = "accumulate",
         long_help = "\
-Print the complete discovered file list, one relative path per line, and exit.
-Requires --accumulate. Checks filesystem access and target existence, but does not
-read configuration contents, merge, interpolate or emit a configuration."
+Print the file list, one path per line, and exit.
+
+The list is the positional files, or the files --accumulate discovered. Does not
+read configuration contents, merge, interpolate or emit a configuration.
+Discovery still checks filesystem access and that the target exists."
     )]
     pub list_files: bool,
 
@@ -221,36 +226,4 @@ passed through as literal text."
     /// Disable pretty-printing
     #[arg(long)]
     pub compact: bool,
-}
-
-impl Cli {
-    /// Validate accumulate's argument shape before inspecting the filesystem.
-    pub fn validate(&self) -> Result<(), clap::Error> {
-        if !self.accumulate {
-            return Ok(());
-        }
-        let message = if self.files.len() != 1 {
-            Some("--accumulate requires exactly one file target")
-        } else {
-            let target = &self.files[0];
-            if target.as_os_str() == knf::STDIN {
-                Some("--accumulate does not accept stdin")
-            } else if target.components().any(|component| {
-                matches!(
-                    component,
-                    Component::RootDir | Component::Prefix(_) | Component::ParentDir
-                )
-            }) {
-                Some("--accumulate requires a relative target path without .. components")
-            } else if Format::from_path(target).is_none() {
-                Some("--accumulate requires a target with a JSON or TOML extension")
-            } else {
-                None
-            }
-        };
-        match message {
-            Some(message) => Err(Self::command().error(ErrorKind::InvalidValue, message)),
-            None => Ok(()),
-        }
-    }
 }
