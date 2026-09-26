@@ -132,7 +132,9 @@ error: type conflict at `server`: object would be replaced by number
 
 ### Accumulating layers from a target path
 
-`-a`, or `--accumulate`, discovers layers along one relative target path:
+`-a`, or `--accumulate`, is a discovery operator: it expands one relative target
+path into an ordered list of file inputs, then processes them exactly like
+explicit file arguments:
 
 ```text
 cwd/
