@@ -1,17 +1,14 @@
 //! Format detection, parsing and emission.
 //!
-//! Both directions cross the IR boundary here and nowhere else: parse yields a
-//! [`Value`], emit takes one. The conversions themselves live in
-//! [`crate::value`].
+//! Values remain native throughout parsing, merging and emission.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::{Value, value};
+use crate::ConfigValue;
 use anyhow::{Context, bail};
 
-/// v1 ships JSON and TOML only. Adding a format is one arm of these matches;
-/// removing one is a breaking change.
+/// The two supported native formats. A pipeline selects one for every stage.
 ///
 /// No `clap::ValueEnum` here — this crate has no clap. `knf-cli` parses `-f`
 /// into a local enum and converts, which the orphan rule would force anyway.
@@ -69,25 +66,70 @@ impl fmt::Display for SourceName {
     }
 }
 
-/// Parses one layer into the merge IR.
+mod private {
+    pub trait Sealed {}
+    impl Sealed for serde_json::Value {}
+    impl Sealed for toml::Value {}
+}
+
+/// Parsing and emission for the two supported native formats.
 ///
-/// Enforces §2.3: every input must be an object at the top level. A bare array
-/// or string root is legal JSON but is not a config, cannot be emitted as TOML,
-/// and produces nonsense under last-wins.
-pub fn parse(format: Format, text: &str, source: &SourceName) -> anyhow::Result<Value> {
-    let value = match format {
-        Format::Json => {
-            let native: serde_json::Value =
-                serde_json::from_str(text).with_context(|| format!("{source}: invalid JSON"))?;
-            value::from_json(native)
-        }
-        Format::Toml => {
-            let native: toml::Value =
-                toml::from_str(text).with_context(|| format!("{source}: invalid TOML"))?;
-            value::from_toml(native)
-        }
+/// Sealed to JSON and TOML; structural algorithms use the open
+/// [`ConfigValue`] interface. Inline values and whole-string environment
+/// references always share this trait's typing rule.
+pub trait ConfigFormat: ConfigValue + private::Sealed {
+    /// The format represented by this native value.
+    const FORMAT: Format;
+    /// Parse a document. Top-level object validation happens in [`parse`].
+    fn parse_document(text: &str) -> anyhow::Result<Self>;
+    /// Parse one value, falling back to the original text as a string.
+    fn parse_inline(text: String) -> Self;
+    /// Serialize directly in this native format.
+    fn serialize(&self, pretty: bool) -> anyhow::Result<String>;
+}
+
+impl ConfigFormat for serde_json::Value {
+    const FORMAT: Format = Format::Json;
+    fn parse_document(text: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(text)?)
+    }
+    fn parse_inline(text: String) -> Self {
+        crate::set::json_or_string(text)
+    }
+    fn serialize(&self, pretty: bool) -> anyhow::Result<String> {
+        Ok(if pretty {
+            serde_json::to_string_pretty(self)?
+        } else {
+            serde_json::to_string(self)?
+        })
+    }
+}
+
+impl ConfigFormat for toml::Value {
+    const FORMAT: Format = Format::Toml;
+    fn parse_document(text: &str) -> anyhow::Result<Self> {
+        Ok(toml::from_str(text)?)
+    }
+    fn parse_inline(text: String) -> Self {
+        crate::set::toml_or_string(text)
+    }
+    fn serialize(&self, pretty: bool) -> anyhow::Result<String> {
+        Ok(if pretty {
+            toml::to_string_pretty(self)?
+        } else {
+            toml::to_string(self)?
+        })
+    }
+}
+
+/// Parse a native document, requiring an object/table root.
+pub fn parse<V: ConfigFormat>(text: &str, source: &SourceName) -> anyhow::Result<V> {
+    let label = match V::FORMAT {
+        Format::Json => "JSON",
+        Format::Toml => "TOML",
     };
-    if !matches!(value, Value::Object(_)) {
+    let value = V::parse_document(text).with_context(|| format!("{source}: invalid {label}"))?;
+    if value.as_object().is_none() {
         bail!(
             "{source}: expected an object at the top level, found {}",
             value.kind()
@@ -96,48 +138,9 @@ pub fn parse(format: Format, text: &str, source: &SourceName) -> anyhow::Result<
     Ok(value)
 }
 
-/// Converts the merged IR into `format` and serializes it.
-///
-/// `null_as` substitutes a string for every null rather than failing on one.
-/// It is honoured in the TOML arm and nowhere else: JSON can hold a null
-/// perfectly well, so there is nothing there for it to rescue and substituting
-/// anyway would corrupt a document that was never in trouble.
-///
-/// Both arms can fail, and each fails on what its own format cannot spell:
-/// [`value::to_toml`] on nulls, integers past `i64::MAX` and malformed datetimes,
-/// [`value::to_json`] on infinities and NaNs. The two sets do not overlap, so each
-/// format is the escape from the other's rejection — which is the help the CLI
-/// appends, and the reason neither library error names a flag. Both report key
-/// paths alone: nothing about the inputs survives the merge for them to name.
-pub fn emit(
-    value: Value,
-    format: Format,
-    pretty: bool,
-    null_as: Option<&str>,
-) -> anyhow::Result<String> {
-    let text = match format {
-        Format::Json => {
-            let native = value::to_json(value)?;
-            if pretty {
-                serde_json::to_string_pretty(&native)?
-            } else {
-                serde_json::to_string(&native)?
-            }
-        }
-        Format::Toml => {
-            let mut value = value;
-            if let Some(placeholder) = null_as {
-                value::replace_nulls(&mut value, placeholder);
-            }
-            let native = value::to_toml(value)?;
-            if pretty {
-                toml::to_string_pretty(&native)?
-            } else {
-                toml::to_string(&native)?
-            }
-        }
-    };
-    Ok(ensure_trailing_newline(text))
+/// Emit a native value in its own format, with a trailing newline.
+pub fn emit<V: ConfigFormat>(value: V, pretty: bool) -> anyhow::Result<String> {
+    Ok(ensure_trailing_newline(value.serialize(pretty)?))
 }
 
 fn ensure_trailing_newline(mut s: String) -> String {
@@ -161,7 +164,7 @@ mod tests {
 
     #[test]
     fn top_level_must_be_an_object() {
-        let err = parse(Format::Json, "[1,2]", &SourceName::Stdin).unwrap_err();
+        let err = parse::<serde_json::Value>("[1,2]", &SourceName::Stdin).unwrap_err();
         assert!(err.to_string().contains("found array"), "{err}");
     }
 }

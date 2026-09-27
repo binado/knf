@@ -1,8 +1,0 @@
----
-source: crates/knf/tests/cli.rs
-expression: "run_err(&dir, &[\"base.toml\", \"override.json\", \"-f\", \"toml\"])"
----
-error: cannot serialize null to TOML
-  --> servers.primary.proxy
-  --> logging.sink
-help: emit JSON with -f json, substitute with --null-as, or remove the null

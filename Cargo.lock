@@ -309,6 +309,7 @@ dependencies = [
  "knf-core",
  "serde_json",
  "tempfile",
+ "toml",
 ]
 
 [[package]]
@@ -317,7 +318,6 @@ version = "0.3.3"
 dependencies = [
  "anyhow",
  "fast-glob",
- "indexmap",
  "proptest",
  "serde_json",
  "tempfile",
@@ -334,6 +334,7 @@ dependencies = [
  "knf-core",
  "pyo3",
  "serde_json",
+ "toml",
 ]
 
 [[package]]

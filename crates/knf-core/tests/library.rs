@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use knf::{Map, MergeOptions, Value, format::Format};
+use knf::{Layers, MergeOptions, format::Format};
+use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -12,37 +13,31 @@ fn tree(files: &[(&str, &str)]) -> TempDir {
     dir
 }
 
-fn as_json(value: Value) -> serde_json::Value {
-    knf::value::to_json(value).expect("no non-finite floats in these fixtures")
-}
-
-/// An overlay is built from a [`Map`], which keeps a scalar layer — which would
-/// replace the whole document rather than shadow a key — out of the fold.
-fn overlay(json: serde_json::Value) -> Value {
-    let serde_json::Value::Object(map) = json else {
-        panic!("an overlay fixture must be an object")
-    };
-    Value::Object(knf::value::object_from_json(map))
+fn overlay(value: Value) -> Value {
+    assert!(value.is_object());
+    value
 }
 
 /// The whole file pipeline, as a caller composes it: load, then fold.
 fn merge_files<P: AsRef<Path>>(paths: &[P], opts: &MergeOptions) -> anyhow::Result<Value> {
-    let (layers, _formats) = knf::load_layers(paths, None)?;
+    let Layers::Json(layers) = knf::load_layers(paths, None)? else {
+        panic!("JSON fixtures")
+    };
     Ok(knf::merge(layers, opts)?)
 }
 
 #[test]
 fn load_and_merge_paths_without_a_cli() {
     let dir = tree(&[
-        ("base.toml", "[server]\nhost = \"local\"\nport = 80\n"),
+        ("base.json", r#"{"server":{"host":"local","port":80}}"#),
         ("prod.json", r#"{"server":{"port":443},"debug":true}"#),
     ]);
-    let paths = [dir.path().join("base.toml"), dir.path().join("prod.json")];
+    let paths = [dir.path().join("base.json"), dir.path().join("prod.json")];
 
     let merged = merge_files(&paths, &MergeOptions::default()).expect("merge succeeds");
 
     assert_eq!(
-        as_json(merged),
+        merged,
         json!({"server": {"host": "local", "port": 443}, "debug": true})
     );
 }
@@ -59,13 +54,15 @@ fn shallow_terminal_overlays_and_interpolation_compose() {
     let paths = [dir.path().join("base.json"), dir.path().join("prod.json")];
     let overlay = overlay(json!({"port": 443, "data": "${root}/data"}));
 
-    let (mut layers, _) = knf::load_layers(&paths, None).expect("layers load");
+    let Layers::Json(mut layers) = knf::load_layers(&paths, None).expect("layers load") else {
+        panic!("JSON")
+    };
     layers.push(overlay);
     let merged = knf::merge(layers, &MergeOptions::shallow_root()).expect("shallow merge succeeds");
     let merged = knf::interpolate(merged, &knf::ProcessEnv).expect("document references resolve");
 
     assert_eq!(
-        as_json(merged),
+        merged,
         json!({
             "db": {"host": "b"},
             "port": 443,
@@ -81,7 +78,9 @@ fn strict_overlay_errors_name_the_key_path() {
     let paths = [dir.path().join("base.json")];
     let overlay = overlay(json!({"port": "wrong kind"}));
 
-    let (mut layers, _) = knf::load_layers(&paths, None).expect("layers load");
+    let Layers::Json(mut layers) = knf::load_layers(&paths, None).expect("layers load") else {
+        panic!("JSON")
+    };
     layers.push(overlay);
     let err = knf::merge(layers, &MergeOptions::STRICT).expect_err("strict overlay must fail");
 
@@ -93,11 +92,14 @@ fn input_format_can_override_paths_without_extensions() {
     let dir = tree(&[("base", r#"{"a":1}"#), ("over", r#"{"b":2}"#)]);
     let paths = [dir.path().join("base"), dir.path().join("over")];
 
-    let (layers, formats) = knf::load_layers(&paths, Some(Format::Json)).expect("explicit format");
-    assert_eq!(formats, [Format::Json, Format::Json]);
+    let Layers::Json(layers) =
+        knf::load_layers(&paths, Some(Format::Json)).expect("explicit format")
+    else {
+        panic!("JSON")
+    };
     let merged = knf::merge(layers, &MergeOptions::default()).expect("merge succeeds");
 
-    assert_eq!(as_json(merged), json!({"a": 1, "b": 2}));
+    assert_eq!(merged, json!({"a": 1, "b": 2}));
 }
 
 #[test]
@@ -107,7 +109,7 @@ fn load_layers_accepts_borrowed_paths() {
 
     let merged = merge_files(&[Path::new(&path)], &MergeOptions::default()).expect("borrowed path");
 
-    assert_eq!(as_json(merged), json!({"a": 1}));
+    assert_eq!(merged, json!({"a": 1}));
 }
 
 /// The load failures are typed, so a caller can act on the *kind* rather than
@@ -142,11 +144,8 @@ fn load_errors_are_typed_and_flag_free() {
 fn interpolate_resolves_against_a_supplied_environment() {
     struct StubEnv;
     impl knf::Env for StubEnv {
-        fn lookup(&self, name: &str) -> Option<knf::EnvValue> {
-            (name == "PORT").then(|| knf::EnvValue {
-                raw: "8080".to_string(),
-                typed: knf::value::from_json(knf::json_or_string("8080".to_string())),
-            })
+        fn lookup(&self, name: &str) -> Option<String> {
+            (name == "PORT").then(|| "8080".to_string())
         }
     }
 
@@ -159,149 +158,98 @@ fn interpolate_resolves_against_a_supplied_environment() {
     let merged = knf::interpolate(merged, &StubEnv).expect("the stub supplies PORT");
 
     // Whole-string takes the typed value, embedded splices the raw text.
-    assert_eq!(as_json(merged), json!({"port": 8080, "url": "x:8080"}));
+    assert_eq!(merged, json!({"port": 8080, "url": "x:8080"}));
 }
 
-/// Interpolation is a separate step: `merge` alone is a byte-level no-op over a
+/// Interpolation is a separate step: `merge` alone preserves the values in a
 /// document full of `${...}`.
 #[test]
 fn merge_does_not_interpolate() {
     let dir = tree(&[("base.json", r#"{"a":"${b}","b":"literal"}"#)]);
     let merged = merge_files(&[dir.path().join("base.json")], &MergeOptions::default())
         .expect("no references are resolved");
-    assert_eq!(as_json(merged), json!({"a": "${b}", "b": "literal"}));
+    assert_eq!(merged, json!({"a": "${b}", "b": "literal"}));
 }
 
-/// The other error a caller has to be able to act on without a command line.
-///
-/// A null cannot go to TOML, and every remedy for that is interface-shaped —
-/// emit JSON, substitute a string, drop the null — so the report locates the
-/// nulls and says nothing about how to spell the fix. Asserted against the two
-/// flags specifically rather than a bare `--`, because the report's own path
-/// lines are spelled `  --> a.b`.
 #[test]
-fn the_null_in_toml_report_locates_the_nulls_and_names_no_flag() {
-    let dir = tree(&[("base.json", r#"{"a":{"b":null},"c":[1,null]}"#)]);
-    let merged = merge_files(&[dir.path().join("base.json")], &MergeOptions::default())
-        .expect("a null is an ordinary value up to the emit");
-
-    let err = knf::format::emit(merged, Format::Toml, true, None)
-        .expect_err("a null cannot be serialized to TOML");
-    let Some(knf::TomlError::Null(report)) = err.downcast_ref::<knf::TomlError>() else {
-        panic!("preserves the typed error, got {err}")
-    };
-
-    let text = report.to_string();
-    assert_eq!(text, "cannot serialize null to TOML\n  --> a.b\n  --> c[1]");
-    for flag in ["--null-as", "-f json"] {
-        assert!(
-            !text.contains(flag),
-            "a library error must not name a flag: {text}"
-        );
-    }
+fn mixed_formats_are_rejected_before_contents_are_read() {
+    let paths = ["missing.json", "missing.toml"];
+    let err = knf::load_layers(&paths, None).unwrap_err();
+    let load = err.downcast_ref::<knf::LoadError>().unwrap();
+    assert_eq!(*load, knf::LoadError::MixedFormats);
+    assert_eq!(load.path(), None);
+    assert!(!load.to_string().contains("-f"));
+    assert!(!load.to_string().ends_with('\n'));
 }
 
-/// The other half of that error, and the one a consumer reaches by accident.
-///
-/// `Value::Datetime` is a public variant holding a plain `String`, and an overlay
-/// is a `Map` of whatever the caller put in it — so a layer assembled in memory
-/// can carry a spelling that is not a TOML datetime. Nothing in the pipeline
-/// produces one (`${env:...}` and `--set` both type through JSON, which has no
-/// datetime), which is why the conversion used to assume it could not happen and
-/// abort the process. It reports the path instead.
 #[test]
-fn a_hand_built_datetime_that_does_not_reparse_is_an_error_not_a_panic() {
-    let dir = tree(&[("base.toml", "name = \"svc\"\n")]);
-    let mut overlay = Map::new();
-    overlay.insert("created".to_string(), Value::Datetime("nope".to_string()));
-
-    let (mut layers, _) = knf::load_layers(&[dir.path().join("base.toml")], None).expect("toml");
-    layers.push(Value::Object(overlay));
-    let merged = knf::merge(layers, &MergeOptions::default())
-        .expect("a datetime is an ordinary value right up to the emit");
-
-    let err = knf::format::emit(merged, Format::Toml, true, None)
-        .expect_err("`nope` is not a TOML datetime");
-    let Some(knf::TomlError::Datetime(report)) = err.downcast_ref::<knf::TomlError>() else {
-        panic!("preserves the typed error, got {err}")
-    };
-
-    let text = report.to_string();
+fn empty_layers_select_the_default_or_explicit_native_type() {
     assert_eq!(
-        text,
-        "cannot serialize datetime to TOML\n  --> created: `nope`"
+        knf::load_layers::<&str>(&[], None).unwrap(),
+        Layers::Json(vec![])
     );
-    // Asserted flag by flag rather than against a bare `--`, for the reason the
-    // null report is: the path lines are themselves spelled `  --> created`.
-    for flag in ["--null-as", "-f json", "--set"] {
-        assert!(
-            !text.contains(flag),
-            "a library error must not name a flag: {text}"
-        );
+    assert_eq!(
+        knf::load_layers::<&str>(&[], Some(Format::Toml)).unwrap(),
+        Layers::Toml(vec![])
+    );
+    assert_eq!(
+        knf::resolve_format(&["-"], None),
+        Err(knf::LoadError::StdinNeedsFormat)
+    );
+    assert_eq!(
+        knf::resolve_format(&["-"], Some(Format::Toml)).unwrap(),
+        Format::Toml
+    );
+}
+
+#[test]
+fn native_toml_preserves_special_values_and_precision() {
+    let source = "date = 1979-05-27T07:32:00.123456789Z\ninf = inf\nnan = nan\n";
+    let dir = tree(&[("base.toml", source)]);
+    let Layers::Toml(layers) = knf::load_layers(&[dir.path().join("base.toml")], None).unwrap()
+    else {
+        panic!("TOML")
+    };
+    let mut merged = knf::merge(layers, &MergeOptions::default()).unwrap();
+    let overlay = "copy=${date}"
+        .parse::<knf::PathLeaf<String>>()
+        .unwrap()
+        .into_layer::<toml::Value>()
+        .unwrap();
+    knf::merge_into(&mut merged, overlay, &MergeOptions::default()).unwrap();
+    let merged = knf::interpolate(merged, &EmptyEnv).unwrap();
+    assert_eq!(merged["date"], merged["copy"]);
+    let emitted = knf::format::emit(merged, true).unwrap();
+    assert!(emitted.contains(".123456789Z"));
+    let reparsed: toml::Value = toml::from_str(&emitted).unwrap();
+    assert!(reparsed["inf"].as_float().unwrap().is_infinite());
+    assert!(reparsed["nan"].as_float().unwrap().is_nan());
+}
+
+struct EmptyEnv;
+impl knf::Env for EmptyEnv {
+    fn lookup(&self, _: &str) -> Option<String> {
+        None
     }
 }
 
-/// TOML's number grammar has `inf`, `-inf` and `nan`; JSON's has none of them.
-///
-/// So an ordinary `.toml` layer carries a value that cannot be emitted as JSON,
-/// and this is the one impossibility on that side of the boundary. It used to be
-/// swallowed — the float became `0`, which is a value that was in no input — and
-/// it now names every offending key, saying nothing about how to spell the fix.
 #[test]
-fn the_non_finite_report_locates_the_floats_and_names_no_flag() {
-    let dir = tree(&[("base.toml", "timeout = inf\nbackoff = [1.0, nan]\n")]);
-    let merged = merge_files(&[dir.path().join("base.toml")], &MergeOptions::default())
-        .expect("inf is an ordinary value up to the emit");
-
-    let err = knf::format::emit(merged, Format::Json, true, None)
-        .expect_err("JSON has no spelling for inf");
-    let Some(report) = err.downcast_ref::<knf::NonFiniteFloat>() else {
-        panic!("preserves the typed error, got {err}")
+fn explicit_format_overrides_extensions_without_converting_values() {
+    let dir = tree(&[
+        ("a.toml", r#"{"null":null,"id":18446744073709551615}"#),
+        ("b.json", r#"{"a":1}"#),
+    ]);
+    let Layers::Json(layers) = knf::load_layers(
+        &[dir.path().join("a.toml"), dir.path().join("b.json")],
+        Some(Format::Json),
+    )
+    .unwrap() else {
+        panic!("JSON")
     };
-
-    let text = report.to_string();
+    let emitted =
+        knf::format::emit(knf::merge(layers, &MergeOptions::default()).unwrap(), false).unwrap();
     assert_eq!(
-        text,
-        "cannot serialize non-finite number to JSON\n  --> timeout: `inf`\n  --> backoff[1]: `nan`"
+        emitted,
+        "{\"null\":null,\"id\":18446744073709551615,\"a\":1}\n"
     );
-    // Flag by flag rather than a bare `--`, for the reason the null report is:
-    // the path lines are themselves spelled `  --> timeout`.
-    for flag in ["-f toml", "--input-format"] {
-        assert!(
-            !text.contains(flag),
-            "a library error must not name a flag: {text}"
-        );
-    }
-}
-
-/// The value `Number::U64` exists to carry, met at the one boundary that cannot
-/// carry it.
-///
-/// A snowflake ID above `i64::MAX` round-trips exactly through JSON, which is why
-/// the variant is there at all; TOML integers are signed 64-bit, so the same
-/// document has no TOML spelling. It used to round through `f64` and emit
-/// `1e19` — silently discarding the digits — and now reports the path instead.
-#[test]
-fn the_integer_out_of_range_report_locates_the_integers_and_names_no_flag() {
-    let dir = tree(&[("base.json", r#"{"id":10000000000000000001,"ok":42}"#)]);
-    let merged = merge_files(&[dir.path().join("base.json")], &MergeOptions::default())
-        .expect("a large integer is an ordinary value up to the emit");
-
-    let err = knf::format::emit(merged, Format::Toml, true, None)
-        .expect_err("TOML integers are signed 64-bit");
-    let Some(knf::TomlError::Integer(report)) = err.downcast_ref::<knf::TomlError>() else {
-        panic!("preserves the typed error, got {err}")
-    };
-
-    let text = report.to_string();
-    assert_eq!(
-        text,
-        "cannot serialize integer to TOML\n  --> id: `10000000000000000001`"
-    );
-    for flag in ["-f json", "--input-format"] {
-        assert!(
-            !text.contains(flag),
-            "a library error must not name a flag: {text}"
-        );
-    }
 }

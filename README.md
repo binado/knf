@@ -1,15 +1,16 @@
 # knf
 
 Merges layered configuration files and prints the result. One job, no query
-language, no template engine.
+language, no template engine. Each run merges JSON layers or TOML layers and
+writes that same format.
 
 ```bash
 # Print the output to stdout
 knf base.toml prod.toml > merged.toml
 # Add manual overrides via the --set flag
 knf defaults.json overrides.json --set server.port=8080 --set host=name
-# Mix toml and json (if you want)
-knf *.toml *.json
+# Choose one format for stdin or inline-only layers
+knf -f toml --set server.port=8080
 ```
 
 It exists because more powerful alternatives (`yq ea '. as $i ireduce ({}; . * $i)'`,
@@ -36,7 +37,7 @@ toolchain is needed to install a wheel.
 ```python
 from knf import load
 
-config = load(["base.toml", "prod.json"])
+config = load(["base.toml", "prod.toml"])
 config["server"]["port"] = 8080
 ```
 
@@ -73,19 +74,27 @@ merged config, including nested keys and array elements such as
 `${servers[0].host}`. A whole-string reference keeps its value's type (so
 `"${server.port}"` can become an integer and `"${server}"` a dict); an embedded
 reference such as `"http://${server.host}:${server.port}/"` becomes text.
-`${env:NAME}` reads the process environment, using the CLI's JSON-or-string
+`${env:NAME}` reads the process environment, using the selected format's value-or-string
 typing for whole-string references and raw text when embedded. Use `$$` for a
 literal `$`. Interpolation is off by default. Invalid or missing references
 and cycles raise `knf.InterpolationError`, a `ValueError`, with key paths.
 
-Files are merged left to right, exactly like `knf base.toml prod.json`. Make
+Files are merged left to right, exactly like `knf base.toml prod.toml`. Make
 additional changes to the returned `dict` in Python, including nested updates
 such as `config["server"]["port"] = 8080`.
 
 A file that can't be read raises `FileNotFoundError`, `PermissionError` or
 `IsADirectoryError`, as `open()` would. Invalid JSON or TOML raises
-`knf.ParseError`, a `ValueError` like `json.JSONDecodeError`. TOML datetimes come
-back as their TOML spelling in a `str`, which is also what `knf -f json` prints.
+`knf.ParseError`, a `ValueError` like `json.JSONDecodeError`. All files must use
+one format; mixed JSON/TOML inputs raise `ValueError` before contents are read.
+An empty file list returns `{}`.
+
+TOML offset and local datetimes return `datetime.datetime` objects (with a fixed
+UTC offset or no timezone); dates return `datetime.date`, and local times return
+`datetime.time`, as in Python's `tomllib`. Fractional seconds truncate to
+microseconds at the Python boundary. A datetime Python cannot represent, such
+as year zero, raises `ValueError` with its key path. The Rust/CLI pipeline keeps
+TOML's native nanosecond precision.
 
 ## Rust library
 
@@ -97,17 +106,40 @@ a language binding never pulls in `clap`:
 cargo add knf-core
 ```
 
-The library is named `knf`. Loading, merging and interpolating are three
-functions, and you compose them:
+The library is named `knf`. The loader returns homogeneous native layers;
+match the format once and compose the generic functions:
 
 ```rust
-use knf::{MergeOptions, load_layers, merge};
+use knf::{Layers, MergeOptions, load_layers, merge};
 
-let (layers, _formats) = load_layers(&["base.toml", "prod.toml"], None)?;
-let merged = merge(layers, &MergeOptions::default())?;
+let Layers::Toml(layers) = load_layers(&["base.toml", "prod.toml"], None)? else {
+    unreachable!("TOML inputs");
+};
+let merged = merge(layers, &MergeOptions::default())?; // toml::Value
+let merged = knf::interpolate(merged, &knf::ProcessEnv)?; // optional
+let text = knf::format::emit(merged, true)?;
 ```
 
-`knf::fs` exposes the same discovery and filtering independently of loading:
+`ConfigValue` and `ConfigObject` provide structural operations for the shared
+merge algorithm. `ConfigFormat` adds parsing, inline typing and serialization
+for `serde_json::Value` and `toml::Value`; interpolation uses it to type
+whole-string environment references. No combined IR or format conversion is
+involved. In-memory overlays are native objects/tables appended to the flat
+layer list. `PathLeaf<String>::into_layer::<V>()` builds an inline layer in the
+selected native format.
+
+`MergeOptions` sets strict mode and the key paths merged shallowly (the empty
+path is the root; `MergeOptions::shallow_root()` is `--shallow`). All numbers
+share one strict kind; TOML datetimes are distinct from strings. Arrays replace
+wholesale; JSON null overwrites as an ordinary value.
+
+`load_layers` infers one format from all extensions; pass `Some(Format::…)` to
+override parsing for every input (required for stdin `-`). Empty input returns
+`Layers::Json`, unless explicitly overridden. `resolve_format` performs the same
+selection without reading document contents. Mixed inferred formats raise
+`LoadError::MixedFormats` before document parsing.
+
+`knf::fs` exposes discovery and filtering independently of loading:
 
 ```rust
 use std::path::{Path, PathBuf};
@@ -117,8 +149,7 @@ let target = AccumulateTarget::try_from(PathBuf::from("services/api/prod.toml"))
 let files = accumulate(&target, Some(Path::new("project")))?;
 let pattern: GlobPattern = "{defaults,prod}.toml".parse()?;
 let files = filter_paths(&files, &pattern, true); // filename-only matching
-let (layers, _formats) = load_layers(&files, None)?;
-let merged = merge(layers, &MergeOptions::default())?;
+let layers = knf::load_layers(&files, None)?;
 ```
 
 Pass `None` as the base for working-directory-relative results, or `Some(base)`
@@ -126,30 +157,11 @@ for absolute results. Target validation, glob validation and discovery failures
 are typed (`AccumulateTargetError`, `GlobError`, `AccumulateError`); discovery
 failures carry paths and underlying I/O errors for frontend diagnostics.
 
-`load_layers` infers each file's format from its extension; pass `Some(Format::…)`
-to override (required for `-`, which reads stdin). It also returns the format
-each file was read as, so you can pick an output format before merging.
-
-`MergeOptions` sets strict mode and the key paths merged shallowly (the empty
-path is the root; `MergeOptions::shallow_root()` is `--shallow`). `merge` takes any list of
-`knf::Value`s, so in-memory overlays are just more layers appended after the
-files. An overlay should be a `Value::Object`: a scalar layer replaces the whole
-document instead of shadowing a key. The result is the format-independent
-`knf::Value`, ready for a native adapter or language binding to convert without
-parsing rendered stdout. `knf::format::emit` renders it when you do want text.
-
-Interpolation is a separate, opt-in step, run once on the merged document.
-Supply the environment yourself, or use `knf::ProcessEnv` for the real one:
-
-```rust
-let merged = knf::interpolate(merged, &knf::ProcessEnv)?;
-```
-
-Errors are typed rather than prose (`LoadError`, `MergeError`, `InterpError`,
-`TomlError`) and never name a command-line flag, since a library caller has no
-command line to act on. A null reaching TOML, for instance, is reported by the
-paths it was found at. Whether the remedy is spelled `-f json` is up to your
-interface, not the library.
+Interpolation runs once after merging. Supply an `Env` implementation whose
+`lookup` returns raw `Option<String>`, or use `ProcessEnv` for the real process
+environment. Embedded references insert raw text; whole-string references type
+through the native adapter. Errors (`LoadError`, `MergeError`, `InterpError`)
+remain typed and never name command-line flags.
 
 ## Merging
 
@@ -168,7 +180,7 @@ Two consequences worth knowing:
 - **Arrays replace**, always. Index-merging would turn `["a"]` over
   `["x","y","z"]` into `["a","y","z"]` — a value nobody wrote.
 - **Null is a value, not a delete.** So `knf a.json` with one argument is always
-  a byte-level no-op.
+  unchanged as a value. Serialization may change whitespace.
 
 `--strict` errors when a layer changes the *type* of an existing key, which
 catches the class of mistake where a leaf accidentally shadows a subtree.
@@ -195,7 +207,7 @@ The positional glob in the first two examples is expanded by your shell. knf's
 filter does not discover files: it removes inputs from the positional list or
 the list produced by `--accumulate`, preserving order, spelling and duplicates.
 Filtering happens before reading configuration contents, so excluded positional
-inputs need not exist or parse successfully. Output format inference uses only
+inputs need not exist or parse successfully. Format inference uses only
 retained inputs. `--list-files` shows the filtered list.
 
 Matching is case-sensitive and covers the entire path or filename: `.prod.toml`
@@ -246,8 +258,8 @@ other branches and directories with matching extensions are ignored. Empty
 matching directories contribute no layers.
 
 The target's extension selects JSON or TOML, case-insensitively. Only files of
-that format are discovered, including hidden files. `--input-format` overrides
-how those files are parsed; it does not change which files are selected.
+that format are discovered, including hidden files. `-f` overrides
+how those files are parsed and emitted; it does not change which files are selected.
 
 Files within each directory are sorted by filename using native string order,
 without locale or numeric sorting. Other matching files in the target's
@@ -287,10 +299,32 @@ with replacement characters; file operations preserve the original names.
 
 Normal merging flags work with accumulate mode: `--set` layers apply after all
 files, `--strict` and `--shallow` use the discovered order, interpolation runs
-once on the merged result, and `-f` controls the output format. The Rust
-`knf::fs` module and Python `accumulate`/`filter_paths` helpers expose the same
+once on the merged result, and `-f` selects the native format for parsing and
+output. The Rust `knf::fs` module and Python `accumulate`/`filter_paths` helpers expose the same
 discovery and filtering; `load_layers` and Python `load` take the resulting
 explicit file lists.
+
+### Inline overrides
+
+Repeat `--set KEY.PATH=VALUE` to append layers after all files, in occurrence
+order. Values parse in the selected format; invalid or out-of-range literals
+fall back to their original text as strings. Surrounding spaces, tabs and line
+breaks are ignored when parsing a literal; quoted string contents and string
+fallbacks retain their whitespace.
+
+| RHS | JSON | TOML |
+| --- | --- | --- |
+| `8080`, `true`, `"name"` | number, bool, string | number, bool, string |
+| `null` | null | string `"null"` |
+| `["a","b"]` | array | array |
+| `{host="local"}` | string | inline table |
+| `1979-05-27` | string | datetime |
+| `inf` | string | non-finite float |
+| `18446744073709551615` | exact integer | string (outside TOML's integer range) |
+
+`version=1.0` is a number. Force a string with `--set version='"1.0"'`.
+With no retained file inputs, JSON is the default; use `-f toml` to select TOML.
+Writable paths contain keys only, never array indices.
 
 ### Shallow merge
 
@@ -348,14 +382,19 @@ literal = "${NOT_A_REF}"
 **It is opt-in, and off by default.** knf sits directly upstream of tools whose
 own syntax is `${...}` — compose files, GitHub Actions workflows, Helm charts,
 systemd units. Eating those without being asked would be silent corruption, so
-without the flag the output is byte for byte what it is today.
+without the flag the reference strings pass through unchanged.
 
 Where the reference sits decides what it yields:
 
 | Position | Behaviour |
 | --- | --- |
 | whole string — `port = "${p}"` | takes the referent's **value and type**; `port` above is a number, and `"${db}"` is the whole table |
-| embedded — `url = "x/${p}"` | stringifies; an object or array has no format-independent spelling here, so it is an error |
+| embedded — `url = "x/${p}"` | stringifies; objects, arrays and JSON null are errors in embedded positions |
+
+Embedded finite floats keep their existing Rust float spelling, including
+`1.0`, `1e20` and `1e-7`. Serializers may spell the same number differently:
+JSON emits `1e+20`, and TOML emits `100000000000000000000.0`. Whole-string
+references retain the native numeric value and use the selected serializer.
 
 An environment variable is typed by the same rule as `--set`'s right-hand side
 when it is the whole string, and spliced as raw text when it is embedded —
@@ -396,64 +435,51 @@ Two limits worth knowing:
 merge, before any substitution, so it compares the types values had when they
 were written.
 
-## Caveats with formats
+## Formats
 
-JSON and TOML, inferred from the file extension. `--input-format` overrides it
-for every input and is required for `-` (stdin).
+Each invocation uses one native format: JSON or TOML. Without `-f/--format`,
+infer it from the retained file extensions (case-insensitively). Mixed formats
+are rejected before reading document contents:
 
-Output is the inputs' format when they agree; when they don't, `-f` is required
-rather than guessed, so reordering arguments can never silently change the
-encoding. Pretty-printed by default; `--compact` opts out.
-
-A TOML datetime is a distinct type all the way through the merge, so every TOML
-output keeps it unquoted — including a merge that mixed in a JSON layer, and
-including `--set` on top. It becomes a plain string only under `-f json`, where
-there is nothing else it could be.
-
-TOML cannot represent null, so emitting TOML from a document containing one is
-an error that names every path:
-
-```
-$ knf base.toml override.json -f toml
-error: cannot serialize null to TOML
-  --> servers.primary.proxy
-  --> logging.sink
-help: emit JSON with -f json, substitute with --null-as, or remove the null
+```text
+$ knf base.toml override.json
+error: inputs mix JSON and TOML formats; layers must use one format
+help: merge JSON layers and TOML layers separately
 ```
 
-Alternatively, you may use `--null-as <string>` to parse nulls into a custom value:
+`-f` selects parsing, inline/environment typing and output together. It overrides
+all input extensions and is required for stdin:
 
 ```bash
-knf base.toml override.json -f toml --null-as=none
-```
-The option is a no-op for JSON output. 
-
-Two more values have no spelling in one format or the other, and both are
-rejected the same way — named by path, never silently substituted.
-
-TOML integers are signed 64-bit, so an ID above `i64::MAX` (a snowflake, a hash)
-round-trips exactly through JSON but cannot be written as TOML at all:
-
-```
-$ knf ids.json -f toml
-error: cannot serialize integer to TOML
-  --> id: `10000000000000000001`
-help: TOML integers are signed 64-bit; emit JSON with -f json
+knf base.json - -f json
+knf config.data -f toml
+knf -f toml --set server.port=8080
 ```
 
-Conversely, TOML's number grammar has `inf`, `-inf` and `nan` literals and
-JSON's has none of them:
+It never converts formats: `knf config.toml -f json` attempts to parse the file
+as JSON and fails when its contents are TOML. `--list-files` exits before format
+selection. With no retained files or format option, output is JSON. Output is
+pretty-printed by default; `--compact` opts out. Every output ends in a newline;
+an empty TOML document is a newline.
 
-```
-$ knf limits.toml -f json
-error: cannot serialize non-finite number to JSON
-  --> timeout: `inf`
-help: emit TOML with -f toml, which can represent inf and nan
-```
+JSON nulls and large unsigned integers remain native JSON values. TOML dates,
+times, nanosecond precision and non-finite floats remain native TOML values.
+There are no cross-format representability checks or substitutions. This
+preserves parsed value semantics, not source formatting or comments.
 
-Each format is the escape from the other's rejection, and no same-format
-round-trip is affected: `knf ids.json -f json` and `knf limits.toml -f toml`
-both emit their input unchanged.
+### Migrating from the conversion pipeline
+
+| Previous behavior/API | Replacement |
+| --- | --- |
+| Mixed JSON/TOML layers | Merge one format per invocation or Python `load()` call |
+| `--input-format FORMAT` | `-f/--format FORMAT` |
+| `-f` selecting a different output encoding | `-f` selects the entire native pipeline; use a separate conversion tool if needed |
+| `--null-as` | Removed; TOML `--set proxy=null` now produces the string `"null"` |
+| `knf::Value`, `Map`, `Number`, conversion helpers/errors | Native JSON/TOML values and `ConfigValue`/`ConfigObject` traits |
+| `load_layers` returning values and format lists | `Layers::Json` or `Layers::Toml` |
+| `EnvValue { raw, typed }` | `Env::lookup` returns raw `Option<String>` |
+| `format::parse(format, …)` / `emit(value, format, …)` | Generic `parse::<V>(text, source)` / `emit(value, pretty)` |
+| Python TOML datetime strings | Native Python date/time objects; fractional seconds truncate to microseconds |
 
 ## Testing
 

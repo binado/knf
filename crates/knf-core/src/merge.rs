@@ -1,11 +1,7 @@
-//! The layered merge over [`Value`].
-//!
-//! One walk, one value type. Every format parses into [`Value`] before merging,
-//! so JSON and TOML layers stack without a conversion in the middle; nothing in
-//! this module knows about files, formats or the command line.
+//! Generic layered merge over native configuration values.
 
 use crate::path::render_keys;
-use crate::{Map, Value};
+use crate::{ConfigObject, ConfigValue};
 
 /// Knobs on the merge itself. Passed by reference rather than encoded as cargo
 /// features: features are additive and unify across a dependency graph, so a
@@ -78,7 +74,11 @@ impl MergeError {
 /// At each path in [`MergeOptions::shallow`] the object is merged one level
 /// only: every colliding child is replaced whole, objects included — jq's
 /// `a + b`. The empty path makes the whole merge shallow.
-pub fn merge_into(base: &mut Value, over: Value, opts: &MergeOptions) -> Result<(), MergeError> {
+pub fn merge_into<V: ConfigValue>(
+    base: &mut V,
+    over: V,
+    opts: &MergeOptions,
+) -> Result<(), MergeError> {
     let mut path = Vec::new();
     merge_at(base, over, opts, &mut path)
 }
@@ -97,11 +97,11 @@ pub fn merge_into(base: &mut Value, over: Value, opts: &MergeOptions) -> Result<
 /// So callers must never merge subgroups and then combine the results.
 /// Flatten first, fold second. (A merge shallow at the root happens to be
 /// associative, but the fold does not rely on it.)
-pub fn merge(
-    layers: impl IntoIterator<Item = Value>,
+pub fn merge<V: ConfigValue>(
+    layers: impl IntoIterator<Item = V>,
     opts: &MergeOptions,
-) -> Result<Value, MergeError> {
-    let mut acc = Value::Object(Map::new());
+) -> Result<V, MergeError> {
+    let mut acc = V::object(V::Object::new());
     let mut path = Vec::new();
     for layer in layers {
         merge_at(&mut acc, layer, opts, &mut path)?;
@@ -115,37 +115,40 @@ pub fn merge(
 ///
 /// Shallow paths need no extra state: the breadcrumb already names the object
 /// being merged, so it is compared against them once per object.
-fn merge_at(
-    base: &mut Value,
-    over: Value,
+fn merge_at<V: ConfigValue>(
+    base: &mut V,
+    over: V,
     opts: &MergeOptions,
     path: &mut Vec<String>,
 ) -> Result<(), MergeError> {
-    match (base, over) {
-        (Value::Object(base_map), Value::Object(over_map)) => {
-            let shallow = opts.shallow.iter().any(|p| p == path);
-            for (k, v) in over_map {
-                if let Some(slot) = base_map.get_mut(&k) {
-                    path.push(k);
-                    if shallow {
-                        replace(slot, v, opts, path)?;
+    if let Some(base_map) = base.as_object_mut() {
+        match over.into_object() {
+            Ok(over_map) => {
+                let shallow = opts.shallow.iter().any(|p| p == path);
+                for (k, v) in over_map {
+                    if let Some(slot) = base_map.get_mut(&k) {
+                        path.push(k);
+                        if shallow {
+                            replace(slot, v, opts, path)?;
+                        } else {
+                            merge_at(slot, v, opts, path)?;
+                        }
+                        path.pop();
                     } else {
-                        merge_at(slot, v, opts, path)?;
+                        base_map.insert(k, v);
                     }
-                    path.pop();
-                } else {
-                    base_map.insert(k, v);
                 }
+                return Ok(());
             }
-            Ok(())
+            Err(over) => return replace(base, over, opts, path),
         }
-        (base, over) => replace(base, over, opts, path),
     }
+    replace(base, over, opts, path)
 }
 
-fn replace(
-    base: &mut Value,
-    over: Value,
+fn replace<V: ConfigValue>(
+    base: &mut V,
+    over: V,
     opts: &MergeOptions,
     path: &[String],
 ) -> Result<(), MergeError> {

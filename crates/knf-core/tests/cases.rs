@@ -1,6 +1,7 @@
 //! Table-driven merge tests. Adding a case is one line in `CASES`.
 
-use knf::{MergeError, MergeOptions, Value, merge};
+use knf::{MergeError, MergeOptions, merge};
+use serde_json::Value;
 
 use Expect::{Doc, Error};
 
@@ -282,25 +283,11 @@ fn conflict_message_names_both_kinds() {
     );
 }
 
-/// A datetime is not a string. This is the one kind a JSON literal cannot
-/// express, and the reason `--strict` still catches a JSON string landing on
-/// top of a TOML datetime now that both share one walk.
 #[test]
 fn datetime_conflicts_with_string_under_strict() {
-    let mut base = Value::Object(
-        [(
-            "a".to_string(),
-            Value::Datetime("1979-05-27T07:32:00Z".to_string()),
-        )]
-        .into_iter()
-        .collect(),
-    );
-    let err = knf::merge_into(
-        &mut base,
-        ir(r#"{"a":"1979-05-27T07:32:00Z"}"#),
-        &MergeOptions::STRICT,
-    )
-    .unwrap_err();
+    let mut base: toml::Value = toml::from_str("a = 1979-05-27T07:32:00Z").unwrap();
+    let over: toml::Value = toml::from_str("a = '1979-05-27T07:32:00Z'").unwrap();
+    let err = knf::merge_into(&mut base, over, &MergeOptions::STRICT).unwrap_err();
     let MergeError::TypeConflict {
         path,
         expected,
@@ -311,9 +298,47 @@ fn datetime_conflicts_with_string_under_strict() {
     assert_eq!(found, "string");
 }
 
-/// Parses a JSON literal into the IR. Panics on a malformed literal — every
+/// Parses a native JSON fixture. Panics on a malformed literal — every
 /// caller passes a `&'static str` written in this file.
 fn ir(s: &str) -> Value {
-    let json = serde_json::from_str(s).unwrap_or_else(|e| panic!("bad JSON literal `{s}`: {e}"));
-    knf::value::from_json(json)
+    serde_json::from_str(s).unwrap_or_else(|e| panic!("bad JSON literal `{s}`: {e}"))
+}
+
+/// Exercise the same structural cases as JSON, excluding JSON-only null values.
+#[test]
+fn toml_table_and_merge_into() {
+    for case in CASES {
+        let fixtures: Vec<Value> = case.layers.iter().map(|text| ir(text)).collect();
+        if fixtures.iter().any(has_null) {
+            continue;
+        }
+        let layers: Vec<toml::Value> = fixtures
+            .into_iter()
+            .map(|value| toml::Value::try_from(value).unwrap())
+            .collect();
+        let opts = options(case);
+        let got = merge(layers.clone(), &opts);
+        match (&case.expect, got) {
+            (Doc(want), Ok(got)) => {
+                let expected = toml::Value::try_from(ir(want)).unwrap();
+                assert_eq!(got, expected, "{}", case.name);
+                let mut acc = toml::Value::Table(Default::default());
+                for layer in layers {
+                    knf::merge_into(&mut acc, layer, &opts).unwrap();
+                }
+                assert_eq!(acc, expected, "{}", case.name);
+            }
+            (Error(want), Err(error)) => assert_eq!(error.path().join("."), *want, "{}", case.name),
+            (_, got) => panic!("{}: unexpected result {got:?}", case.name),
+        }
+    }
+}
+
+fn has_null(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::Array(items) => items.iter().any(has_null),
+        Value::Object(map) => map.values().any(has_null),
+        _ => false,
+    }
 }

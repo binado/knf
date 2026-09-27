@@ -28,6 +28,13 @@ fn run(dir: &TempDir, args: &[&str]) -> String {
     ok_stdout(knf(dir).args(args), args)
 }
 
+/// Compare native TOML output with a small JSON fixture describing common values.
+fn assert_toml_eq_json(output: &str, expected: &str) {
+    let got: toml::Value = toml::from_str(output).unwrap();
+    let json: serde_json::Value = serde_json::from_str(expected).unwrap();
+    assert_eq!(got, toml::Value::try_from(json).unwrap());
+}
+
 /// stderr of a run that must fail with exit code 1.
 fn run_err(dir: &TempDir, args: &[&str]) -> String {
     err_stderr(knf(dir).args(args), args)
@@ -159,7 +166,7 @@ fn accumulate_uses_the_existing_merge_and_interpolation_pipeline() {
         vec!["--shallow"],
         vec!["--shallow=db"],
         vec!["--set", "db.port=8080"],
-        vec!["--interpolate", "-f", "json", "--compact"],
+        vec!["--interpolate", "--compact"],
     ] {
         let mut accumulate = vec!["-a", "foo/bar/target.toml"];
         accumulate.extend(&flags);
@@ -167,19 +174,12 @@ fn accumulate_uses_the_existing_merge_and_interpolation_pipeline() {
         explicit.extend(&flags);
         assert_eq!(run(&dir, &accumulate), run(&dir, &explicit));
     }
-    assert_eq!(
-        run(
+    assert_toml_eq_json(
+        &run(
             &dir,
-            &[
-                "-a",
-                "foo/bar/target.toml",
-                "--interpolate",
-                "-f",
-                "json",
-                "--compact"
-            ]
+            &["-a", "foo/bar/target.toml", "--interpolate", "--compact"],
         ),
-        "{\"db\":{\"host\":\"target\",\"port\":80},\"url\":\"target\"}\n"
+        "{\"db\":{\"host\":\"target\",\"port\":80},\"url\":\"target\"}\n",
     );
     let dir = tree(&[
         ("foo/base.json", r#"{"branch":{}}"#),
@@ -201,13 +201,7 @@ fn accumulate_input_format_changes_parsing_only() {
     assert_eq!(
         run(
             &dir,
-            &[
-                "-a",
-                "foo/bar/target.TOML",
-                "--input-format",
-                "json",
-                "--compact"
-            ]
+            &["-a", "foo/bar/target.TOML", "-f", "json", "--compact"]
         ),
         "{\"base\":1,\"target\":2}\n"
     );
@@ -262,10 +256,7 @@ fn accumulate_usage_is_validated_before_filesystem_access() {
         (vec!["-a", "-"], "does not accept stdin"),
         (vec!["-a", "foo/../a.toml"], "without .. components"),
         (vec!["-a", absolute.as_str()], "relative target path"),
-        (
-            vec!["-a", "a.yaml", "--input-format", "toml"],
-            "JSON or TOML extension",
-        ),
+        (vec!["-a", "a.yaml", "-f", "toml"], "JSON or TOML extension"),
     ] {
         let out = knf(&dir).args(&args).output().expect("spawn");
         assert_eq!(out.status.code(), Some(2), "{args:?}");
@@ -585,14 +576,7 @@ fn glob_treats_stdin_as_a_literal_candidate() {
     let dir = tree(&[]);
     for flag in ["-g", "-G"] {
         let out = knf(&dir)
-            .args([
-                "-",
-                flag,
-                "{*.json,-}",
-                "--input-format",
-                "json",
-                "--compact",
-            ])
+            .args(["-", flag, "{*.json,-}", "-f", "json", "--compact"])
             .write_stdin(r#"{"value":1}"#)
             .output()
             .unwrap();
@@ -681,8 +665,7 @@ name = \"svc\"
 date = 1979-05-27T07:32:00Z
 ";
 
-/// TOML → TOML is lossless because the IR has a `Datetime` variant; the merge
-/// never sees it as a string.
+/// TOML datetimes remain native throughout the pipeline.
 #[test]
 fn toml_datetime_survives_a_toml_round_trip() {
     let dir = tree(&[("f.toml", DATED)]);
@@ -697,8 +680,7 @@ fn toml_datetime_survives_a_toml_round_trip() {
     );
 }
 
-/// A datetime stays a datetime even when `--set` stacks a JSON-typed layer on
-/// top of it.
+/// A datetime stays native when inline layers are appended.
 #[test]
 fn toml_datetime_survives_set() {
     let dir = tree(&[("f.toml", DATED)]);
@@ -714,46 +696,40 @@ fn toml_datetime_survives_set() {
     assert!(out.contains("extra = 1"), "set layer missing:\n{out}");
 }
 
-/// Mixing a JSON layer in no longer costs the datetime its type: there is no
-/// JSON detour to launder it through, only the one IR both formats parse into.
 #[test]
-fn mixed_toml_json_to_toml_preserves_datetime() {
+fn a_different_format_option_changes_parsing_not_output_conversion() {
     let dir = tree(&[("f.toml", DATED), ("g.json", r#"{"extra":1}"#)]);
-    let out = run(&dir, &["f.toml", "g.json", "-f", "toml"]);
-    assert!(
-        out.contains("date = 1979-05-27T07:32:00Z"),
-        "datetime was not emitted unquoted:\n{out}"
-    );
-    assert!(
-        !out.contains("__toml_private"),
-        "sentinel leaked into output:\n{out}"
-    );
-    assert!(out.contains("extra = 1"), "json overlay missing:\n{out}");
+    assert!(run_err(&dir, &["f.toml", "g.json", "-f", "toml"]).contains("g.json: invalid TOML"));
+    assert!(run_err(&dir, &["f.toml", "-f", "json"]).contains("f.toml: invalid JSON"));
 }
 
-/// The other half of the same change: `--strict` compares a datetime against a
-/// string rather than string against string, so the conflict is caught.
 #[test]
-fn strict_catches_a_json_string_over_a_toml_datetime() {
+fn strict_catches_a_string_over_a_native_toml_datetime() {
     let dir = tree(&[
         ("f.toml", DATED),
-        ("g.json", r#"{"date":"1979-05-27T07:32:00Z"}"#),
+        ("g.toml", "date = '1979-05-27T07:32:00Z'"),
     ]);
-    let err = run_err(&dir, &["f.toml", "g.json", "-f", "toml", "--strict"]);
+    let err = run_err(&dir, &["f.toml", "g.toml", "--strict"]);
     assert!(
         err.contains("type conflict at `date`: datetime would be replaced by string"),
         "{err}"
     );
 }
 
-/// Under `-f json` the same datetime is a plain string, not the sentinel map.
 #[test]
-fn toml_datetime_becomes_a_json_string() {
-    let dir = tree(&[("f.toml", DATED)]);
-    let out = run(&dir, &["f.toml", "-f", "json", "--compact"]);
+fn explicit_format_overrides_extensions_for_every_layer() {
+    let dir = tree(&[("a.toml", r#"{"a":1}"#), ("b.json", r#"{"b":2}"#)]);
     assert_eq!(
-        out,
-        "{\"name\":\"svc\",\"date\":\"1979-05-27T07:32:00Z\"}\n"
+        run(&dir, &["a.toml", "b.json", "-f", "json", "--compact"]),
+        "{\"a\":1,\"b\":2}
+"
+    );
+    let dir = tree(&[("a.json", "a = 1"), ("b.toml", "b = 2")]);
+    assert_eq!(
+        run(&dir, &["a.json", "b.toml", "--format", "toml"]),
+        "a = 1
+b = 2
+"
     );
 }
 
@@ -774,7 +750,7 @@ fn key_order_is_preserved_in_both_formats() {
 
 /// A JSON integer above `i64::MAX` — a snowflake ID, a hash — must round-trip
 /// exactly. Routing it through `f64` would round it to ...808 silently, which
-/// is the one data corruption the IR could plausibly introduce.
+/// native integer values must retain every digit.
 #[test]
 fn integers_above_i64_max_are_exact() {
     let doc = r#"{"id":10000000000000000001,"max":18446744073709551615}"#;
@@ -792,14 +768,23 @@ fn a_single_layer_is_a_no_op() {
 }
 
 #[test]
-fn cross_format_layers_merge() {
+fn homogeneous_layers_merge_in_both_formats() {
     let dir = tree(&[
-        ("base.toml", "[server]\nport = 80\nhost = \"local\"\n"),
-        ("over.json", r#"{"server":{"port":443}}"#),
+        (
+            "base.toml",
+            "[server]
+port = 80
+host = 'local'",
+        ),
+        (
+            "over.toml",
+            "[server]
+port = 443",
+        ),
     ]);
-    assert_eq!(
-        run(&dir, &["base.toml", "over.json", "-f", "json", "--compact"]),
-        "{\"server\":{\"port\":443,\"host\":\"local\"}}\n"
+    assert_toml_eq_json(
+        &run(&dir, &["base.toml", "over.toml"]),
+        r#"{"server":{"port":443,"host":"local"}}"#,
     );
 }
 
@@ -807,7 +792,7 @@ fn cross_format_layers_merge() {
 fn stdin_is_a_layer() {
     let dir = tree(&[("base.json", r#"{"a":1,"b":2}"#)]);
     let out = knf(&dir)
-        .args(["base.json", "-", "--input-format", "json", "--compact"])
+        .args(["base.json", "-", "-f", "json", "--compact"])
         .write_stdin(r#"{"b":99}"#)
         .output()
         .expect("spawn");
@@ -847,24 +832,14 @@ fn by_default_arrays_replace_and_tables_merge() {
 }
 
 /// `--shallow` is jq's `+`: the overlay's table is taken whole and `port` is
-/// gone. Emitted as compact JSON so the assertion is one exact string.
+/// gone. Compare the native TOML output with the expected value.
 #[test]
 fn shallow_takes_top_level_tables_whole() {
     let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
-    let out = run(
-        &dir,
-        &[
-            "base.toml",
-            "prod.toml",
-            "--shallow",
-            "-f",
-            "json",
-            "--compact",
-        ],
-    );
-    assert_eq!(
-        out,
-        "{\"plugins\":[\"metrics\"],\"db\":{\"host\":\"prod\"}}\n"
+    let out = run(&dir, &["base.toml", "prod.toml", "--shallow", "--compact"]);
+    assert_toml_eq_json(
+        &out,
+        "{\"plugins\":[\"metrics\"],\"db\":{\"host\":\"prod\"}}\n",
     );
 }
 
@@ -911,18 +886,11 @@ fn shallow_at_a_path_keeps_everything_else_deep() {
     let dir = tree(&[("base.toml", NESTED_BASE), ("prod.toml", NESTED_PROD)]);
     let out = run(
         &dir,
-        &[
-            "base.toml",
-            "prod.toml",
-            "--shallow=db",
-            "-f",
-            "json",
-            "--compact",
-        ],
+        &["base.toml", "prod.toml", "--shallow=db", "--compact"],
     );
-    assert_eq!(
-        out,
-        "{\"db\":{\"host\":\"local\",\"pool\":{\"max\":9}},\"app\":{\"pool\":{\"min\":1,\"max\":9}}}\n"
+    assert_toml_eq_json(
+        &out,
+        "{\"db\":{\"host\":\"local\",\"pool\":{\"max\":9}},\"app\":{\"pool\":{\"min\":1,\"max\":9}}}\n",
     );
 }
 
@@ -936,14 +904,12 @@ fn shallow_paths_are_repeatable() {
             "prod.toml",
             "--shallow=db",
             "--shallow=app",
-            "-f",
-            "json",
             "--compact",
         ],
     );
-    assert_eq!(
-        out,
-        "{\"db\":{\"host\":\"local\",\"pool\":{\"max\":9}},\"app\":{\"pool\":{\"max\":9}}}\n"
+    assert_toml_eq_json(
+        &out,
+        "{\"db\":{\"host\":\"local\",\"pool\":{\"max\":9}},\"app\":{\"pool\":{\"max\":9}}}\n",
     );
 }
 
@@ -968,8 +934,7 @@ fn empty_shallow_path_is_the_root() {
     );
 }
 
-/// The null pre-check runs on the *merged* document, so a null that a later
-/// layer overwrites never reaches TOML conversion and is not an error.
+/// A string fallback can be overwritten by a later typed inline layer.
 #[test]
 fn set_null_overwritten_before_toml_emit() {
     let dir = tree(&[("f.toml", "a = 0\n")]);
@@ -979,50 +944,134 @@ fn set_null_overwritten_before_toml_emit() {
     );
 }
 
-/// §3.2: a null reaching TOML is an error wherever it came from. `--set` used
-/// to be exempt, emitting the string `"null"`.
 #[test]
-fn set_null_on_toml_is_an_error() {
-    let dir = tree(&[("f.toml", "a = 0\n")]);
-    insta::assert_snapshot!(run_err(&dir, &["f.toml", "--set", "proxy=null"]));
+fn toml_inline_typing_uses_native_values_and_string_fallback() {
+    let dir = tree(&[]);
+    let out = run(
+        &dir,
+        &[
+            "-f",
+            "toml",
+            "--set",
+            "proxy=null",
+            "--set",
+            "day=1979-05-27",
+            "--set",
+            "db={host='local'}",
+            "--set",
+            "large=18446744073709551615",
+            "--set",
+            "bad=[a,b]",
+            "--set",
+            "limit=inf",
+        ],
+    );
+    let value: toml::Value = toml::from_str(&out).unwrap();
+    assert_eq!(value["proxy"].as_str(), Some("null"));
+    assert_eq!(value["day"].type_str(), "datetime");
+    assert_eq!(value["db"]["host"].as_str(), Some("local"));
+    assert_eq!(value["large"].as_str(), Some("18446744073709551615"));
+    assert_eq!(value["bad"].as_str(), Some("[a,b]"));
+    assert!(value["limit"].as_float().unwrap().is_infinite());
 }
 
-// --- --null-as ------------------------------------------------------------
-
-/// The escape hatch from the error above: a string the *user* picked, written
-/// wherever a null would have been.
 #[test]
-fn null_as_substitutes_on_toml_output() {
-    let dir = tree(&[("f.toml", "a = 0\n")]);
+fn toml_inline_literals_accept_surrounding_whitespace() {
+    let dir = tree(&[]);
+    let out = run(
+        &dir,
+        &[
+            "-f",
+            "toml",
+            "--set",
+            "port= \t8080\r\n",
+            "--set",
+            "enabled=true\n",
+            "--set",
+            "ratio=1.0 ",
+            "--set",
+            "fallback= text\n",
+            "--set",
+            "quoted= ' text ' ",
+        ],
+    );
+    let value: toml::Value = toml::from_str(&out).unwrap();
+    assert_eq!(value["port"].as_integer(), Some(8080));
+    assert_eq!(value["enabled"].as_bool(), Some(true));
+    assert_eq!(value["ratio"].as_float(), Some(1.0));
+    assert_eq!(value["fallback"].as_str(), Some(" text\n"));
+    assert_eq!(value["quoted"].as_str(), Some(" text "));
+}
+
+// --- native inline values -------------------------------------------------
+
+#[test]
+fn removed_options_are_usage_errors() {
+    let dir = tree(&[]);
+    for args in [["--input-format", "json"], ["--null-as", "none"]] {
+        let out = knf(&dir).args(args).output().unwrap();
+        assert_eq!(out.status.code(), Some(2));
+        assert!(
+            String::from_utf8(out.stderr)
+                .unwrap()
+                .contains("unexpected argument")
+        );
+    }
+}
+
+#[test]
+fn toml_environment_values_share_inline_typing_and_remain_terminal() {
+    let dir = tree(&[(
+        "a.toml",
+        "day = '${env:KNF_TEST_DAY}'
+null = '${env:KNF_TEST_NULL}'
+raw = 'x:${env:KNF_TEST_DAY}'
+terminal = '${env:KNF_TEST_TERMINAL}'
+",
+    )]);
+    let out = with_env(
+        knf(&dir).args(["a.toml", "--interpolate"]),
+        &[
+            ("KNF_TEST_DAY", Some("1979-05-27")),
+            ("KNF_TEST_NULL", Some("null")),
+            ("KNF_TEST_TERMINAL", Some("${missing}")),
+        ],
+    )
+    .output()
+    .unwrap();
+    assert!(out.status.success());
+    let value: toml::Value = toml::from_str(&String::from_utf8(out.stdout).unwrap()).unwrap();
+    assert_eq!(value["day"].type_str(), "datetime");
+    assert_eq!(value["null"].as_str(), Some("null"));
+    assert_eq!(value["raw"].as_str(), Some("x:1979-05-27"));
+    assert_eq!(value["terminal"].as_str(), Some("${missing}"));
+}
+
+#[test]
+fn empty_runs_use_the_selected_native_format() {
+    let dir = tree(&[]);
+    assert_eq!(
+        run(&dir, &["--compact"]),
+        "{}
+"
+    );
+    assert_eq!(
+        run(&dir, &["-f", "toml"]),
+        "
+"
+    );
+    assert_eq!(
+        run(&dir, &["-f", "toml", "--set", "a=1"]),
+        "a = 1
+"
+    );
     assert_eq!(
         run(
             &dir,
-            &["f.toml", "--set", "proxy=null", "--null-as", "none"]
+            &["missing.json", "-g", "*.toml", "-f", "toml", "--set", "a=1"]
         ),
-        "a = 0\nproxy = \"none\"\n"
-    );
-}
-
-/// Inside an array a null cannot be dropped without shifting every index after
-/// it — the case where `yq` and `tomlq` each silently invent a different string
-/// (`""` and `"None"`). Substituting keeps the length and the user's choice.
-#[test]
-fn null_as_substitutes_inside_arrays() {
-    let dir = tree(&[("f.json", r#"{"xs":[1,null,3]}"#)]);
-    assert_eq!(
-        run(&dir, &["f.json", "-f", "toml", "--null-as", "none"]),
-        "xs = [\n    1,\n    \"none\",\n    3,\n]\n"
-    );
-}
-
-/// JSON can hold a null, so the flag has nothing to rescue there and must not
-/// corrupt a document that was never in trouble.
-#[test]
-fn null_as_leaves_json_output_alone() {
-    let dir = tree(&[("f.json", r#"{"proxy":null}"#)]);
-    assert_eq!(
-        run(&dir, &["f.json", "--null-as", "none"]),
-        "{\n  \"proxy\": null\n}\n"
+        "a = 1
+"
     );
 }
 
@@ -1155,20 +1204,13 @@ fn strict_sees_types_as_written_not_as_resolved() {
     );
 }
 
-/// A reference resolving to null is an ordinary null: it meets the existing
-/// TOML error, and the existing escape rescues it.
 #[test]
-fn a_null_referent_meets_the_existing_toml_null_error() {
+fn a_null_referent_remains_native_json_null() {
     let dir = tree(&[("f.json", r#"{"n":null,"copy":"${n}"}"#)]);
-    let err = run_err(&dir, &["f.json", "-f", "toml", "--interpolate"]);
-    assert!(err.contains("cannot serialize null to TOML"), "{err}");
-    assert!(err.contains("--> copy"), "{err}");
     assert_eq!(
-        run(
-            &dir,
-            &["f.json", "-f", "toml", "--interpolate", "--null-as", "none"]
-        ),
-        "n = \"none\"\ncopy = \"none\"\n"
+        run(&dir, &["f.json", "--interpolate", "--compact"]),
+        "{\"n\":null,\"copy\":null}
+"
     );
 }
 
@@ -1266,45 +1308,6 @@ fn a_non_object_root_is_rejected_by_name() {
 
 // --- multi-line error messages (snapshotted) ------------------------------
 
-/// §3.2. Paths into the *merged* document and nothing else: no layer survives
-/// the merge to be named, and both escapes the help line offers (`-f json`,
-/// `--null-as`) work without knowing which file the null came from.
-#[test]
-fn null_in_toml_error() {
-    let dir = tree(&[
-        ("base.toml", "[servers.primary]\nhost = \"a\"\n"),
-        (
-            "override.json",
-            r#"{"servers":{"primary":{"proxy":null}},"logging":{"sink":null}}"#,
-        ),
-    ]);
-    insta::assert_snapshot!(run_err(&dir, &["base.toml", "override.json", "-f", "toml"]));
-}
-
-/// The same shape one format over. TOML's number grammar has `inf` and `nan`
-/// literals and JSON's has neither, so an ordinary `.toml` input cannot be
-/// emitted as JSON — it used to become `0`, a value that was in no input. The
-/// help points at `-f toml`, which is the reverse of the escape the null error
-/// offers, and a user who has met that one will reach for `-f json` by reflex.
-#[test]
-fn non_finite_in_json_error() {
-    let dir = tree(&[("a.toml", "timeout = inf\nbackoff = [1.0, nan]\n")]);
-    insta::assert_snapshot!(run_err(&dir, &["a.toml", "-f", "json"]));
-}
-
-/// The third TOML impossibility, and the one a document reaches. TOML integers
-/// are signed 64-bit, so the snowflake ID that `integers_above_i64_max_are_exact`
-/// round-trips through JSON has no TOML spelling at all; it used to round through
-/// `f64` and emit `1e19`, discarding the digits `Number::U64` exists to keep.
-#[test]
-fn integer_out_of_range_in_toml_error() {
-    let dir = tree(&[(
-        "a.json",
-        r#"{"id":10000000000000000001,"ok":42,"ids":[1,18446744073709551615]}"#,
-    )]);
-    insta::assert_snapshot!(run_err(&dir, &["a.json", "-f", "toml"]));
-}
-
 /// Directories are files-as-layers, never expanded. The help line must be
 /// runnable exactly as printed.
 #[test]
@@ -1319,10 +1322,7 @@ fn mixed_input_formats_error() {
     insta::assert_snapshot!(run_err(&dir, &["a.toml", "b.json"]));
 }
 
-/// A missing `-f` is a mistake in argv alone, so it is reported before any
-/// error in the documents themselves — never one run at a time, where the user
-/// fixes the type conflict only to learn about the flag on the next attempt.
-/// The layers here conflict under `--strict`; the format check still wins.
+/// Mixed formats fail before merge, even when the documents would conflict.
 #[test]
 fn mixed_input_formats_error_precedes_merge_errors() {
     let dir = tree(&[

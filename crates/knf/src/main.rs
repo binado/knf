@@ -12,10 +12,9 @@ mod explain;
 use std::io::Write;
 use std::path::PathBuf;
 
-use anyhow::bail;
 use clap::Parser;
 use knf::{
-    Format, MergeOptions, PathLeaf, ProcessEnv, Value, format, interpolate, load_layers, merge,
+    ConfigFormat, Layers, MergeOptions, ProcessEnv, format, interpolate, load_layers, merge,
 };
 
 use cli::{Cli, ShallowAt};
@@ -41,9 +40,7 @@ where
     let cli = Cli::parse_from(args);
 
     if let Err(err) = run(cli) {
-        // Some errors are deliberately multi-line: the null-in-TOML report and
-        // the directory hint get their `help:` line from `explain`, the
-        // mixed-format one carries its own from below.
+        // Frontend help is added by `explain`; library errors remain flag-free.
         eprintln!("error: {err}");
         for cause in err.chain().skip(1) {
             eprintln!("  caused by: {cause}");
@@ -56,7 +53,9 @@ where
 fn run(cli: Cli) -> anyhow::Result<()> {
     // Before anything is read: a malformed --set is a mistake in the command
     // line, and saying so must not wait on the files existing or parsing.
-    let overlays = overlays(&cli)?;
+    for leaf in &cli.set {
+        leaf.validate_keys().map_err(name_the_set_flag)?;
+    }
     let opts = merge_options(&cli)?;
 
     let mut files = if let Some(target) = &cli.accumulate {
@@ -78,61 +77,34 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         return write_stdout(&text);
     }
 
-    run_pipeline(&cli, &files, overlays, &opts)
+    run_pipeline(&cli, &files, &opts)
 }
 
-/// One pipeline for explicit and discovered files: every layer becomes a
-/// `Value`, the fold runs once, and the output format is only consulted at emit.
-/// Nothing about JSON or TOML reaches the merge.
-fn run_pipeline(
+/// Dispatch once to a native pipeline; every later stage retains its type.
+fn run_pipeline(cli: &Cli, files: &[PathBuf], opts: &MergeOptions) -> anyhow::Result<()> {
+    let layers = load_layers(files, cli.format.map(Into::into)).map_err(explain_pipeline)?;
+    match layers {
+        Layers::Json(layers) => run_native(cli, layers, opts),
+        Layers::Toml(layers) => run_native(cli, layers, opts),
+    }
+}
+
+fn run_native<V: ConfigFormat>(
     cli: &Cli,
-    files: &[PathBuf],
-    overlays: Vec<Value>,
+    mut layers: Vec<V>,
     opts: &MergeOptions,
 ) -> anyhow::Result<()> {
-    // Between the parse and the fold: the output format is a decision about
-    // argv, and the formats it needs are known as soon as the inputs are read.
-    // Deciding it after the merge would make a forgotten `-f` queue behind
-    // every error in the documents themselves.
-    let (layers, input_formats) =
-        load_layers(files, cli.input_format.map(Format::from)).map_err(explain_pipeline)?;
-    let out_format = resolve_output_format(cli.format.map(Format::from), &input_formats)?;
-
-    // One flat, strictly-left fold: --set layers are appended after every file.
-    let layers = layers.into_iter().chain(overlays);
+    for leaf in &cli.set {
+        layers.push(leaf.clone().into_layer().map_err(name_the_set_flag)?);
+    }
     let merged = merge(layers, opts).map_err(explain_pipeline)?;
-    // After the merge, before the emit, and never per layer.
     let merged = if cli.interpolate {
         interpolate(merged, &ProcessEnv).map_err(explain_pipeline)?
     } else {
         merged
     };
-    let text = format::emit(merged, out_format, !cli.compact, cli.null_as.as_deref())
-        .map_err(explain_pipeline)?;
+    let text = format::emit(merged, !cli.compact).map_err(explain_pipeline)?;
     write_stdout(&text)
-}
-
-/// Builds the `--set` layers, validating every expression up front.
-///
-/// Fallible, and called before any input is read: the expressions come from
-/// argv alone, so nothing about the files can change whether they are legal.
-fn overlays(cli: &Cli) -> anyhow::Result<Vec<Value>> {
-    // --set layers are terminal: appended after every file. The RHS parses as
-    // JSON with a string fallback, which is `knf-core`'s job. The conversion
-    // is also where a bracketed path is rejected, so it runs up front, not
-    // after the files exist or parse.
-    let mut overlays: Vec<Value> = Vec::with_capacity(cli.set.len());
-    for path_leaf in &cli.set {
-        let typed = PathLeaf::<serde_json::Value>::from(path_leaf.clone());
-        let json = serde_json::Value::try_from(typed).map_err(name_the_set_flag)?;
-        let serde_json::Value::Object(obj) = json else {
-            // The expansion nests the leaf under every key in the path, and the
-            // grammar rejects an empty path — so it is always an object.
-            unreachable!("a --set expression expands to a nested object")
-        };
-        overlays.push(Value::Object(knf::value::object_from_json(obj)));
-    }
-    Ok(overlays)
 }
 
 /// Builds the merge knobs, validating every `--shallow` path up front, for the
@@ -154,35 +126,6 @@ fn merge_options(cli: &Cli) -> anyhow::Result<MergeOptions> {
         strict: cli.strict,
         shallow,
     })
-}
-
-/// Decides the output format from `-f` and the inputs.
-///
-/// Following the first input's format would mean reordering arguments silently
-/// changes the output encoding, so mixed inputs demand an explicit choice.
-fn resolve_output_format(explicit: Option<Format>, inputs: &[Format]) -> anyhow::Result<Format> {
-    if let Some(format) = explicit {
-        return Ok(format);
-    }
-    let mut distinct: Vec<Format> = Vec::new();
-    for format in inputs {
-        if !distinct.contains(format) {
-            distinct.push(*format);
-        }
-    }
-    match distinct.as_slice() {
-        // No file inputs at all — `knf --set a.b=1`.
-        [] => Ok(Format::Json),
-        [only] => Ok(*only),
-        mixed => {
-            let names: Vec<String> = mixed.iter().map(Format::to_string).collect();
-            bail!(
-                "inputs mix {} formats; -f is required to choose the output format\n\
-                 help: pass -f json or -f toml",
-                names.join(" and "),
-            )
-        }
-    }
 }
 
 /// Writes to stdout, treating a closed pipe as success so `knf big.json | head`

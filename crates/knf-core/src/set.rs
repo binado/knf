@@ -16,7 +16,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use crate::{PathError, RefPath, Seg};
+use crate::{ConfigFormat, ConfigObject, PathError, RefPath, Seg};
 use serde_json::{Map, Value};
 
 /// A leaf value addressed by a parsed path.
@@ -86,6 +86,33 @@ impl<V> PathLeaf<V> {
             .rev()
             .fold(self.leaf, |acc, key| nest(key, acc)))
     }
+}
+
+impl PathLeaf<String> {
+    /// Validate this writer's path before reading inputs or selecting a format.
+    pub fn validate_keys(&self) -> Result<(), PathError> {
+        self.path.clone().try_into_keys().map(|_| ())
+    }
+
+    /// Type the RHS in the native format and expand it into a nested object.
+    pub fn into_layer<V: ConfigFormat>(self) -> Result<V, PathError> {
+        let keys = self.path.try_into_keys()?;
+        let leaf = V::parse_inline(self.leaf);
+        Ok(keys.into_iter().rev().fold(leaf, |value, key| {
+            let mut object = V::Object::new();
+            object.insert(key, value);
+            V::object(object)
+        }))
+    }
+}
+
+/// Parse a standalone TOML value, falling back to the original text as a string.
+/// Surrounding TOML whitespace is ignored when parsing a literal. Invalid and
+/// out-of-range literals, including `null`, retain the original text as strings.
+pub fn toml_or_string(text: String) -> toml::Value {
+    text.trim_matches([' ', '\t', '\r', '\n'])
+        .parse()
+        .unwrap_or_else(|_| toml::Value::String(text))
 }
 
 impl FromStr for PathLeaf<String> {
@@ -164,6 +191,44 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn toml_inline_literals_ignore_surrounding_whitespace() {
+        for literal in [
+            "8080",
+            "true",
+            "1.0",
+            "1979-05-27",
+            "inf",
+            "[1, 2]",
+            "{a=1}",
+            "' name '",
+        ] {
+            for padding in [" ", "\t", "\n", "\r\n", " \t\r\n"] {
+                let expected = toml_or_string(literal.into());
+                for text in [
+                    format!("{padding}{literal}"),
+                    format!("{literal}{padding}"),
+                    format!("{padding}{literal}{padding}"),
+                ] {
+                    assert_eq!(toml_or_string(text.clone()), expected, "{text:?}");
+                }
+            }
+        }
+        for text in [
+            " \tnull\n",
+            " 9223372036854775808\n",
+            " [a,b] ",
+            " text\n",
+            " \t\r\n",
+            "\u{a0}8080\u{a0}",
+        ] {
+            assert_eq!(
+                toml_or_string(text.into()),
+                toml::Value::String(text.into())
+            );
+        }
+    }
 
     #[test]
     fn rejects_malformed_expressions() {

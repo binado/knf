@@ -5,6 +5,7 @@
 //! installed by that wheel calls `cli_bin::main_from`, the same source
 //! `knf-cli` compiles, so there is one command line and no second package.
 
+use anyhow::Context;
 use std::io;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
@@ -15,8 +16,8 @@ mod cli_bin;
 
 use knf::fs::{AccumulateError, AccumulateTarget, GlobPattern};
 use knf::{
-    InterpError, LoadError, MergeError, MergeOptions, Number, ProcessEnv, Value,
-    interpolate as interpolate_value, load_layers, merge,
+    ConfigFormat, Format, InterpError, LoadError, MergeError, MergeOptions, ProcessEnv, Seg,
+    interpolate as interpolate_value, merge, render_path, resolve_format,
 };
 use pyo3::PyTypeInfo;
 use pyo3::create_exception;
@@ -115,7 +116,7 @@ fn discovery_os_error(py: Python<'_>, path: Option<&Path>, source: io::Error) ->
     build().unwrap_or_else(|_| PyOSError::new_err(source.to_string()))
 }
 
-/// Load and merge layered JSON and TOML files into one `dict`.
+/// Load and merge homogeneous JSON or TOML files into one `dict`.
 ///
 /// `files` are merged left to right. Objects merge key by key; arrays, scalars
 /// and `None` replace wholesale. Interpolation, when requested, runs once
@@ -128,31 +129,51 @@ fn load<'py>(
     interpolate: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     let merged = py
-        .detach(move || -> Result<Value, Failure> {
-            // One file at a time, so a failure knows its path without anyone
-            // parsing it back out of an error message.
-            let mut layers = Vec::with_capacity(files.len());
-            for path in files {
-                match load_layers(std::slice::from_ref(&path), None) {
-                    Ok((loaded, _formats)) => layers.extend(loaded),
-                    Err(err) => return Err(Failure::File(path, err)),
-                }
-            }
-            let merged = merge(layers, &MergeOptions::default()).map_err(Failure::Merge)?;
-            if interpolate {
-                interpolate_value(merged, &ProcessEnv).map_err(Failure::Interpolate)
-            } else {
-                Ok(merged)
+        .detach(move || {
+            let format = resolve_format(&files, None).map_err(|err| {
+                Failure::File(
+                    err.path().unwrap_or(Path::new("")).to_path_buf(),
+                    err.into(),
+                )
+            })?;
+            match format {
+                Format::Json => load_native(&files, interpolate).map(Document::Json),
+                Format::Toml => load_native(&files, interpolate).map(Document::Toml),
             }
         })
         .map_err(|failure| match failure {
             Failure::File(path, err) => file_error(py, &path, err),
-            // Only strict mode reports a conflict, and it is not exposed.
             Failure::Merge(err) => PyValueError::new_err(err.to_string()),
             Failure::Interpolate(err) => InterpolationError::new_err(err.to_string()),
         })?;
+    match merged {
+        Document::Json(value) => json_to_py(py, value),
+        Document::Toml(value) => toml_to_py(py, value, &mut Vec::new()),
+    }
+}
 
-    value_to_py(py, merged)
+// Dispatch only at the boundary; each pipeline remains entirely native.
+enum Document {
+    Json(serde_json::Value),
+    Toml(toml::Value),
+}
+
+fn load_native<V: ConfigFormat>(files: &[PathBuf], interpolate: bool) -> Result<V, Failure> {
+    let mut layers = Vec::with_capacity(files.len());
+    for path in files {
+        let read = || -> anyhow::Result<V> {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("reading `{}`", path.display()))?;
+            knf::format::parse(&text, &knf::format::SourceName::File(path.clone()))
+        };
+        layers.push(read().map_err(|err| Failure::File(path.clone(), err))?);
+    }
+    let merged = merge(layers, &MergeOptions::default()).map_err(Failure::Merge)?;
+    if interpolate {
+        interpolate_value(merged, &ProcessEnv).map_err(Failure::Interpolate)
+    } else {
+        Ok(merged)
+    }
 }
 
 enum Failure {
@@ -255,31 +276,124 @@ fn _knf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-// --- IR → Python ----------------------------------------------------------
+// --- Native values → Python -----------------------------------------------
 
-/// Total: Python spells everything the IR holds. A TOML datetime comes back as
-/// its TOML spelling, the same string `knf -f json` prints.
-fn value_to_py(py: Python<'_>, value: Value) -> PyResult<Bound<'_, PyAny>> {
+fn json_to_py(py: Python<'_>, value: serde_json::Value) -> PyResult<Bound<'_, PyAny>> {
+    use serde_json::Value;
     Ok(match value {
         Value::Null => py.None().into_bound(py),
         Value::Bool(b) => PyBool::new(py, b).to_owned().into_any(),
-        Value::Number(Number::I64(i)) => i.into_pyobject(py)?.into_any(),
-        Value::Number(Number::U64(u)) => u.into_pyobject(py)?.into_any(),
-        Value::Number(Number::F64(f)) => f.into_pyobject(py)?.into_any(),
-        Value::String(s) | Value::Datetime(s) => PyString::new(py, &s).into_any(),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.into_pyobject(py)?.into_any()
+            } else if let Some(u) = n.as_u64() {
+                u.into_pyobject(py)?.into_any()
+            } else {
+                n.as_f64()
+                    .expect("a native JSON number is i64/u64/f64")
+                    .into_pyobject(py)?
+                    .into_any()
+            }
+        }
+        Value::String(s) => PyString::new(py, &s).into_any(),
         Value::Array(items) => {
             let list = PyList::empty(py);
             for item in items {
-                list.append(value_to_py(py, item)?)?;
+                list.append(json_to_py(py, item)?)?;
             }
             list.into_any()
         }
         Value::Object(map) => {
             let dict = PyDict::new(py);
             for (key, value) in map {
-                dict.set_item(key, value_to_py(py, value)?)?;
+                dict.set_item(key, json_to_py(py, value)?)?;
             }
             dict.into_any()
         }
     })
+}
+
+fn toml_to_py<'py>(
+    py: Python<'py>,
+    value: toml::Value,
+    path: &mut Vec<Seg>,
+) -> PyResult<Bound<'py, PyAny>> {
+    use toml::Value;
+    Ok(match value {
+        Value::Boolean(b) => PyBool::new(py, b).to_owned().into_any(),
+        Value::Integer(i) => i.into_pyobject(py)?.into_any(),
+        Value::Float(f) => f.into_pyobject(py)?.into_any(),
+        Value::String(s) => PyString::new(py, &s).into_any(),
+        Value::Datetime(dt) => datetime_to_py(py, dt).map_err(|err| {
+            // Python cannot represent e.g. year zero or leap seconds.
+            if err.is_instance_of::<PyValueError>(py) {
+                PyValueError::new_err(format!(
+                    "cannot represent TOML datetime at `{}` in Python: {err}",
+                    render_path(path)
+                ))
+            } else {
+                err
+            }
+        })?,
+        Value::Array(items) => {
+            let list = PyList::empty(py);
+            for (index, item) in items.into_iter().enumerate() {
+                path.push(Seg::Index(index));
+                list.append(toml_to_py(py, item, path)?)?;
+                path.pop();
+            }
+            list.into_any()
+        }
+        Value::Table(map) => {
+            let dict = PyDict::new(py);
+            for (key, value) in map {
+                path.push(Seg::Key(key.clone()));
+                dict.set_item(key, toml_to_py(py, value, path)?)?;
+                path.pop();
+            }
+            dict.into_any()
+        }
+    })
+}
+
+fn datetime_to_py(py: Python<'_>, value: toml::value::Datetime) -> PyResult<Bound<'_, PyAny>> {
+    // Construct through the standard library for abi3/Python 3.9 compatibility.
+    // Pass native components directly; never serialize and reparse a document.
+    let module = py.import("datetime")?;
+    match (value.date, value.time) {
+        (Some(date), Some(time)) => {
+            let tz = match value.offset {
+                None => py.None().into_bound(py),
+                Some(toml::value::Offset::Z) => module.getattr("timezone")?.getattr("utc")?,
+                Some(toml::value::Offset::Custom { minutes }) => {
+                    let delta = module
+                        .getattr("timedelta")?
+                        .call1((0, i32::from(minutes) * 60))?;
+                    module.getattr("timezone")?.call1((delta,))?
+                }
+            };
+            module.getattr("datetime")?.call1((
+                date.year,
+                date.month,
+                date.day,
+                time.hour,
+                time.minute,
+                time.second.unwrap_or(0),
+                time.nanosecond.unwrap_or(0) / 1000,
+                tz,
+            ))
+        }
+        (Some(date), None) => module
+            .getattr("date")?
+            .call1((date.year, date.month, date.day)),
+        (None, Some(time)) => module.getattr("time")?.call1((
+            time.hour,
+            time.minute,
+            time.second.unwrap_or(0),
+            time.nanosecond.unwrap_or(0) / 1000,
+        )),
+        (None, None) => Err(PyValueError::new_err(
+            "datetime has neither a date nor a time",
+        )),
+    }
 }

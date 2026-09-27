@@ -22,7 +22,7 @@ clap = { version = "4", features = ["derive"] }
 fast-glob = "1.1.2"
 # `preserve_order` is needed here as well as on serde_json: `toml`'s document
 # serializer buffers into its own map type, which is a BTreeMap by default and
-# alphabetises the output regardless of what the IR preserved.
+# alphabetises the output regardless of what the native values preserved.
 toml = { version = "1", features = ["preserve_order"] }
 serde = "1"
 

@@ -1,27 +1,12 @@
-//! Load, merge and emit layered JSON and TOML configuration.
+//! Load, merge and interpolate homogeneous JSON or TOML configuration layers.
 //!
-//! Three steps, each a function, and a caller composes them:
-//!
-//! 1. [`load_layers`] reads each path into a [`Value`], keeping the format it
-//!    was read as;
-//! 2. [`merge`] folds the flat layer list from left to right — any in-memory
-//!    overlays are just more layers appended to the list;
-//! 3. [`interpolate`], if wanted, resolves `${...}` references once, on the
-//!    merged document.
-//!
-//! [`format::emit`] renders the result. JSON and TOML appear only in
-//! [`format`](mod@format) and [`value`]; the merge and interpolation never learn either
-//! exists.
-//!
-//! No flag names. An error from this crate carries key paths and file paths;
-//! the command-line spelling that produced it is `knf-cli`'s to add. That is
-//! what [`LoadError`] exists for — the failures that have an obvious
-//! command-line remedy are typed, so the caller decides how to name them.
+//! [`load_layers`] returns native [`Layers`]. Match its variant, then call
+//! [`merge`], optionally [`interpolate`], and [`format::emit`] on that same
+//! value type. No stage converts JSON to TOML or TOML to JSON.
 
 pub mod format;
 pub mod fs;
 mod interp;
-mod ir;
 mod merge;
 mod path;
 mod set;
@@ -35,13 +20,12 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 
 pub use env::ProcessEnv;
-pub use format::Format;
-pub use interp::{Cycle, Env, EnvValue, InterpError, Problem, Syntax, interpolate};
-pub use ir::{Map, Number, Value};
+pub use format::{ConfigFormat, Format};
+pub use interp::{Cycle, Env, InterpError, Problem, Syntax, interpolate};
 pub use merge::{MergeError, MergeOptions, merge, merge_into};
 pub use path::{PathError, RefPath, Seg, render_path};
-pub use set::{PathLeaf, json_or_string};
-pub use value::{BadDatetime, IntegerOutOfRange, NonFiniteFloat, NullInToml, TomlError};
+pub use set::{PathLeaf, json_or_string, toml_or_string};
+pub use value::{ConfigObject, ConfigValue};
 
 use format::SourceName;
 
@@ -50,14 +34,16 @@ pub const STDIN: &str = "-";
 
 /// Why a positional could not be turned into a layer.
 ///
-/// Carries paths and nothing else. Each of these has an obvious command-line
-/// remedy and no library-level one, which is exactly why the remedy is not
-/// spelled here: `knf-cli` matches on the variant and adds the flag.
+/// Reports source selection failures without frontend flag vocabulary.
+/// Format mismatches have no single source path; other input failures do.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LoadError {
     /// `-` was given without an explicit input format.
     #[error("`-` reads stdin, which has no extension")]
     StdinNeedsFormat,
+    /// Inferred input formats differ.
+    #[error("inputs mix JSON and TOML formats; layers must use one format")]
+    MixedFormats,
     /// A positional named a directory.
     #[error("`{}` is a directory; knf takes files as layers", path.display())]
     Directory {
@@ -73,71 +59,89 @@ pub enum LoadError {
 }
 
 impl LoadError {
-    /// The path this failed on, or `None` for stdin.
+    /// The path this failed on, or `None` for stdin and mixed formats.
     pub fn path(&self) -> Option<&Path> {
         match self {
-            Self::StdinNeedsFormat => None,
+            Self::StdinNeedsFormat | Self::MixedFormats => None,
             Self::Directory { path } | Self::UnknownExtension { path } => Some(path),
         }
     }
 }
 
-/// Reads and parses every positional into the merge IR, keeping the format each
-/// input was read as.
-///
-/// A path equal to [`STDIN`] reads standard input and therefore requires an
-/// explicit `input_format`; otherwise the format is inferred from the extension
-/// unless `input_format` overrides it. JSON and TOML may be mixed.
-///
-/// The formats are returned because a caller may have a decision to make before
-/// the fold, and they are the input to it: `knf-cli` resolves the
-/// *output* format here. A missing `-f` is a mistake in argv alone, and
-/// reporting it must not wait behind a merge conflict the user would otherwise
-/// fix first, only to learn about the flag on the next run.
-pub fn load_layers<P: AsRef<Path>>(
-    paths: &[P],
-    input_format: Option<Format>,
-) -> anyhow::Result<(Vec<Value>, Vec<Format>)> {
-    let mut layers: Vec<Value> = Vec::with_capacity(paths.len());
-    let mut input_formats: Vec<Format> = Vec::with_capacity(paths.len());
-
-    for path in paths {
-        let (name, format, text) = read_input(path.as_ref(), input_format)?;
-        let value = format::parse(format, &text, &name)?;
-        input_formats.push(format);
-        layers.push(value);
-    }
-    Ok((layers, input_formats))
+/// Native layers, all in one format and in the caller's original order.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Layers {
+    /// JSON documents.
+    Json(Vec<serde_json::Value>),
+    /// TOML documents.
+    Toml(Vec<toml::Value>),
 }
 
-/// Reads one positional, resolving its format.
-fn read_input(
-    path: &Path,
-    override_format: Option<Format>,
-) -> anyhow::Result<(SourceName, Format, String)> {
-    if path.as_os_str() == STDIN {
-        let format = override_format.ok_or(LoadError::StdinNeedsFormat)?;
-        let mut text = String::new();
-        std::io::stdin()
-            .read_to_string(&mut text)
-            .context("reading stdin")?;
-        return Ok((SourceName::Stdin, format, text));
-    }
-
-    if path.is_dir() {
-        return Err(LoadError::Directory {
-            path: path.to_path_buf(),
+/// Resolve a single format without reading any document contents.
+///
+/// An explicit format overrides extensions. Stdin requires an explicit format;
+/// no inputs default to JSON. Directory inputs are rejected before inference.
+pub fn resolve_format<P: AsRef<Path>>(
+    paths: &[P],
+    explicit: Option<Format>,
+) -> Result<Format, LoadError> {
+    let mut selected = explicit;
+    for path in paths {
+        let path = path.as_ref();
+        if path.is_dir() {
+            return Err(LoadError::Directory {
+                path: path.to_path_buf(),
+            });
         }
-        .into());
+        if explicit.is_some() {
+            continue;
+        }
+        let format = if path.as_os_str() == STDIN {
+            return Err(LoadError::StdinNeedsFormat);
+        } else {
+            Format::from_path(path).ok_or_else(|| LoadError::UnknownExtension {
+                path: path.to_path_buf(),
+            })?
+        };
+        if selected.is_some_and(|previous| previous != format) {
+            return Err(LoadError::MixedFormats);
+        }
+        selected = Some(format);
     }
+    Ok(selected.unwrap_or(Format::Json))
+}
 
-    let format = match override_format {
-        Some(format) => format,
-        None => Format::from_path(path).ok_or_else(|| LoadError::UnknownExtension {
-            path: path.to_path_buf(),
-        })?,
-    };
-    let text =
-        std::fs::read_to_string(path).with_context(|| format!("reading `{}`", path.display()))?;
-    Ok((SourceName::File(path.to_path_buf()), format, text))
+/// Read homogeneous native layers after resolving one format for the entire list.
+///
+/// Stdin requires an explicit format. Mixed inferred formats fail before any
+/// document contents are read. Empty input returns JSON layers unless overridden.
+pub fn load_layers<P: AsRef<Path>>(
+    paths: &[P],
+    explicit_format: Option<Format>,
+) -> anyhow::Result<Layers> {
+    match resolve_format(paths, explicit_format)? {
+        Format::Json => Ok(Layers::Json(load_native(paths)?)),
+        Format::Toml => Ok(Layers::Toml(load_native(paths)?)),
+    }
+}
+
+fn load_native<P: AsRef<Path>, V: ConfigFormat>(paths: &[P]) -> anyhow::Result<Vec<V>> {
+    paths
+        .iter()
+        .map(|path| {
+            let path = path.as_ref();
+            let (name, text) = if path.as_os_str() == STDIN {
+                let mut text = String::new();
+                std::io::stdin()
+                    .read_to_string(&mut text)
+                    .context("reading stdin")?;
+                (SourceName::Stdin, text)
+            } else {
+                let text = std::fs::read_to_string(path)
+                    .with_context(|| format!("reading `{}`", path.display()))?;
+                (SourceName::File(path.to_path_buf()), text)
+            };
+            format::parse(&text, &name)
+        })
+        .collect()
 }
