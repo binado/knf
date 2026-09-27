@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3](https://github.com/binado/knf/compare/knf-cli-v0.3.2...knf-cli-v0.3.3) - 2026-09-27
+
+### Added
+
+- expose shared file discovery and filtering APIs ([#42](https://github.com/binado/knf/pull/42))
+- *(cli)* accept -l as short flag for --list-files ([#41](https://github.com/binado/knf/pull/41))
+- *(cli)* add glob filters for input files ([#40](https://github.com/binado/knf/pull/40))
+- add cascading configuration file discovery ([#34](https://github.com/binado/knf/pull/34))
+
+### Other
+
+- parse --accumulate as a typed target ([#37](https://github.com/binado/knf/pull/37))
+- rename Python API to load ([#35](https://github.com/binado/knf/pull/35))
+
 ## [0.3.2](https://github.com/binado/knf/compare/knf-cli-v0.3.1...knf-cli-v0.3.2) - 2026-09-25
 
 ### Added
