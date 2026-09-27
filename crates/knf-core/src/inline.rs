@@ -149,7 +149,7 @@ impl FromStr for PathLeaf<Value> {
 /// is not valid JSON, and `[a,b]` is the string `"[a,b]"` for the same reason.
 ///
 /// Public because more than one caller needs *this* rule rather than a rule like
-/// it: `--set`'s RHS and `${env:VAR}` in a whole-string position must type
+/// it: `-c`'s RHS and `${env:VAR}` in a whole-string position must type
 /// identically, and two matching implementations would only agree until one of
 /// them was edited.
 pub fn json_or_string(text: String) -> Value {
@@ -370,7 +370,7 @@ mod tests {
         );
     }
 
-    /// Brackets parse — a reference may read an element — but a `--set`-shaped
+    /// Brackets parse — a reference may read an element — but a `-c`-shaped
     /// expression can never expand one into a writer's nested object.
     #[test]
     fn bracketed_paths_parse_but_cannot_write() {

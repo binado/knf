@@ -7,10 +7,10 @@
 pub mod format;
 pub mod fs;
 pub mod glob;
+mod inline;
 mod interp;
 mod merge;
 mod path;
-mod set;
 pub mod value;
 
 mod env;
@@ -22,10 +22,10 @@ use anyhow::Context;
 
 pub use env::ProcessEnv;
 pub use format::{ConfigFormat, Format};
+pub use inline::{PathLeaf, json_or_string, toml_or_string};
 pub use interp::{Cycle, Env, InterpError, Problem, Syntax, interpolate};
 pub use merge::{MergeError, MergeOptions, merge, merge_into};
 pub use path::{PathError, RefPath, Seg, render_path};
-pub use set::{PathLeaf, json_or_string, toml_or_string};
 pub use value::{ConfigObject, ConfigValue};
 
 use format::SourceName;

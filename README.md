@@ -7,10 +7,10 @@ writes that same format.
 ```bash
 # Print the output to stdout
 knf base.toml prod.toml > merged.toml
-# Add manual overrides via the --set flag
-knf defaults.json overrides.json --set server.port=8080 --set host=name
+# Add manual overrides via the -c flag
+knf defaults.json overrides.json -c server.port=8080 -c host=name
 # Choose one format for stdin or inline-only layers
-knf -f toml --set server.port=8080
+knf -f toml -c server.port=8080
 ```
 
 It exists because more powerful alternatives (`yq ea '. as $i ireduce ({}; . * $i)'`,
@@ -239,7 +239,7 @@ Filename matching excludes paths without a filename. Stdin's `-` is matched
 literally in both modes; include it with a pattern such as `{*.toml,-}`.
 
 An empty selection is allowed: the result is an empty object, or only the
-`--set` layers when supplied. `--list-files` prints nothing for an empty list.
+`-c` layers when supplied. `--list-files` prints nothing for an empty list.
 With `--accumulate`, the filter can also exclude the named target; discovery
 still checks that it exists and inspects directories before filtering, so
 discovery inspection errors are not suppressed.
@@ -312,7 +312,7 @@ checks that the target exists and is a regular file.
 As elsewhere in diagnostic output, filenames that are not UTF-8 are displayed
 with replacement characters; file operations preserve the original names.
 
-Normal merging flags work with accumulate mode: `--set` layers apply after all
+Normal merging flags work with accumulate mode: `-c` layers apply after all
 files, `--strict` and `--shallow` use the discovered order, interpolation runs
 once on the merged result, and `-f` selects the native format for parsing and
 output. The Rust `knf::fs` module and Python `accumulate`/`filter_paths` helpers expose the same
@@ -321,11 +321,11 @@ explicit file lists.
 
 ### Inline overrides
 
-Repeat `--set KEY.PATH=VALUE` to append layers after all files, in occurrence
-order. Values parse in the selected format; invalid or out-of-range literals
-fall back to their original text as strings. Surrounding spaces, tabs and line
-breaks are ignored when parsing a literal; quoted string contents and string
-fallbacks retain their whitespace.
+Repeat `-c KEY.PATH=VALUE` to append layers after all files, in occurrence
+order. `-c` is the short-only spelling. Values parse in the selected format;
+invalid or out-of-range literals fall back to their original text as strings.
+Surrounding spaces, tabs and line breaks are ignored when parsing a literal;
+quoted string contents and string fallbacks retain their whitespace.
 
 | RHS | JSON | TOML |
 | --- | --- | --- |
@@ -337,7 +337,7 @@ fallbacks retain their whitespace.
 | `inf` | string | non-finite float |
 | `18446744073709551615` | exact integer | string (outside TOML's integer range) |
 
-`version=1.0` is a number. Force a string with `--set version='"1.0"'`.
+`version=1.0` is a number. Force a string with `-c version='"1.0"'`.
 With no retained file inputs, JSON is the default; use `-f toml` to select TOML.
 Writable paths contain keys only, never array indices.
 
@@ -401,11 +401,11 @@ applies to each visited full path: `!foo.*` matches `foo` itself, replacing it
 whole before its children are visited. A missing path changes nothing. Arrays
 are never traversed; brackets are glob character classes, not array indices.
 Use a quoted segment such as `'servers[0]'` to select a literal bracketed key.
-`--set` and interpolation references retain their existing path grammar.
+`-c` and interpolation references retain their existing path grammar.
 
 Strict mode checks kinds at replacement boundaries without inspecting replaced
 descendants. Arrays replace wholesale either way; null overwrites normally.
-`--set` layers are ordinary layers, so `--shallow '*' --set db.host=x` leaves
+`-c` layers are ordinary layers, so `--shallow '*' -c db.host=x` leaves
 `db` with nothing but `host`. Interpolation still runs once after the merge.
 
 Migration from the previous path-list API: bare or empty `--shallow` becomes
@@ -415,8 +415,8 @@ such as `--shallow=foo --shallow=bar` become `--shallow '{foo,bar}.*'`.
 ### Variable and environment references
 
 A merged config often wants to refer to itself, or to the environment.
-`--interpolate` resolves `${key.path}` and `${env:VAR}` in string values, in one
-pass over the merged document:
+`--interpolate` (or its short form, `-i`) resolves `${key.path}` and
+`${env:VAR}` in string values, in one pass over the merged document:
 
 ```toml
 # base.toml
@@ -453,7 +453,7 @@ Embedded finite floats keep their existing Rust float spelling, including
 JSON emits `1e+20`, and TOML emits `100000000000000000000.0`. Whole-string
 references retain the native numeric value and use the selected serializer.
 
-An environment variable is typed by the same rule as `--set`'s right-hand side
+An environment variable is typed by the same rule as `-c`'s right-hand side
 when it is the whole string, and spliced as raw text when it is embedded —
 parsing it only to print it again could only lose something.
 
@@ -484,11 +484,11 @@ Two limits worth knowing:
   literally begin `env:` are unaddressable.
 - **A key spelled with brackets is unaddressable** — `${a[0]}` now reads as *the
   first element of `a`*, never as a key literally named `a[0]`, and
-  `--set 'a[0]=1'` is an error rather than a write into an array. Only a file
+  `-c 'a[0]=1'` is an error rather than a write into an array. Only a file
   can carry such a key. The same accepted loss as keys containing a literal
   dot, which the dotted grammars have always excluded.
 
-`--set` layers interpolate like any other layer. `--strict` runs during the
+`-c` layers interpolate like any other layer. `--strict` runs during the
 merge, before any substitution, so it compares the types values had when they
 were written.
 
@@ -510,7 +510,7 @@ all input extensions and is required for stdin:
 ```bash
 knf base.json - -f json
 knf config.data -f toml
-knf -f toml --set server.port=8080
+knf -f toml -c server.port=8080
 ```
 
 It never converts formats: `knf config.toml -f json` attempts to parse the file
@@ -531,7 +531,7 @@ preserves parsed value semantics, not source formatting or comments.
 | Mixed JSON/TOML layers | Merge one format per invocation or Python `load()` call |
 | `--input-format FORMAT` | `-f/--format FORMAT` |
 | `-f` selecting a different output encoding | `-f` selects the entire native pipeline; use a separate conversion tool if needed |
-| `--null-as` | Removed; TOML `--set proxy=null` now produces the string `"null"` |
+| `--null-as` | Removed; TOML `-c proxy=null` now produces the string `"null"` |
 | `knf::Value`, `Map`, `Number`, conversion helpers/errors | Native JSON/TOML values and `ConfigValue`/`ConfigObject` traits |
 | `load_layers` returning values and format lists | `Layers::Json` or `Layers::Toml` |
 | `EnvValue { raw, typed }` | `Env::lookup` returns raw `Option<String>` |

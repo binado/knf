@@ -18,7 +18,7 @@ use knf::{
 };
 
 use cli::Cli;
-use explain::{explain_pipeline, name_the_set_flag};
+use explain::{explain_pipeline, name_the_inline_layer_flag};
 
 // Entry point for the `knf-cli` binary. `knf-py` includes this file and calls
 // `main_from` instead, so the function is unused in that compilation.
@@ -51,10 +51,10 @@ where
 
 /// Prepare explicit file inputs and terminal overlays for the shared pipeline.
 fn run(cli: Cli) -> anyhow::Result<()> {
-    // Before anything is read: a malformed --set is a mistake in the command
+    // Before anything is read: a malformed -c is a mistake in the command
     // line, and saying so must not wait on the files existing or parsing.
     for leaf in &cli.set {
-        leaf.validate_keys().map_err(name_the_set_flag)?;
+        leaf.validate_keys().map_err(name_the_inline_layer_flag)?;
     }
     let opts = MergeOptions {
         strict: cli.strict,
@@ -98,7 +98,11 @@ fn run_native<V: ConfigFormat>(
     opts: &MergeOptions,
 ) -> anyhow::Result<()> {
     for leaf in &cli.set {
-        layers.push(leaf.clone().into_layer().map_err(name_the_set_flag)?);
+        layers.push(
+            leaf.clone()
+                .into_layer()
+                .map_err(name_the_inline_layer_flag)?,
+        );
     }
     let merged = merge(layers, opts).map_err(explain_pipeline)?;
     let merged = if cli.interpolate {
