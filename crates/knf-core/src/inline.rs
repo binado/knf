@@ -1,17 +1,4 @@
-//! `key.path=value` expressions: the one inline-layer spelling.
-//!
-//! [`PathLeaf`] pairs a [`RefPath`] with a leaf value. The path is always
-//! typed; the leaf type `V` is chosen by the caller. [`FromStr`] for
-//! [`PathLeaf<String>`] keeps the right-hand side raw, and the
-//! [`serde_json::Value`] impl parses it as JSON with a string fallback — a rule
-//! exported on its own as [`json_or_string`], for callers that need the same
-//! typing without a path.
-//!
-//! [`TryFrom<PathLeaf<Value>>`](TryFrom) expands to a nested object:
-//! `server.port=8080` → `{"server":{"port":8080}}`. There are deliberately no
-//! `Serialize`/`Deserialize` impls — a `PathLeaf` is an expression, and
-//! serializing one could reasonably mean either the string or the object, so
-//! callers pick explicitly via [`Display`](fmt::Display) or the conversion.
+//! `key.path=value` inline layers.
 
 use std::fmt;
 use std::str::FromStr;
@@ -19,21 +6,11 @@ use std::str::FromStr;
 use crate::{ConfigFormat, ConfigObject, PathError, RefPath, Seg};
 use serde_json::{Map, Value};
 
-/// A leaf value addressed by a parsed path.
+/// A leaf value addressed by a parsed path: `server.port=8080`.
 ///
-/// [`FromStr`] for [`PathLeaf<String>`] splits `key.path=value`, parses the LHS
-/// as a [`RefPath`], and stores the RHS as-is. The [`serde_json::Value`] impl
-/// parses that RHS as JSON, falling back to a string:
-/// `port=8080` is a number, `name=foo` is a string.
-///
-/// The grammar accepts bracket steps — `a[0]=1` parses — because it is the
-/// one spelling references also use. Whether such a path may *write* is
-/// [`RefPath::try_into_keys`]' question, asked at conversion time.
-///
-/// `Display` of a typed leaf is canonical — path, `=`, compact JSON of the
-/// leaf — so `name=foo` displays as `name="foo"`. [`FromStr`] ∘ [`Display`](fmt::Display)
-/// preserves path and leaf, not the original spelling. [`PathLeaf<String>`]
-/// displays the raw RHS.
+/// [`FromStr`] for `PathLeaf<String>` keeps the RHS raw; the
+/// [`serde_json::Value`] impl parses it as JSON with a string fallback.
+/// Bracket steps parse, but conversion to a layer rejects them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PathLeaf<V> {
     path: RefPath,
@@ -49,9 +26,7 @@ impl<V> PathLeaf<V> {
         })
     }
 
-    /// The path as steps. May hold [`Index`](Seg::Index) steps from the
-    /// grammar — consumers that write run
-    /// [`try_into_keys`](RefPath::try_into_keys).
+    /// The path as steps; may include index steps.
     pub fn path(&self) -> &[Seg] {
         self.path.segs()
     }
@@ -61,8 +36,7 @@ impl<V> PathLeaf<V> {
         &self.leaf
     }
 
-    /// Replace the leaf, keeping the path. The path is already valid, so this
-    /// cannot fail the way [`new`](Self::new) can.
+    /// Replace the leaf, keeping the path.
     pub fn map_leaf<T>(self, f: impl FnOnce(V) -> T) -> PathLeaf<T> {
         PathLeaf {
             path: self.path,
@@ -89,7 +63,7 @@ impl<V> PathLeaf<V> {
 }
 
 impl PathLeaf<String> {
-    /// Validate this writer's path before reading inputs or selecting a format.
+    /// Check that the path contains keys only.
     pub fn validate_keys(&self) -> Result<(), PathError> {
         self.path.clone().try_into_keys().map(|_| ())
     }
@@ -106,9 +80,7 @@ impl PathLeaf<String> {
     }
 }
 
-/// Parse a standalone TOML value, falling back to the original text as a string.
-/// Surrounding TOML whitespace is ignored when parsing a literal. Invalid and
-/// out-of-range literals, including `null`, retain the original text as strings.
+/// Parses text as a TOML value, falling back to the original text as a string.
 pub fn toml_or_string(text: String) -> toml::Value {
     text.trim_matches([' ', '\t', '\r', '\n'])
         .parse()
@@ -143,15 +115,8 @@ impl FromStr for PathLeaf<Value> {
     }
 }
 
-/// Parses text as JSON, falling back to the string itself.
-///
-/// `8080` is a number, `true` is a bool, `foo` is the string `"foo"` because it
-/// is not valid JSON, and `[a,b]` is the string `"[a,b]"` for the same reason.
-///
-/// Public because more than one caller needs *this* rule rather than a rule like
-/// it: `-c`'s RHS and `${env:VAR}` in a whole-string position must type
-/// identically, and two matching implementations would only agree until one of
-/// them was edited.
+/// Parses text as JSON, falling back to the string itself: `8080` is a number,
+/// `foo` is `"foo"`.
 pub fn json_or_string(text: String) -> Value {
     serde_json::from_str(&text).unwrap_or_else(|_| Value::String(text))
 }
@@ -164,8 +129,6 @@ impl From<PathLeaf<String>> for PathLeaf<Value> {
 
 impl fmt::Display for PathLeaf<Value> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Infallible for a `Value`: only maps with non-string keys and
-        // non-finite floats can fail, and neither survives a JSON parse.
         let rhs = serde_json::to_string(&self.leaf).expect("a Value always serializes");
         write!(f, "{}={rhs}", self.path)
     }
@@ -174,9 +137,7 @@ impl fmt::Display for PathLeaf<Value> {
 impl TryFrom<PathLeaf<Value>> for Value {
     type Error = PathError;
 
-    /// Expands to a nested object. Fallible because the grammar accepts
-    /// bracket steps (`a[0]=1` parses) that a writer cannot use: an index
-    /// never reaches the nested-object expansion.
+    /// Expands to a nested object. Fails on index steps.
     fn try_from(path_leaf: PathLeaf<Value>) -> Result<Self, Self::Error> {
         path_leaf.try_into_nested(|key, acc| {
             let mut obj = Map::new();
@@ -298,7 +259,6 @@ mod tests {
         Value::try_from(parse(expr)).expect("all-key path")
     }
 
-    /// The §4.2 table, verbatim.
     #[test]
     fn value_typing() {
         assert_eq!(nested("port=8080"), json!({"port": 8080}));
@@ -370,8 +330,7 @@ mod tests {
         );
     }
 
-    /// Brackets parse — a reference may read an element — but a `-c`-shaped
-    /// expression can never expand one into a writer's nested object.
+    /// Bracket steps parse but never expand into a layer.
     #[test]
     fn bracketed_paths_parse_but_cannot_write() {
         let err = Value::try_from(parse("servers[0].host=x")).unwrap_err();

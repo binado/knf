@@ -1,12 +1,9 @@
-//! Two cheap properties that catch real bugs in the recursion.
+//! Merge properties.
 
 use knf::{ConfigFormat, ConfigValue, MergeOptions, merge, merge_into};
 use proptest::prelude::*;
 
-/// Arbitrary native values, deliberately without floats so that equality is total —
-/// a NaN leaf would make every property vacuously fail.
-///
-/// TOML datetimes exercise scalar replacement; JSON keeps the same text as a string.
+/// Arbitrary native values without floats, so equality is total.
 macro_rules! properties { ($value:ty, $map:ty) => {
 type Value = $value;
 type Map = $map;
@@ -18,8 +15,7 @@ fn arb_value() -> impl Strategy<Value = Value> {
         "[a-z]{0,3}".prop_map(Value::String),
         Just(Value::parse_inline("1979-05-27T07:32:00Z".into())),
     ];
-    // Small alphabets for keys, so distinct layers actually collide often
-    // enough to exercise the merge rather than just unioning disjoint trees.
+    // Small key alphabet so layers collide often.
     leaf.prop_recursive(4, 24, 3, |inner| {
         prop_oneof![
             prop::collection::vec(inner.clone(), 0..3).prop_map(Value::Array),
@@ -68,9 +64,7 @@ fn without(doc: &Value, key: &str) -> Value {
 }
 
 proptest! {
-    /// A layer merged over itself changes nothing. This is the invariant that
-    /// `knf a.json` must be a no-op depends on, and the one RFC 7386 delete
-    /// semantics would break for any document containing a null.
+    /// A layer merged over itself changes nothing.
     #[test]
     fn merging_a_layer_with_itself_is_a_no_op(a in arb_doc()) {
         prop_assert_eq!(merged(a.clone(), a.clone()), a);
@@ -83,8 +77,7 @@ proptest! {
         prop_assert_eq!(merged(once.clone(), b), once);
     }
 
-    /// Strict mode never *changes* a result, it only rejects one: whenever it
-    /// succeeds it must agree with the default merge.
+    /// Strict mode only rejects; when it succeeds it matches the default merge.
     #[test]
     fn strict_agrees_with_default_when_it_succeeds(a in arb_doc(), b in arb_doc()) {
         let mut strict = a.clone();
@@ -93,17 +86,14 @@ proptest! {
         }
     }
 
-    /// One layer is still the identity under shallow merge: against the empty
-    /// seed every key is absent, so it is inserted rather than replaced. This is
-    /// why one native layer is unchanged under shallow merge.
+    /// One layer is unchanged under shallow merge.
     #[test]
     fn a_single_layer_is_identity_under_shallow(a in arb_doc()) {
         let got = merge([a.clone()], &MergeOptions::shallow_root()).expect("non-strict");
         prop_assert_eq!(got, a);
     }
 
-    /// Shallow merge is jq's `a + b`: every top-level key of `b` is assigned
-    /// over `a` whole, and nothing below the top level is looked at.
+    /// Root-shallow merge is jq's `a + b`.
     #[test]
     fn shallow_assigns_top_level_keys(a in arb_doc(), b in arb_doc()) {
         let mut want = a.clone().into_object().unwrap();
@@ -114,16 +104,13 @@ proptest! {
         prop_assert_eq!(shallow(a, b), Value::object(want));
     }
 
-    /// A shallow path no layer reaches is a deep merge. Keys are drawn from
-    /// `[a-c]`, so `z` never appears.
+    /// A shallow path no layer reaches (`z`) is a deep merge.
     #[test]
     fn an_unreached_shallow_path_is_a_deep_merge(a in arb_doc(), b in arb_doc()) {
         prop_assert_eq!(shallow_at(a.clone(), b.clone(), &["z"]), merged(a, b));
     }
 
-    /// Shallow at `a` is exactly `+` at `a` and `*` everywhere else: outside
-    /// `a` the result is the deep merge's, and where both sides hold an object
-    /// at `a` it is the root-shallow merge of those two objects.
+    /// `a.*` is `+` at `a` and `*` everywhere else.
     #[test]
     fn a_shallow_path_is_plus_there_and_star_elsewhere(a in arb_doc(), b in arb_doc()) {
         let got = shallow_at(a.clone(), b.clone(), &["a"]);
@@ -135,8 +122,7 @@ proptest! {
         }
     }
 
-    /// Unlike the deep merge, a merge shallow at the root is associative — a scalar shadowing
-    /// an object loses nothing a later object could have merged back into.
+    /// Unlike the deep merge, root-shallow merge is associative.
     #[test]
     fn shallow_is_associative(a in arb_doc(), b in arb_doc(), c in arb_doc()) {
         let left = shallow(shallow(a.clone(), b.clone()), c.clone());

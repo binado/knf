@@ -1,23 +1,11 @@
-//! What interpolation reports, and how it reads.
-//!
-//! Key paths and nothing else. Not a rule to enforce here so much as one that
-//! cannot be broken: this pass runs after the merge, and no layer outlives the
-//! merge, so the filename a reference was written in is genuinely unavailable.
-//! No flag names either — `crates/knf/src/explain.rs` adds the `help:` line that
-//! knows what the flags are called.
+//! Interpolation errors. They name key paths only, never files or flags.
 
 use std::fmt;
 
 use super::scan::Syntax;
 use crate::{Seg, render_path};
 
-/// Why interpolation failed.
-///
-/// Two shapes because the two failures differ in kind. Everything a document
-/// gets *wrong* is collected and reported together — references are written all
-/// over a config, and rediscovering them one run at a time is the experience
-/// this avoids. A cycle is the exception: resolution cannot continue past it, so
-/// it is an early return and arrives alone.
+/// Why interpolation failed: every problem found, or a single cycle.
 #[derive(Debug)]
 pub enum InterpError {
     Problems(Vec<Problem>),
@@ -31,13 +19,7 @@ impl fmt::Display for InterpError {
         match self {
             Self::Cycle(cycle) => write!(f, "{cycle}"),
             Self::Problems(problems) => {
-                // Grouped by kind rather than listed in document order: one
-                // header per kind keeps a mixed report as readable as a pure
-                // one, and the group order is fixed so the message never
-                // depends on where in the document the first mistake happened.
-                //
-                // No trailing newline — the caller appends its own `help:`
-                // lines, exactly as `NullInToml` does.
+                // Grouped by kind in a fixed order. No trailing newline.
                 let mut lines: Vec<String> = Vec::new();
                 for group in Group::ALL {
                     let members = problems.iter().filter(|p| p.group() == group);
@@ -65,17 +47,9 @@ impl fmt::Display for InterpError {
 pub enum Problem {
     /// A reference that is not spelled like one.
     Syntax { path: Vec<Seg>, error: Syntax },
-    /// A reference that names nothing: a key the merged document does not have,
-    /// or a variable the environment does not set.
-    ///
-    /// An error rather than a pass-through. Leaving `${db.hostname}` in the
-    /// output would ship a typo as a literal, and the document is already the
-    /// authority on what exists.
+    /// A missing key or unset environment variable.
     Unresolved { path: Vec<Seg>, reference: String },
-    /// A container or a null in embedded position — `url = "http://${db}/"`.
-    ///
-    /// Legal in *whole-string* position, where it aliases the subtree. Embedded
-    /// it has no format-independent rendering, so it is rejected in v1.
+    /// A container or null in embedded position: `url = "http://${db}/"`.
     NotStringifiable {
         path: Vec<Seg>,
         reference: String,
@@ -112,8 +86,7 @@ impl Problem {
     }
 }
 
-/// `object` and `array` take `an`; `null` takes `a`. Three possible inputs, so
-/// the vowel test is exact rather than a heuristic that will meet `hour`.
+/// `an` for `object`/`array`, `a` for `null`.
 fn article(kind: &str) -> &'static str {
     if kind.starts_with(['a', 'e', 'i', 'o', 'u']) {
         "an"
@@ -130,9 +103,7 @@ enum Group {
 }
 
 impl Group {
-    /// Fixed order, most fundamental first: a malformed reference was never
-    /// going to resolve, so saying so before listing what is missing reads in
-    /// the order the user will fix things.
+    /// Report order, most fundamental first.
     const ALL: [Self; 3] = [Self::Syntax, Self::Unresolved, Self::NotStringifiable];
 
     fn header(self) -> &'static str {
@@ -144,10 +115,7 @@ impl Group {
     }
 }
 
-/// A reference that resolves, directly or indirectly, to itself.
-///
-/// Reported as the whole chain rather than the one path it closed at: a two-hop
-/// cycle is obvious from either end, but a five-hop one is not.
+/// A reference that resolves to itself, reported as the full chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cycle {
     chain: Vec<Vec<Seg>>,
@@ -198,8 +166,6 @@ mod tests {
         );
     }
 
-    /// Mixed kinds group, in a fixed order that does not depend on where in the
-    /// document each mistake was found.
     #[test]
     fn kinds_group_in_a_fixed_order() {
         let err = InterpError::Problems(vec![

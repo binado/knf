@@ -4,17 +4,13 @@ use crate::glob::KeyGlobPattern;
 use crate::path::render_keys;
 use crate::{ConfigObject, ConfigValue};
 
-/// Knobs on the merge itself. Passed by reference rather than encoded as cargo
-/// features: features are additive and unify across a dependency graph, so a
-/// `strict` feature would silently change behaviour for one consumer the moment
-/// a second consumer enabled it.
+/// Merge options.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MergeOptions {
     /// Error when a layer changes the kind of an existing key.
     pub strict: bool,
-    /// Full key paths selected for wholesale replacement, rather than recursion.
-    /// `None` is deep merge; `*` replaces top-level values; `foo.*` replaces
-    /// the immediate children of `foo`. Matching ancestors stop traversal.
+    /// Key paths to replace wholesale: `*` (top level), `foo`, `foo.*`.
+    /// `None` is a deep merge.
     pub shallow: Option<KeyGlobPattern>,
 }
 
@@ -42,8 +38,6 @@ impl MergeOptions {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum MergeError {
     /// A layer replaced an existing key with a value of a different kind.
-    ///
-    /// Carries a key path and nothing else — no filenames, no layer indices.
     #[error(
         "type conflict at `{}`: {expected} would be replaced by {found}",
         render_keys(path)
@@ -64,16 +58,10 @@ impl MergeError {
     }
 }
 
-/// Merges `over` into `base` in place.
+/// Merges `over` into `base` in place (jq's `a * b`).
 ///
-/// Objects recurse per key. Arrays, scalars, datetimes and null all replace
-/// wholesale — notably arrays are never index-merged or concatenated, and null
-/// is an ordinary value that overwrites rather than a delete instruction. This
-/// is jq's `a * b`.
-///
-/// Colliding values selected by [`MergeOptions::shallow`] replace wholesale,
-/// without visiting descendants. `*` makes the root merge shallow (jq's
-/// `a + b`); `foo.*` makes only the object at `foo` shallow.
+/// Objects recurse per key; everything else, including arrays and null,
+/// replaces. Paths matched by [`MergeOptions::shallow`] replace wholesale.
 pub fn merge_into<V: ConfigValue>(
     base: &mut V,
     over: V,
@@ -83,20 +71,15 @@ pub fn merge_into<V: ConfigValue>(
     merge_at(base, over, opts, &mut path)
 }
 
-/// Folds a list of layers into one document, seeded with an empty object.
+/// Left-folds layers into one document, starting from an empty object.
 ///
-/// The fold must be strictly left over the *flat* layer list. The deep merge is
-/// not associative — any scalar shadowing an object breaks it:
+/// The merge is not associative, so never merge subgroups and combine them:
 ///
 /// ```text
 /// {a:{b:1}} * {a:5} * {a:{c:2}}
 ///   left-assoc  -> {a:{c:2}}
 ///   right-assoc -> {a:{b:1,c:2}}
 /// ```
-///
-/// So callers must never merge subgroups and then combine the results.
-/// Flatten first, fold second. (A merge shallow at the root happens to be
-/// associative, but the fold does not rely on it.)
 pub fn merge<V: ConfigValue>(
     layers: impl IntoIterator<Item = V>,
     opts: &MergeOptions,
@@ -110,10 +93,8 @@ pub fn merge<V: ConfigValue>(
     Ok(acc)
 }
 
-/// The recursive worker. `path` is a breadcrumb threaded by push/pop so that a
-/// conflict can report where it happened without every frame allocating.
-///
-/// The breadcrumb names each colliding value before matching the selector.
+/// The recursive worker. `path` is the current key path, for errors and
+/// selector matching.
 fn merge_at<V: ConfigValue>(
     base: &mut V,
     over: V,
@@ -162,10 +143,6 @@ fn replace<V: ConfigValue>(
 }
 
 /// Errors if a replacement would change the kind of the existing value.
-///
-/// Strict mode catches the class of mistake where a leaf accidentally shadows a
-/// subtree. Pleasant side effect: it rejects exactly the type changes that break
-/// associativity, so under strict mode the merge *is* associative.
 fn check_kind(
     expected: &'static str,
     found: &'static str,

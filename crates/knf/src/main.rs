@@ -1,9 +1,4 @@
-//! `knf <files...>` — merge layers left to right, print one document.
-//!
-//! Everything argv-shaped lives in this binary: the flag grammar ([`cli`]), the
-//! `help:` lines that name a flag ([`explain`]), and the output-format decision
-//! below. The pipeline itself is `knf-core`, which knows nothing about any of
-//! it.
+//! `knf <files...>`: merge layers left to right and print one document.
 
 mod accumulate;
 mod cli;
@@ -24,9 +19,7 @@ use explain::{explain_pipeline, name_the_inline_layer_flag};
 // `main_from` instead, so the function is unused in that compilation.
 #[allow(dead_code)]
 fn main() {
-    // `std::env::args` is right for the `knf-cli` binary. The pyknf wheel's
-    // command is a Python script, whose process argv starts with the interpreter,
-    // so that caller passes `sys.argv` to `main_from` instead.
+    // The pyknf wheel calls `main_from` with `sys.argv` instead.
     main_from(std::env::args_os());
 }
 
@@ -51,8 +44,7 @@ where
 
 /// Prepare explicit file inputs and terminal overlays for the shared pipeline.
 fn run(cli: Cli) -> anyhow::Result<()> {
-    // Before anything is read: a malformed -c is a mistake in the command
-    // line, and saying so must not wait on the files existing or parsing.
+    // Validate -c paths before any file I/O.
     for leaf in &cli.set {
         leaf.validate_keys().map_err(name_the_inline_layer_flag)?;
     }

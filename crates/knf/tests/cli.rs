@@ -1,8 +1,5 @@
-//! CLI-level behaviour: round-trips per format, exit codes, stdin, and the
-//! multi-line error messages whose formatting is worth reviewing.
-//!
-//! Commands run with `current_dir` set to the fixture, so paths in output are
-//! relative and the snapshots stay stable.
+//! CLI integration tests. Commands run inside the fixture directory so output
+//! paths are relative and snapshots stable.
 
 use assert_cmd::Command;
 use tempfile::TempDir;
@@ -63,8 +60,7 @@ fn err_stderr(cmd: &mut Command, args: &[&str]) -> String {
     String::from_utf8(out.stderr).expect("utf-8 stderr")
 }
 
-/// Sets or unsets named variables, so a `${env:...}` test never depends on the
-/// environment the suite happens to run in. `None` removes.
+/// Sets (`Some`) or removes (`None`) environment variables for one command.
 fn with_env<'a>(cmd: &'a mut Command, vars: &[(&str, Option<&str>)]) -> &'a mut Command {
     for (name, value) in vars {
         match value {
@@ -726,8 +722,7 @@ b = 2
     );
 }
 
-/// `preserve_order` must hold on both sides: serde_json's map preserves input
-/// order, and `toml`'s writer must not re-sort it on the way out.
+/// Key order is preserved from input to output.
 #[test]
 fn key_order_is_preserved_in_both_formats() {
     let dir = tree(&[
@@ -741,9 +736,7 @@ fn key_order_is_preserved_in_both_formats() {
     assert_eq!(run(&dir, &["a.toml"]), "zebra = 1\napple = 2\nmiddle = 3\n");
 }
 
-/// A JSON integer above `i64::MAX` — a snowflake ID, a hash — must round-trip
-/// exactly. Routing it through `f64` would round it to ...808 silently, which
-/// native integer values must retain every digit.
+/// A JSON integer above `i64::MAX` round-trips exactly.
 #[test]
 fn integers_above_i64_max_are_exact() {
     let doc = r#"{"id":10000000000000000001,"max":18446744073709551615}"#;
@@ -751,8 +744,7 @@ fn integers_above_i64_max_are_exact() {
     assert_eq!(run(&dir, &["a.json", "--compact"]), format!("{doc}\n"));
 }
 
-/// §2.1: one argument must be a no-op, which is why null is a value and not a
-/// delete instruction.
+/// One argument is a no-op, nulls included.
 #[test]
 fn a_single_layer_is_a_no_op() {
     let doc = r#"{"a":{"b":1},"n":null,"xs":[1,2]}"#;
@@ -824,8 +816,7 @@ fn by_default_arrays_replace_and_tables_merge() {
     assert!(out.contains("port = 5432"), "{out}");
 }
 
-/// `--shallow '*'` is jq's `+`: the overlay's table is taken whole and `port` is
-/// gone. Compare the native TOML output with the expected value.
+/// `--shallow '*'` is jq's `+`: the overlay's table replaces the base's.
 #[test]
 fn shallow_takes_top_level_tables_whole() {
     let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
@@ -849,9 +840,7 @@ fn shallow_single_layer_is_identity() {
     );
 }
 
-/// `--shallow` applies to `-c` layers, which are ordinary terminal layers.
-/// Correct, and surprising enough to pin: the whole table is replaced by the
-/// one key.
+/// `--shallow` applies to `-c` layers too.
 #[test]
 fn shallow_applies_to_set_layers_too() {
     let dir = tree(&[("base.toml", BASE)]);
@@ -872,8 +861,7 @@ max = 5
 ";
 const NESTED_PROD: &str = "[db.pool]\nmax = 9\n[app.pool]\nmax = 9\n";
 
-/// `--shallow 'db.*'` is `+` at `db` only: `db.pool` is prod's whole, `db.host`
-/// survives, and `app` is still a deep merge.
+/// `--shallow 'db.*'` is shallow inside `db` and deep elsewhere.
 #[test]
 fn shallow_at_a_path_keeps_everything_else_deep() {
     let dir = tree(&[("base.toml", NESTED_BASE), ("prod.toml", NESTED_PROD)]);
@@ -1161,8 +1149,7 @@ fn empty_runs_use_the_selected_native_format() {
 
 // --- --interpolate --------------------------------------------------------
 
-/// A document that is nothing but references, for the tests that must show it
-/// passing through untouched.
+/// A document made only of references.
 const REFS: &str = "\
 root = \"/srv\"
 data_dir = \"${root}/data\"
@@ -1171,10 +1158,7 @@ url = \"http://localhost:${env:KNF_TEST_PORT}/health\"
 literal = \"$${NOT_A_REF}\"
 ";
 
-/// The reason the flag is opt-in. knf sits upstream of compose files, Actions
-/// workflows and Helm charts, whose own syntax is `${...}`; eating those by
-/// default would be silent corruption, so without the flag the document is
-/// byte-identical — even with the variable set.
+/// Without `--interpolate`, references pass through unchanged.
 #[test]
 fn references_pass_through_untouched_without_the_flag() {
     let dir = tree(&[("f.toml", REFS)]);
@@ -1185,8 +1169,7 @@ fn references_pass_through_untouched_without_the_flag() {
     assert_eq!(out, REFS);
 }
 
-/// The plan's worked example, end to end: a document reference, an environment
-/// reference in both positions, and the escape.
+/// Document and environment references in both positions, plus `$$`.
 #[test]
 fn interpolate_resolves_documents_and_the_environment() {
     let dir = tree(&[("f.toml", REFS)]);
@@ -1205,9 +1188,7 @@ fn interpolate_resolves_documents_and_the_environment() {
     );
 }
 
-/// A whole-string reference takes the referent's *type*, so `"${p}"` emits an
-/// unquoted number and `"${db}"` a whole table — while the same reference
-/// inside text stringifies.
+/// Whole-string references keep their type; embedded ones stringify.
 #[test]
 fn whole_string_references_keep_the_referents_type() {
     let dir = tree(&[(
@@ -1221,8 +1202,7 @@ fn whole_string_references_keep_the_referents_type() {
     );
 }
 
-/// Brackets let a reference read an array element, whole-string or chained —
-/// typed exactly as a key reference would be.
+/// References can read array elements.
 #[test]
 fn references_read_array_elements() {
     let dir = tree(&[(
@@ -1236,8 +1216,7 @@ fn references_read_array_elements() {
     );
 }
 
-/// The pass runs on the *merged* document, so a reference sees the value the
-/// last layer actually left there, not the one in the file it was written in.
+/// References resolve against the merged document.
 #[test]
 fn references_read_the_merged_document() {
     let dir = tree(&[
@@ -1272,9 +1251,7 @@ fn set_layers_interpolate_too() {
     );
 }
 
-/// `--strict` runs during the merge, before any substitution, so it compares
-/// the types values had when they were *written*: a `"${p}"` was a string when
-/// it looked, whatever it is about to become.
+/// `--strict` checks types before interpolation.
 #[test]
 fn strict_sees_types_as_written_not_as_resolved() {
     let dir = tree(&[
@@ -1300,8 +1277,7 @@ fn a_null_referent_remains_native_json_null() {
 
 // --- --interpolate errors (snapshotted) -----------------------------------
 
-/// Every offender in one run, with paths into the merged document — array
-/// indices included, since a reference may live inside an array.
+/// All unresolved references are reported together, with their paths.
 #[test]
 fn unresolved_reference_error() {
     let dir = tree(&[(
@@ -1378,7 +1354,7 @@ fn a_missing_file_exits_one() {
     assert!(err.contains("nope.json"), "{err}");
 }
 
-/// §2.3: a bare array is legal JSON but is not a config.
+/// A top-level array is rejected.
 #[test]
 fn a_non_object_root_is_rejected_by_name() {
     let dir = tree(&[("a.json", "[1,2]")]);
@@ -1389,8 +1365,7 @@ fn a_non_object_root_is_rejected_by_name() {
 
 // --- multi-line error messages (snapshotted) ------------------------------
 
-/// Directories are files-as-layers, never expanded. The help line must be
-/// runnable exactly as printed.
+/// A directory input is rejected with a runnable hint.
 #[test]
 fn directory_in_the_default_command_error() {
     let dir = tree(&[("config/base.toml", "a = 1\n")]);
@@ -1413,17 +1388,14 @@ fn mixed_input_formats_error_precedes_merge_errors() {
     insta::assert_snapshot!(run_err(&dir, &["a.json", "b.toml", "--strict"]));
 }
 
-/// Same precedence with interpolation: it runs after the merge, so a reference
-/// that cannot resolve is further still from argv than the type conflict above.
+/// Mixed formats fail before interpolation.
 #[test]
 fn mixed_input_formats_error_precedes_interpolation_errors() {
     let dir = tree(&[("a.json", r#"{"a":"${nope}"}"#), ("b.toml", "b = 1\n")]);
     insta::assert_snapshot!(run_err(&dir, &["a.json", "b.toml", "--interpolate"]));
 }
 
-/// A bracketed `-c` parses (a reference may read an element) but cannot
-/// write, and saying so must not depend on reading anything either: the
-/// file here does not exist.
+/// A bracketed `-c` path fails before file I/O.
 #[test]
 fn set_with_an_array_index_errors_before_file_io() {
     let dir = tree(&[]);

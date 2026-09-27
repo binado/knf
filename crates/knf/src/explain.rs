@@ -1,11 +1,5 @@
-//! Flag names, and where they are allowed to appear.
-//!
-//! The library crates raise errors that carry key paths, reference spellings
-//! and file paths — never a command-line flag, because none of them has heard
-//! of one. Every `help:` line in this file exists to close that gap on the way
-//! out, and this is the only place in the workspace where `-c`,
-//! `--interpolate` and `-f` appear in an error
-//! message.
+//! Adds `help:` lines naming CLI flags to library errors. The only place flag
+//! names appear in error messages.
 
 use anyhow::anyhow;
 use knf::fs::{AccumulateError, AccumulateTargetError};
@@ -25,7 +19,7 @@ pub fn explain_accumulate_target(err: AccumulateTargetError) -> String {
     .to_owned()
 }
 
-/// Render discovery paths and I/O context exactly as the CLI did before extraction.
+/// Renders discovery errors with their paths and I/O context.
 pub fn explain_accumulate(err: AccumulateError) -> anyhow::Error {
     match err {
         AccumulateError::Inspect { path, source } => {
@@ -43,15 +37,10 @@ pub fn explain_accumulate(err: AccumulateError) -> anyhow::Error {
     }
 }
 
-/// Adds the command-line spelling to errors produced by the reusable pipeline.
+/// Adds CLI help to a pipeline error by downcasting it.
 ///
-/// Every stage passes through here — load, merge, interpolate and emit — so
-/// there is one place a library error can pick up a flag name, rather than one
-/// per call site. Downcasts rather than matching on a wrapper enum, because the
-/// pipeline's errors arrive inside `anyhow` and each typed error is decorated by
-/// a different rule. Note the hazard: if `knf-core` ever wraps these in one
-/// error type of its own, every downcast below starts missing and nothing here
-/// fails to compile — the tests that pin this stderr are what would catch it.
+/// If `knf-core` starts wrapping these errors, the downcasts silently miss; the
+/// stderr snapshot tests catch that.
 pub fn explain_pipeline(err: impl Into<anyhow::Error>) -> anyhow::Error {
     let err = err.into();
     let err = match err.downcast::<LoadError>() {
@@ -70,11 +59,7 @@ pub fn explain_pipeline(err: impl Into<anyhow::Error>) -> anyhow::Error {
     }
 }
 
-/// Names the flag that resolves an input whose format could not be settled.
-///
-/// `knf-core` states the problem — stdin has no extension, this file's
-/// extension says nothing, this path is a directory — and stops there. The
-/// remedy is always a flag or a different argv, so it is always ours.
+/// Names the flag that resolves a format-selection error.
 fn explain_load(err: LoadError) -> anyhow::Error {
     match &err {
         LoadError::StdinNeedsFormat | LoadError::UnknownExtension { .. } => {
@@ -90,8 +75,7 @@ fn explain_load(err: LoadError) -> anyhow::Error {
     }
 }
 
-/// The established division of labour: `knf-core` renders the path and stays
-/// provenance-free, the help line names the flag that carried it.
+/// Adds `-c` help to path errors.
 pub fn name_the_inline_layer_flag(err: PathError) -> anyhow::Error {
     match err {
         PathError::IndexInKeyPath { .. } => anyhow!(
@@ -102,10 +86,7 @@ pub fn name_the_inline_layer_flag(err: PathError) -> anyhow::Error {
     }
 }
 
-/// The same division of labour for interpolation.
-///
-/// Interpolation names key paths and reference spellings; it has never heard of
-/// `--interpolate`, so the flag only appears here.
+/// Adds `--interpolate` help to interpolation errors.
 fn explain_interp(err: InterpError) -> anyhow::Error {
     let mut help = String::new();
     match &err {
@@ -113,9 +94,7 @@ fn explain_interp(err: InterpError) -> anyhow::Error {
             help.push_str("\nhelp: a reference may not resolve, directly or indirectly, to itself")
         }
         InterpError::Problems(problems) => {
-            // One help line per kind present, in the order the message lists
-            // them, then the escape that applies to a document whose `${...}`
-            // was never meant for knf in the first place.
+            // One help line per kind present, then the opt-out hint.
             let has = |f: fn(&Problem) -> bool| problems.iter().any(f);
             let syntax = has(|p| matches!(p, Problem::Syntax { .. }));
             let unresolved = has(|p| matches!(p, Problem::Unresolved { .. }));

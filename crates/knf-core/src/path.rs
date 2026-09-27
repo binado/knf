@@ -1,58 +1,15 @@
-//! The path vocabulary: one step type, one parsed spelling, one witness.
+//! Paths into a document: [`Seg`] steps, the parsed [`RefPath`] (`a.b[2].c`),
+//! and their renderings.
 //!
-//! [`Seg`] is the step assignment and reference paths are built from — an
-//! object key or an array index — and [`render_path`] the one display for a
-//! chain of them. Over `Vec<Seg>` there is one parsed spelling and one witness:
-//!
-//! - [`RefPath`] parses `a.b[2].c` — dotted keys plus `[n]` steps. It is the
-//!   only spelling a `${...}` reference uses, and the grammar `-c`'s path
-//!   parses too.
-//! - A bare `Vec<Seg>` is the *witness*: built by walking a document, never
-//!   parsed, and free to hold [`Index`](Seg::Index) — a value can live inside
-//!   an array, and an error must still be able to say so.
-//!
-//! Writers take keys only. Reading an array element has one obvious meaning;
-//! writing one conflicts with arrays replacing wholesale on the merge side, so
-//! an [`Index`](Seg::Index) step can never address an assignment location. That
-//! predicate is enforced once, at the boundary, by [`RefPath::try_into_keys`] —
-//! a path that reaches a writer has been through it, and
-//! [`IndexInKeyPath`](PathError::IndexInKeyPath) is the failure. A key
-//! literally spelled `a[0]` is consequently unwritable from the command line
-//! and unreferenceable from `${...}` — the same accepted loss as keys
-//! containing a literal dot, which the dotted grammar has always split.
-//!
-//! Merge selectors have their own quoted glob grammar in [`crate::glob`],
-//! matching actual key segments rather than this module's display spelling.
-//!
-//! Parsing is pure text: nothing here reads a configuration value, and the
-//! walkers that do — interpolation, `merge_at` — build
-//! or consume these types rather than living in them. Provenance is the
-//! caller's job too: a [`PathError`] carries the path text and never a flag
-//! name or a filename.
-//!
-//! Two renderers, because there are two representations and they disagree
-//! about the empty case. [`render_path`] takes a witness and renders nothing
-//! for an empty one — a [`RefPath`] cannot be empty, so the case never reaches
-//! it from a parse. [`render_keys`] takes the merge side's `&[String]` key
-//! paths, where empty is reachable and means the document root.
+//! Writers take keys only; [`RefPath::try_into_keys`] rejects index steps.
+//! Merge selectors use [`crate::glob`] instead.
 
 use std::fmt;
 use std::str::FromStr;
 
 use crate::{ConfigObject, ConfigValue};
 
-/// Why a path expression was rejected.
-///
-/// Carries the path text and nothing else — no `-c`, no `--interpolate`,
-/// no filenames. Provenance is the caller's job.
-///
-/// [`IndexInKeyPath`](PathError::IndexInKeyPath) is raised by
-/// [`RefPath::try_into_keys`] alone, never by parsing.
-/// [`MissingEquals`](PathError::MissingEquals) has no producer in this module
-/// — a bare [`RefPath`] has no `=` to miss. It belongs to
-/// [`PathLeaf`](crate::PathLeaf), which parses `key.path=value` over this grammar and shares this
-/// error rather than wrapping it, so one spelling of a bad path reads the same
-/// wherever it was typed.
+/// Why a path expression was rejected. Carries only the path text.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PathError {
     /// No `=` in a `key.path=value` expression.
@@ -73,11 +30,7 @@ pub enum PathError {
         /// The path that contained the bad bracket.
         path: String,
     },
-    /// A path that arrived at a writer contained an array index.
-    ///
-    /// Raised by [`RefPath::try_into_keys`] only, never by parsing: writers
-    /// take keys one per segment because arrays replace wholesale on the
-    /// merge side, so there is no meaning to writing element `n`.
+    /// A path given to a writer contains an array index.
     #[error("`{path}` contains an array index; merge paths take keys only")]
     IndexInKeyPath {
         /// The full path, rendered.
@@ -86,11 +39,6 @@ pub enum PathError {
 }
 
 /// One step of a path into a document.
-///
-/// The single step vocabulary every path in the workspace is built from.
-/// [`RefPath`] parses a chain of these from text; a bare `Vec<Seg>` is the
-/// witness a walker builds by descending a document, free to hold
-/// [`Index`](Seg::Index) because a value can live inside an array.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Seg {
     /// An object key.
@@ -116,19 +64,9 @@ pub fn render_path(path: &[Seg]) -> String {
     out
 }
 
-/// A parsed path: dotted keys plus bracket array indices, `a.b[2].c`.
+/// A non-empty parsed path: dotted keys plus bracket indices, `a.b[2].c`.
 ///
-/// The one spelling over [`Seg`]. References parse it directly; `-c`'s
-/// path parses it too, and its write-side caller then runs
-/// [`try_into_keys`](RefPath::try_into_keys), which rejects any
-/// [`Index`](Seg::Index) step — reading an array element has one obvious
-/// meaning, writing one does not. Empty paths and empty segments are
-/// unrepresentable: both [`from_str`](RefPath::from_str) and
-/// [`from_keys`](RefPath::from_keys) reject them.
-///
-/// `Display` is [`render_path`]. Not injective with respect to document keys:
-/// a key literally spelled `a[0]` exists, but this grammar reads it as a key
-/// and an index — the same accepted loss as keys containing a literal dot.
+/// Keys containing `.`, `[` or `]` are not addressable.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RefPath {
     path: Vec<Seg>,
@@ -160,12 +98,7 @@ impl RefPath {
         self.path
     }
 
-    /// The owned key strings, checked all-key.
-    ///
-    /// The one write-side predicate: a caller that assigns into a document
-    /// takes keys one per segment, so an [`Index`](Seg::Index) step fails
-    /// here rather than at the merge — before any file is read, and with the
-    /// whole path rendered into the error.
+    /// The keys, or an error if any step is an index.
     pub fn try_into_keys(self) -> Result<Vec<String>, PathError> {
         if self.path.iter().any(|seg| matches!(seg, Seg::Index(_))) {
             return Err(PathError::IndexInKeyPath {
@@ -186,8 +119,7 @@ impl RefPath {
 impl FromStr for RefPath {
     type Err = PathError;
 
-    /// Grammar: a leading key, then any mix of `.key` and `[N]` steps, where
-    /// a key is a run of anything but `.[]` and `N` a bare `usize`.
+    /// Grammar: a key, then any mix of `.key` and `[N]` steps.
     fn from_str(body: &str) -> Result<Self, Self::Err> {
         if body.is_empty() {
             return Err(PathError::EmptyPath);
@@ -203,10 +135,9 @@ impl FromStr for RefPath {
         let mut path = Vec::new();
         let mut cursor = 0;
 
-        // The first step must be a key: there is no `[0]` into the root.
+        // The first step must be a key.
         let (key, next) = take_key(body, cursor);
         if key.is_empty() {
-            // `.a` and `[0].a` open with no key; a stray `]` opens with none.
             return Err(if bytes[cursor] == b']' {
                 bad_index()
             } else {
@@ -239,8 +170,7 @@ impl FromStr for RefPath {
                     path.push(Seg::Index(index));
                     cursor = end + 1;
                 }
-                // A key run ends at `.[` or `]`; anything left over is a stray
-                // bracket.
+                // A stray `]`.
                 _ => return Err(bad_index()),
             }
         }
@@ -249,8 +179,7 @@ impl FromStr for RefPath {
     }
 }
 
-/// A maximal run containing none of `.[]` — the delimiters are ASCII, so byte
-/// scanning never splits a multibyte key.
+/// The longest run from `from` containing none of `.[]`.
 fn take_key(body: &str, from: usize) -> (String, usize) {
     let mut end = from;
     while end < body.len() && !matches!(body.as_bytes()[end], b'.' | b'[' | b']') {
@@ -266,11 +195,6 @@ impl fmt::Display for RefPath {
 }
 
 /// Renders a key path for display. An empty path is the document root.
-///
-/// The merge side's paths are `&[String]`: keys only, by the invariant
-/// [`RefPath::try_into_keys`] enforces, and reachable empty because the fold
-/// starts at the root. [`render_path`] is the same rendering over a witness
-/// that may hold indices.
 pub(crate) fn render_keys(path: &[String]) -> String {
     if path.is_empty() {
         "<root>".to_string()
@@ -280,10 +204,6 @@ pub(crate) fn render_keys(path: &[String]) -> String {
 }
 
 /// The node at `path`, or `None` if nothing lives there.
-///
-/// Only interpolation reads a document by path — the merge descends by
-/// recursion — and it indexes in both directions: where a reference *lives*
-/// and where it *points*, since `${servers[0]}` parses to an [`Seg::Index`].
 pub(crate) fn lookup<'a, V: ConfigValue>(root: &'a V, path: &[Seg]) -> Option<&'a V> {
     let mut value = root;
     for seg in path {
@@ -301,7 +221,6 @@ mod tests {
     use serde_json::Value;
     type Map = serde_json::Map<String, Value>;
 
-    /// A witness may mix keys and indices.
     #[test]
     fn render_path_mixes_keys_and_indices() {
         assert_eq!(render_path(&[]), "");
@@ -327,7 +246,7 @@ mod tests {
             ("a[0]", &[seg("a"), Seg::Index(0)]),
             ("a.b[2].c", &[seg("a"), seg("b"), Seg::Index(2), seg("c")]),
             ("a[0][1]", &[seg("a"), Seg::Index(0), Seg::Index(1)]),
-            // A `:` is an ordinary key character; namespaces are the caller's.
+            // `:` is an ordinary key character.
             ("a:b[3]", &[seg("a:b"), Seg::Index(3)]),
         ];
         for (body, want) in cases {
@@ -422,8 +341,6 @@ mod tests {
         );
     }
 
-    /// A `=` has no special meaning in a bare path: just part of a (weird)
-    /// key rather than a `MissingEquals`-shaped hole.
     #[test]
     fn equals_is_an_ordinary_key_character() {
         let parsed: RefPath = "a=b".parse().unwrap();
@@ -453,8 +370,6 @@ mod tests {
         );
     }
 
-    /// A missing key and a segment of the wrong shape are both simply absent —
-    /// the caller reports one unresolved reference either way.
     #[test]
     fn lookup_misses_are_none() {
         let doc = doc();

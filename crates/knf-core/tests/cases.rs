@@ -115,7 +115,7 @@ fn options(case: &Case) -> MergeOptions {
 
 #[rustfmt::skip]
 const CASES: &[Case] = &[
-    // --- §2.1: the semantics table ------------------------------------------
+    // --- the semantics table ------------------------------------------------
     ok("no layers is an empty object", &[], "{}"),
     ok("one layer is a no-op", &[r#"{"a":1,"b":{"c":[1,2]}}"#], r#"{"a":1,"b":{"c":[1,2]}}"#),
     ok("object + object recurses per key", &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":2}}"#], r#"{"a":{"x":1,"y":2}}"#),
@@ -124,32 +124,28 @@ const CASES: &[Case] = &[
     ok("scalar shadows an object", &[r#"{"a":{"b":1}}"#, r#"{"a":5}"#], r#"{"a":5}"#),
     ok("object shadows a scalar", &[r#"{"a":5}"#, r#"{"a":{"b":1}}"#], r#"{"a":{"b":1}}"#),
 
-    // Arrays replace wholesale. Lodash-style index-merging would produce
-    // ["a","y","z"] here — a value nobody wrote.
+    // Arrays replace wholesale; never index-merged.
     ok("array replaces, never index-merges", &[r#"{"a":["x","y","z"]}"#, r#"{"a":["a"]}"#], r#"{"a":["a"]}"#),
     ok("array replaces with the empty array", &[r#"{"a":[1,2]}"#, r#"{"a":[]}"#], r#"{"a":[]}"#),
     ok("array is not merged element-wise", &[r#"{"a":[{"x":1}]}"#, r#"{"a":[{"y":2}]}"#], r#"{"a":[{"y":2}]}"#),
     ok("array replaces a scalar", &[r#"{"a":1}"#, r#"{"a":[1]}"#], r#"{"a":[1]}"#),
 
-    // Null is a value, not a delete (RFC 7386 merge-patch was rejected).
+    // Null is a value, not a delete.
     ok("null overwrites a scalar", &[r#"{"a":1}"#, r#"{"a":null}"#], r#"{"a":null}"#),
     ok("null overwrites an object", &[r#"{"a":{"b":1}}"#, r#"{"a":null}"#], r#"{"a":null}"#),
     ok("a value overwrites null", &[r#"{"a":null}"#, r#"{"a":1}"#], r#"{"a":1}"#),
     ok("null survives a single layer", &[r#"{"a":null}"#], r#"{"a":null}"#),
 
-    // --- §2.1: merge is not associative -------------------------------------
-    // The worked example. merge folds strictly left over the flat list, so
-    // {a:5} erases {a:{b:1}} and {a:{c:2}} then merges into a fresh object.
+    // --- merge is not associative -------------------------------------------
     ok("left fold, not right", &[r#"{"a":{"b":1}}"#, r#"{"a":5}"#, r#"{"a":{"c":2}}"#], r#"{"a":{"c":2}}"#),
-    // Grouping the last two first would give {"a":{"b":1,"c":2}} — the bug this
-    // ordering rule exists to prevent.
+    // Right-grouping would give {"a":{"b":1,"c":2}}.
     ok("three-layer deep merge", &[r#"{"a":{"b":1}}"#, r#"{"a":{"c":2}}"#, r#"{"a":{"b":9}}"#], r#"{"a":{"b":9,"c":2}}"#),
 
     // --- nesting depth ------------------------------------------------------
     ok("deep recursion", &[r#"{"a":{"b":{"c":{"d":1}}}}"#, r#"{"a":{"b":{"c":{"e":2}}}}"#], r#"{"a":{"b":{"c":{"d":1,"e":2}}}}"#),
     ok("deep insert into a missing branch", &[r#"{"a":{"b":1}}"#, r#"{"x":{"y":{"z":2}}}"#], r#"{"a":{"b":1},"x":{"y":{"z":2}}}"#),
 
-    // --- §2.2: strict mode --------------------------------------------------
+    // --- strict mode --------------------------------------------------------
     strict("strict allows new keys", &[r#"{"a":1}"#, r#"{"b":2}"#], r#"{"a":1,"b":2}"#),
     strict("strict allows same-kind replacement", &[r#"{"a":1}"#, r#"{"a":2}"#], r#"{"a":2}"#),
     strict("strict treats int and float as one kind", &[r#"{"a":1}"#, r#"{"a":1.5}"#], r#"{"a":1.5}"#),
@@ -168,8 +164,6 @@ const CASES: &[Case] = &[
     conflict("conflict from the third layer", &[r#"{"a":1}"#, r#"{"a":2}"#, r#"{"a":"three"}"#], "a"),
 
     // --- shallow: jq's `+` rather than `*` ---------------------------------
-    // Top-level keys only: a colliding object is taken whole, so keys the
-    // overlay omits are gone.
     shallow("shallow takes a nested object whole", &[r#"{"a":{"x":1,"y":2}}"#, r#"{"a":{"y":9}}"#], Doc(r#"{"a":{"y":9}}"#)),
     shallow("shallow keeps untouched top-level keys", &[r#"{"a":{"x":1},"b":1}"#, r#"{"a":{"y":2}}"#], Doc(r#"{"a":{"y":2},"b":1}"#)),
     shallow("shallow still inserts new keys", &[r#"{"a":1}"#, r#"{"b":{"c":2}}"#], Doc(r#"{"a":1,"b":{"c":2}}"#)),
@@ -177,11 +171,10 @@ const CASES: &[Case] = &[
     shallow("shallow one layer is a no-op", &[r#"{"a":{"b":[1]}}"#], Doc(r#"{"a":{"b":[1]}}"#)),
     shallow("shallow across three layers", &[r#"{"a":{"x":1}}"#, r#"{"a":5}"#, r#"{"a":{"y":2}}"#], Doc(r#"{"a":{"y":2}}"#)),
 
-    // --strict is orthogonal: it kind-checks wherever a replacement happens,
-    // and under shallow that is every colliding top-level key.
+    // --strict kind-checks wherever a replacement happens.
     strict_shallow("strict kind-checks a shallow replace", &[r#"{"a":{"x":1}}"#, r#"{"a":5}"#], Error("a")),
     strict_shallow("strict allows a same-kind shallow replace", &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":"s"}}"#], Doc(r#"{"a":{"y":"s"}}"#)),
-    // Nothing below the top level is compared: `x` changes kind unseen.
+    // Nothing below a replacement is compared.
     strict_shallow("strict shallow never looks below the top level", &[r#"{"a":{"x":1}}"#, r#"{"a":{"x":"s"}}"#], Doc(r#"{"a":{"x":"s"}}"#)),
 
     // --- selectors replace matching values; `foo.*` is shallow inside foo --
@@ -204,7 +197,7 @@ const CASES: &[Case] = &[
     // The outer path replaces `a`'s children whole, so `a.b` is never reached.
     shallow_at("an outer shallow path makes an inner one moot", "{a.*,a.b.*}", &[r#"{"a":{"b":{"c":{"x":1}}}}"#, r#"{"a":{"b":{"d":2}}}"#], Doc(r#"{"a":{"b":{"d":2}}}"#)),
     shallow_at("root and a path together are just root", "{*,a.*}", &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":2}}"#], Doc(r#"{"a":{"y":2}}"#)),
-    // A path decided by argv may not exist, or name a non-object, in the layers.
+    // A selector may name a missing path.
     shallow_at("a missing shallow path is a deep merge", "nope.*", &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":2}}"#], Doc(r#"{"a":{"x":1,"y":2}}"#)),
     shallow_at("a shallow path at a scalar just replaces it", "a.*", &[r#"{"a":1}"#, r#"{"a":2}"#], Doc(r#"{"a":2}"#)),
     shallow_at("a shallow path at an array just replaces it", "a.*", &[r#"{"a":[{"x":1}]}"#, r#"{"a":[{"y":2}]}"#], Doc(r#"{"a":[{"y":2}]}"#)),
@@ -245,8 +238,7 @@ fn table() {
     }
 }
 
-/// `merge_into` and `merge` must agree — the former is what callers reach for
-/// when they already hold an accumulator.
+/// `merge_into` and `merge` agree.
 #[test]
 fn merge_into_matches_merge() {
     for case in CASES {
@@ -262,8 +254,7 @@ fn merge_into_matches_merge() {
     }
 }
 
-/// The conflict path is relative to the document root, so an error at the root
-/// itself has an empty path rather than a bogus key.
+/// A conflict at the root has an empty path.
 #[test]
 fn root_level_conflict_has_empty_path() {
     let mut base = Value::Object(Default::default());
@@ -272,8 +263,7 @@ fn root_level_conflict_has_empty_path() {
     assert!(err.to_string().contains("<root>"), "{err}");
 }
 
-/// Error text carries both kinds, which is what makes the message actionable
-/// without the user re-running with more verbosity.
+/// Error text names both kinds.
 #[test]
 fn conflict_message_names_both_kinds() {
     let err = merge(
@@ -302,8 +292,7 @@ fn datetime_conflicts_with_string_under_strict() {
     assert_eq!(found, "string");
 }
 
-/// Parses a native JSON fixture. Panics on a malformed literal — every
-/// caller passes a `&'static str` written in this file.
+/// Parses a JSON fixture.
 fn ir(s: &str) -> Value {
     serde_json::from_str(s).unwrap_or_else(|e| panic!("bad JSON literal `{s}`: {e}"))
 }
