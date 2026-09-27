@@ -40,7 +40,7 @@ format: JSON or TOML. Exactly one document goes to stdout.
 
   knf base.toml prod.toml
   knf base.json - -f json          # stdin as a layer
-  knf defaults.toml --set server.port=8080
+  knf defaults.toml -c server.port=8080
   knf base.toml prod.toml --shallow '*'        # top-level keys only
   knf base.toml prod.toml --shallow 'db.*'     # shallow inside db only
 
@@ -68,7 +68,7 @@ from --accumulate, including its target. --list-files shows the filtered list.
 
 Preserves lexical components such as ./; Windows separators match as /.
 Stdin is matched as the literal path -. An empty selection is allowed: only
---set layers remain, or an empty object if none were supplied.
+-c layers remain, or an empty object if none were supplied.
 
 Patterns support *, **, ?, character classes, braces and leading ! negation.
 Matching uses native encoded bytes; ? matches one byte, not a Unicode character.
@@ -112,7 +112,7 @@ if retained by --glob or --glob-filename.
 
 The target is this option's argument. It must have a JSON or TOML extension
 (case-insensitive) and cannot be combined with positional files. -f overrides
-parsing only, not discovery. --set layers still apply after all files.
+parsing only, not discovery. -c layers still apply after all files.
 Stdin, absolute paths and .. are not allowed.
 Symlinks follow ordinary filesystem semantics.
 
@@ -137,10 +137,10 @@ Discovery still checks filesystem access and that the target exists."
 
     /// Inline terminal layer, applied after all files
     #[arg(
-        long = "set",
+        short = 'c',
         value_name = "KEY.PATH=VALUE",
         long_help = "\
-Inline terminal layer, applied after all files. Repeatable; multiple --set apply
+Inline terminal layer, applied after all files. Repeatable; multiple -c apply
 left to right.
 
 The value is parsed in the selected format, falling back to the original text
@@ -155,11 +155,11 @@ as a string when that fails. JSON uses JSON literals; TOML uses TOML values:
   day=1979-05-27  -> datetime in TOML, string in JSON
 
 Invalid and out-of-range literals remain strings. version=1.0 is a number;
-force a string with quotes: --set version='\"1.0\"'.
+force a string with quotes: -c version='\"1.0\"'.
 
 Dotted paths nest, so keys containing a literal dot are not addressable from
---set; use a file. Brackets name array elements only in ${...} references, so
---set 'a[0]=1' is an error rather than a write into an array or to a key
+-c; use a file. Brackets name array elements only in ${...} references, so
+-c 'a[0]=1' is an error rather than a write into an array or to a key
 literally spelled a[0]; only a file can carry either."
     )]
     pub set: Vec<PathLeaf<String>>,
@@ -181,13 +181,13 @@ Single-quoted spans are literal, including dots and glob characters. These
 quotes must reach knf: --shallow \"'foo.bar'.*\" selects children of the literal
 key foo.bar. Backslash escapes the next character inside quotes; outside quotes
 it follows glob escaping. Arrays are never traversed; brackets are character
-classes, not array indices. --set and interpolation keep their existing syntax.
+classes, not array indices. -c and interpolation keep their existing syntax.
 
 Quote patterns to prevent shell expansion. Requires exactly one nonempty
 pattern; cannot be repeated. Invalid patterns are usage errors before file I/O.
 Matching ancestors stop traversal; omitted children of replaced objects drop.
 Strict mode checks kinds at replacement boundaries. Arrays and null replace
-wholesale as usual. Applies to --set layers too.
+wholesale as usual. Applies to -c layers too.
 
   knf base.toml prod.toml --shallow '*'
   knf base.toml prod.toml --shallow '{db,app}.*'"
@@ -200,20 +200,23 @@ wholesale as usual. Applies to --set layers too.
         long,
         value_name = "FORMAT",
         long_help = "\
-Select the format for the entire pipeline: input parsing, --set and environment
+Select the format for the entire pipeline: input parsing, -c and environment
 typing, and output. Overrides every input extension; it never converts values.
 
 Required for stdin (-). Without it, infer one format from retained input
 extensions; mixed formats are rejected. No retained inputs default to JSON.
-Use -f toml for TOML output with only --set layers."
+Use -f toml for TOML output with only -c layers."
     )]
     pub format: Option<FormatArg>,
 
     /// Resolve ${key.path} and ${env:VAR} references in the merged document
     #[arg(
+        short = 'i',
         long,
         long_help = "\
 Resolve ${key.path} and ${env:VAR} references in the merged document.
+
+Use -i as a short form.
 
 Opt-in, and off by default. knf sits upstream of tools whose own syntax is
 ${...} — compose files, GitHub Actions workflows, Helm charts, systemd units —
@@ -232,7 +235,7 @@ A reference that is the *whole* string takes the referent's value and type, so
 ${port} can yield a number, an array or a table. A reference *embedded* in text
 stringifies; an object or array has no format-independent spelling there, so it
 is an error rather than a guess. An environment variable is spliced as raw text
-when embedded and typed like --set's right-hand side when it is the whole
+when embedded and typed like -c's right-hand side when it is the whole
 string.
 
 $$ is a literal $. A $ followed by anything else is ordinary text, so `USD $5`
@@ -247,7 +250,7 @@ are terminal and are never re-scanned. Cycles are an error.
 A reference may read an array element — ${servers[0].host} — with all the same
 rules: whole-string it takes the element's value and type, embedded it
 stringifies. Brackets are part of the grammar, so a key literally spelled
-`a[0]` cannot be addressed by a reference or written by --set, exactly as a
+`a[0]` cannot be addressed by a reference or written by -c, exactly as a
 key containing a literal dot never could; only a file can carry one.
 
 An unset variable or a missing key is an error naming every offender, never

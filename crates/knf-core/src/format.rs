@@ -48,7 +48,7 @@ impl fmt::Display for Format {
 }
 
 /// Which input a parse error came from. Names an input being *read*, so there
-/// is no variant for `--set`: a bad `--set` expression is rejected by
+/// is no variant for `-c`: a bad `-c` expression is rejected by
 /// [`PathLeaf`](crate::PathLeaf) during argument parsing, long before anything
 /// reaches here.
 #[derive(Debug, Clone, PartialEq, Eq)]

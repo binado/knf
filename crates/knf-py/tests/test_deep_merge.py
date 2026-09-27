@@ -269,7 +269,7 @@ def test_the_knf_executable_comes_with_the_wheel(write):
     assert knf is not None
     path = write("a.json", '{"a": 1}')
     out = subprocess.run(
-        [knf, str(path), "--set", "b=2", "--compact"],
+        [knf, str(path), "-c", "b=2", "--compact"],
         capture_output=True,
         text=True,
         check=True,
@@ -463,7 +463,7 @@ def test_toml_nonfinite_values_and_large_json_integers(write):
 def test_wheel_cli_uses_one_native_format_option(write):
     path = write("a.toml", "name = 'native'")
     assert subprocess.run(["knf", str(path), "-f", "json"], capture_output=True).returncode == 1
-    out = subprocess.run(["knf", "-f", "toml", "--set", "day=1979-05-27"], capture_output=True, text=True)
+    out = subprocess.run(["knf", "-f", "toml", "-c", "day=1979-05-27"], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     assert "day = 1979-05-27" in out.stdout
     for flag in ("--input-format", "--null-as"):

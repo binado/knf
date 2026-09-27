@@ -5,7 +5,7 @@
 //! chain of them. Over `Vec<Seg>` there is one parsed spelling and one witness:
 //!
 //! - [`RefPath`] parses `a.b[2].c` — dotted keys plus `[n]` steps. It is the
-//!   only spelling a `${...}` reference uses, and the grammar `--set`'s path
+//!   only spelling a `${...}` reference uses, and the grammar `-c`'s path
 //!   parses too.
 //! - A bare `Vec<Seg>` is the *witness*: built by walking a document, never
 //!   parsed, and free to hold [`Index`](Seg::Index) — a value can live inside
@@ -43,7 +43,7 @@ use crate::{ConfigObject, ConfigValue};
 
 /// Why a path expression was rejected.
 ///
-/// Carries the path text and nothing else — no `--set`, no `--interpolate`,
+/// Carries the path text and nothing else — no `-c`, no `--interpolate`,
 /// no filenames. Provenance is the caller's job.
 ///
 /// [`IndexInKeyPath`](PathError::IndexInKeyPath) is raised by
@@ -118,7 +118,7 @@ pub fn render_path(path: &[Seg]) -> String {
 
 /// A parsed path: dotted keys plus bracket array indices, `a.b[2].c`.
 ///
-/// The one spelling over [`Seg`]. References parse it directly; `--set`'s
+/// The one spelling over [`Seg`]. References parse it directly; `-c`'s
 /// path parses it too, and its write-side caller then runs
 /// [`try_into_keys`](RefPath::try_into_keys), which rejects any
 /// [`Index`](Seg::Index) step — reading an array element has one obvious

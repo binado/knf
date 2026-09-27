@@ -165,7 +165,7 @@ fn accumulate_uses_the_existing_merge_and_interpolation_pipeline() {
         vec!["--strict"],
         vec!["--shallow=*"],
         vec!["--shallow=db.*"],
-        vec!["--set", "db.port=8080"],
+        vec!["-c", "db.port=8080"],
         vec!["--interpolate", "--compact"],
     ] {
         let mut accumulate = vec!["-a", "foo/bar/target.toml"];
@@ -264,8 +264,8 @@ fn accumulate_usage_is_validated_before_filesystem_access() {
         let stderr = String::from_utf8(out.stderr).expect("utf-8");
         assert!(stderr.contains(expected), "{args:?}: {stderr}");
     }
-    let error = run_err(&dir, &["-a", "missing.toml", "--set", "a[0]=1"]);
-    assert!(error.contains("--set takes KEY.PATH=VALUE"));
+    let error = run_err(&dir, &["-a", "missing.toml", "-c", "a[0]=1"]);
+    assert!(error.contains("-c takes KEY.PATH=VALUE"));
     assert!(!error.contains("inspecting"));
 }
 
@@ -475,7 +475,7 @@ fn glob_excluded_inputs_are_not_loaded_or_used_for_format_inference() {
                 "prod.toml",
                 "-G",
                 "*.toml",
-                "--set",
+                "-c",
                 "value=2"
             ]
         ),
@@ -494,14 +494,7 @@ fn glob_empty_selections_keep_existing_empty_input_and_set_behaviour() {
         assert_eq!(
             run(
                 &dir,
-                &[
-                    "missing.toml",
-                    flag,
-                    "*.json",
-                    "--set",
-                    "value=2",
-                    "--compact"
-                ]
+                &["missing.toml", flag, "*.json", "-c", "value=2", "--compact"]
             ),
             "{\"value\":2}\n"
         );
@@ -608,8 +601,8 @@ fn glob_usage_errors_precede_filesystem_access() {
         assert!(!stderr.contains("reading"));
     }
     assert!(
-        run_err(&dir, &["missing.toml", "-G", "none", "--set", "a[0]=1"])
-            .contains("--set takes KEY.PATH=VALUE")
+        run_err(&dir, &["missing.toml", "-G", "none", "-c", "a[0]=1"])
+            .contains("-c takes KEY.PATH=VALUE")
     );
 }
 
@@ -684,7 +677,7 @@ fn toml_datetime_survives_a_toml_round_trip() {
 #[test]
 fn toml_datetime_survives_set() {
     let dir = tree(&[("f.toml", DATED)]);
-    let out = run(&dir, &["f.toml", "--set", "extra=1"]);
+    let out = run(&dir, &["f.toml", "-c", "extra=1"]);
     assert!(
         out.contains("date = 1979-05-27T07:32:00Z"),
         "datetime was not emitted unquoted:\n{out}"
@@ -807,12 +800,12 @@ fn stdin_is_a_layer() {
 fn inline_configs_apply_last() {
     let dir = tree(&[("a.json", r#"{"server":{"port":80}}"#)]);
     assert_eq!(
-        run(&dir, &["a.json", "--set", "server.port=8080", "--compact"]),
+        run(&dir, &["a.json", "-c", "server.port=8080", "--compact"]),
         "{\"server\":{\"port\":8080}}\n"
     );
     // With no file inputs at all, the output defaults to JSON.
     assert_eq!(
-        run(&dir, &["--set", "a.b=1", "--compact"]),
+        run(&dir, &["-c", "a.b=1", "--compact"]),
         "{\"a\":{\"b\":1}}\n"
     );
 }
@@ -856,18 +849,15 @@ fn shallow_single_layer_is_identity() {
     );
 }
 
-/// `--shallow` applies to `--set` layers, which are ordinary terminal layers.
+/// `--shallow` applies to `-c` layers, which are ordinary terminal layers.
 /// Correct, and surprising enough to pin: the whole table is replaced by the
 /// one key.
 #[test]
 fn shallow_applies_to_set_layers_too() {
     let dir = tree(&[("base.toml", BASE)]);
-    let out = run(&dir, &["base.toml", "--shallow=*", "--set", "db.host=x"]);
+    let out = run(&dir, &["base.toml", "--shallow=*", "-c", "db.host=x"]);
     assert!(out.contains("host = \"x\""), "{out}");
-    assert!(
-        !out.contains("port"),
-        "--set layer did not replace db:\n{out}"
-    );
+    assert!(!out.contains("port"), "-c layer did not replace db:\n{out}");
 }
 
 const NESTED_BASE: &str = "\
@@ -989,9 +979,9 @@ fn shallow_glob_set_layers_and_interpolation_compose() {
             "base.toml",
             "--shallow",
             "db.*",
-            "--set",
+            "-c",
             "db.pool={max=9}",
-            "--set",
+            "-c",
             "copy=${db.pool}",
             "--interpolate",
         ],
@@ -1033,7 +1023,7 @@ fn shallow_requires_one_nonempty_valid_pattern_before_file_io() {
 fn set_null_overwritten_before_toml_emit() {
     let dir = tree(&[("f.toml", "a = 0\n")]);
     assert_eq!(
-        run(&dir, &["f.toml", "--set", "a=null", "--set", "a=1"]),
+        run(&dir, &["f.toml", "-c", "a=null", "-c", "a=1"]),
         "a = 1\n"
     );
 }
@@ -1046,17 +1036,17 @@ fn toml_inline_typing_uses_native_values_and_string_fallback() {
         &[
             "-f",
             "toml",
-            "--set",
+            "-c",
             "proxy=null",
-            "--set",
+            "-c",
             "day=1979-05-27",
-            "--set",
+            "-c",
             "db={host='local'}",
-            "--set",
+            "-c",
             "large=18446744073709551615",
-            "--set",
+            "-c",
             "bad=[a,b]",
-            "--set",
+            "-c",
             "limit=inf",
         ],
     );
@@ -1077,15 +1067,15 @@ fn toml_inline_literals_accept_surrounding_whitespace() {
         &[
             "-f",
             "toml",
-            "--set",
+            "-c",
             "port= \t8080\r\n",
-            "--set",
+            "-c",
             "enabled=true\n",
-            "--set",
+            "-c",
             "ratio=1.0 ",
-            "--set",
+            "-c",
             "fallback= text\n",
-            "--set",
+            "-c",
             "quoted= ' text ' ",
         ],
     );
@@ -1155,14 +1145,14 @@ fn empty_runs_use_the_selected_native_format() {
 "
     );
     assert_eq!(
-        run(&dir, &["-f", "toml", "--set", "a=1"]),
+        run(&dir, &["-f", "toml", "-c", "a=1"]),
         "a = 1
 "
     );
     assert_eq!(
         run(
             &dir,
-            &["missing.json", "-g", "*.toml", "-f", "toml", "--set", "a=1"]
+            &["missing.json", "-g", "*.toml", "-f", "toml", "-c", "a=1"]
         ),
         "a = 1
 "
@@ -1263,7 +1253,7 @@ fn references_read_the_merged_document() {
     );
 }
 
-/// `--set` is an ordinary layer, so its values interpolate like any other.
+/// `-c` is an ordinary layer, so its values interpolate like any other.
 #[test]
 fn set_layers_interpolate_too() {
     let dir = tree(&[("f.json", r#"{"root":"/srv"}"#)]);
@@ -1272,7 +1262,7 @@ fn set_layers_interpolate_too() {
             &dir,
             &[
                 "f.json",
-                "--set",
+                "-c",
                 "data=${root}/data",
                 "--interpolate",
                 "--compact"
@@ -1374,10 +1364,7 @@ fn usage_errors_exit_two() {
 #[test]
 fn malformed_set_exits_two() {
     let dir = tree(&[]);
-    let out = knf(&dir)
-        .args(["--set", "noequals"])
-        .output()
-        .expect("spawn");
+    let out = knf(&dir).args(["-c", "noequals"]).output().expect("spawn");
     assert_eq!(out.status.code(), Some(2));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("invalid value"), "{err}");
@@ -1434,16 +1421,16 @@ fn mixed_input_formats_error_precedes_interpolation_errors() {
     insta::assert_snapshot!(run_err(&dir, &["a.json", "b.toml", "--interpolate"]));
 }
 
-/// A bracketed `--set` parses (a reference may read an element) but cannot
+/// A bracketed `-c` parses (a reference may read an element) but cannot
 /// write, and saying so must not depend on reading anything either: the
 /// file here does not exist.
 #[test]
 fn set_with_an_array_index_errors_before_file_io() {
     let dir = tree(&[]);
-    let err = run_err(&dir, &["missing.toml", "--set", "servers[0]=1"]);
+    let err = run_err(&dir, &["missing.toml", "-c", "servers[0]=1"]);
     assert!(
         !err.contains("missing.toml"),
-        "the --set path should be rejected before the file is read:\n{err}"
+        "the -c path should be rejected before the file is read:\n{err}"
     );
     insta::assert_snapshot!(err);
 }

@@ -3,7 +3,7 @@
 //! The library crates raise errors that carry key paths, reference spellings
 //! and file paths — never a command-line flag, because none of them has heard
 //! of one. Every `help:` line in this file exists to close that gap on the way
-//! out, and this is the only place in the workspace where `--set`,
+//! out, and this is the only place in the workspace where `-c`,
 //! `--interpolate` and `-f` appear in an error
 //! message.
 
@@ -92,10 +92,10 @@ fn explain_load(err: LoadError) -> anyhow::Error {
 
 /// The established division of labour: `knf-core` renders the path and stays
 /// provenance-free, the help line names the flag that carried it.
-pub fn name_the_set_flag(err: PathError) -> anyhow::Error {
+pub fn name_the_inline_layer_flag(err: PathError) -> anyhow::Error {
     match err {
         PathError::IndexInKeyPath { .. } => anyhow!(
-            "{err}\nhelp: --set takes KEY.PATH=VALUE; an index like servers[0] can be read\n      \
+            "{err}\nhelp: -c takes KEY.PATH=VALUE; an index like servers[0] can be read\n      \
              by a ${{...}} reference but never written — put the value in a file instead"
         ),
         other => other.into(),
