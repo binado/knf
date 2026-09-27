@@ -8,3 +8,6 @@
 /crates/knf-py/python/knf/*.so
 /crates/knf-py/python/knf/*.pyd
 __pycache__/
+
+# Local Python development/test environment.
+/.venv

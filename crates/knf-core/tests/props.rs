@@ -1,20 +1,22 @@
 //! Two cheap properties that catch real bugs in the recursion.
 
-use knf::{Map, MergeOptions, Number, Value, merge, merge_into};
+use knf::{ConfigFormat, ConfigValue, MergeOptions, merge, merge_into};
 use proptest::prelude::*;
 
-/// Arbitrary IR values, deliberately without floats so that equality is total —
+/// Arbitrary native values, deliberately without floats so that equality is total —
 /// a NaN leaf would make every property vacuously fail.
 ///
-/// `Datetime` is in the leaf set because it is a scalar kind that is not
-/// `String`, so it exercises replace-wholesale on a variant nothing else covers.
+/// TOML datetimes exercise scalar replacement; JSON keeps the same text as a string.
+macro_rules! properties { ($value:ty, $map:ty) => {
+type Value = $value;
+type Map = $map;
 fn arb_value() -> impl Strategy<Value = Value> {
     let leaf = prop_oneof![
-        Just(Value::Null),
-        any::<bool>().prop_map(Value::Bool),
-        any::<i64>().prop_map(|n| Value::Number(Number::I64(n))),
+        Just(Value::parse_inline("null".into())),
+        any::<bool>().prop_map(|b| Value::parse_inline(b.to_string())),
+        any::<i64>().prop_map(|n| Value::parse_inline(n.to_string())),
         "[a-z]{0,3}".prop_map(Value::String),
-        Just(Value::Datetime("1979-05-27T07:32:00Z".to_string())),
+        Just(Value::parse_inline("1979-05-27T07:32:00Z".into())),
     ];
     // Small alphabets for keys, so distinct layers actually collide often
     // enough to exercise the merge rather than just unioning disjoint trees.
@@ -28,7 +30,7 @@ fn arb_value() -> impl Strategy<Value = Value> {
 
 fn arb_object(inner: impl Strategy<Value = Value>) -> impl Strategy<Value = Value> {
     prop::collection::vec(("[a-c]{1,2}", inner), 0..3)
-        .prop_map(|entries| Value::Object(entries.into_iter().collect::<Map>()))
+        .prop_map(|entries| Value::object(entries.into_iter().collect::<Map>()))
 }
 
 fn arb_doc() -> impl Strategy<Value = Value> {
@@ -57,12 +59,12 @@ fn shallow_at(mut base: Value, over: Value, path: &[&str]) -> Value {
 
 /// The document without one top-level key.
 fn without(doc: &Value, key: &str) -> Value {
-    let Value::Object(map) = doc else {
-        unreachable!("arb_doc generates objects")
-    };
-    let mut map = map.clone();
-    map.shift_remove(key);
-    Value::Object(map)
+    let map = doc.as_object().expect("object");
+    let map: Map = map.iter()
+        .filter(|(k, _)| k.as_str() != key)
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    Value::object(map)
 }
 
 proptest! {
@@ -93,7 +95,7 @@ proptest! {
 
     /// One layer is still the identity under shallow merge: against the empty
     /// seed every key is absent, so it is inserted rather than replaced. This is
-    /// what the byte-level no-op of `knf --shallow a.json` rests on.
+    /// why one native layer is unchanged under shallow merge.
     #[test]
     fn a_single_layer_is_identity_under_shallow(a in arb_doc()) {
         let got = merge([a.clone()], &MergeOptions::shallow_root()).expect("non-strict");
@@ -104,13 +106,12 @@ proptest! {
     /// over `a` whole, and nothing below the top level is looked at.
     #[test]
     fn shallow_assigns_top_level_keys(a in arb_doc(), b in arb_doc()) {
-        let (Value::Object(mut want), Value::Object(over)) = (a.clone(), b.clone()) else {
-            unreachable!("arb_doc generates objects")
-        };
+        let mut want = a.clone().into_object().unwrap();
+        let over = b.clone().into_object().unwrap();
         for (k, v) in over {
             want.insert(k, v);
         }
-        prop_assert_eq!(shallow(a, b), Value::Object(want));
+        prop_assert_eq!(shallow(a, b), Value::object(want));
     }
 
     /// A shallow path no layer reaches is a deep merge. Keys are drawn from
@@ -127,10 +128,9 @@ proptest! {
     fn a_shallow_path_is_plus_there_and_star_elsewhere(a in arb_doc(), b in arb_doc()) {
         let got = shallow_at(a.clone(), b.clone(), &["a"]);
         prop_assert_eq!(without(&got, "a"), without(&merged(a.clone(), b.clone()), "a"));
-        let (Value::Object(ma), Value::Object(mb), Value::Object(mg)) = (&a, &b, &got) else {
-            unreachable!("arb_doc generates objects")
-        };
-        if let (Some(x @ Value::Object(_)), Some(y @ Value::Object(_))) = (ma.get("a"), mb.get("a")) {
+        let (ma, mb, mg) = (a.as_object().unwrap(), b.as_object().unwrap(), got.as_object().unwrap());
+        if let (Some(x), Some(y)) = (ma.get("a"), mb.get("a")) {
+            if x.as_object().is_none() || y.as_object().is_none() { return Ok(()); }
             prop_assert_eq!(&mg["a"], &shallow(x.clone(), y.clone()));
         }
     }
@@ -143,4 +143,15 @@ proptest! {
         let right = shallow(a, shallow(b, c));
         prop_assert_eq!(left, right);
     }
+}
+
+}; }
+
+mod json {
+    use super::*;
+    properties!(serde_json::Value, serde_json::Map<String, serde_json::Value>);
+}
+mod toml {
+    use super::*;
+    properties!(::toml::Value, ::toml::Table);
 }

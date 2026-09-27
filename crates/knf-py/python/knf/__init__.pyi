@@ -43,17 +43,21 @@ def load(
     *,
     interpolate: bool = False,
 ) -> dict[str, Any]:
-    """Load and merge layered JSON and TOML files into one ``dict``.
+    """Load and merge homogeneous JSON or TOML files into one ``dict``.
 
     ``files`` are merged left to right. Objects merge key by key; arrays,
     scalars and ``None`` replace wholesale.
     With ``interpolate=True``, references resolve once against the final merged
-    document; ``${env:NAME}`` reads the process environment.
+    document; ``${env:NAME}`` reads raw process text and types whole-string
+    values as JSON-or-string or TOML-or-string, matching the input format.
+    TOML dates/times return native Python datetime/date/time objects; offset
+    datetimes retain fixed UTC offsets and fractional seconds truncate to
+    microseconds. An empty file list returns an empty dict.
 
     Raises:
         FileNotFoundError, PermissionError, IsADirectoryError: As ``open()``
             would, with ``.filename`` set.
         ParseError: A file is not a valid JSON or TOML document.
         InterpolationError: A reference is invalid, unresolved, or cyclic.
-        ValueError: A path has no ``.json``/``.toml`` extension.
+        ValueError: Unknown extension, mixed formats, or an unrepresentable Python datetime (with its key path).
     """

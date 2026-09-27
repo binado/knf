@@ -6,7 +6,7 @@ use std::str::FromStr;
 use clap::{ArgAction, Parser};
 use knf::{Format, PathError, PathLeaf, RefPath};
 
-/// `-f` and `--input-format`, as clap sees them.
+/// `-f`, as clap sees them.
 ///
 /// A local mirror of [`Format`] rather than a derive on `Format` itself:
 /// `knf-core` has no clap, and the orphan rule forbids implementing
@@ -59,12 +59,12 @@ impl FromStr for ShallowAt {
     long_about = "\
 Merge layered configuration files and print the result.
 
-Files are layers, merged left to right in argument order. JSON and TOML may be
-mixed freely. Exactly one document goes to stdout.
+Files are layers, merged left to right in argument order. All inputs must use one
+format: JSON or TOML. Exactly one document goes to stdout.
 
   knf base.toml prod.toml
-  knf base.json - --input-format json          # stdin as a layer
-  knf defaults.json --set server.port=8080 -f toml
+  knf base.json - -f json          # stdin as a layer
+  knf defaults.toml --set server.port=8080
   knf base.toml prod.toml --shallow            # top-level keys only
   knf base.toml prod.toml --shallow=db         # shallow inside db only
 
@@ -135,8 +135,8 @@ files in the target's directory, then apply the named target exactly once, last
 if retained by --glob or --glob-filename.
 
 The target is this option's argument. It must have a JSON or TOML extension
-(case-insensitive) and cannot be combined with positional files. --input-format
-overrides parsing only, not discovery. --set layers still apply after all files.
+(case-insensitive) and cannot be combined with positional files. -f overrides
+parsing only, not discovery. --set layers still apply after all files.
 Stdin, absolute paths and .. are not allowed.
 Symlinks follow ordinary filesystem semantics.
 
@@ -159,19 +159,6 @@ Discovery still checks filesystem access and that the target exists."
     )]
     pub list_files: bool,
 
-    /// Treat every input as this format; required for `-`
-    #[arg(
-        long,
-        value_name = "FORMAT",
-        long_help = "\
-Treat every input as this format, overriding extension inference.
-
-Required for `-`, which has no extension. Note that it applies to all inputs,
-not only stdin, so it cannot be used to mix a stdin layer of one format with
-files of another."
-    )]
-    pub input_format: Option<FormatArg>,
-
     /// Inline terminal layer, applied after all files
     #[arg(
         long = "set",
@@ -180,17 +167,19 @@ files of another."
 Inline terminal layer, applied after all files. Repeatable; multiple --set apply
 left to right.
 
-The value is parsed as JSON, falling back to a string when that fails:
+The value is parsed in the selected format, falling back to the original text
+as a string when that fails. JSON uses JSON literals; TOML uses TOML values:
 
-  port=8080       -> 8080     (number)
-  debug=true      -> true     (bool)
-  name=foo        -> \"foo\"    (not valid JSON, so a string)
-  proxy=null      -> null     (an error under -f toml, like any other null)
-  tags=[\"a\",\"b\"]  -> array
-  tags=[a,b]      -> \"[a,b]\"  (not valid JSON, so a string)
+  port=8080       -> number in both formats
+  debug=true      -> bool in both formats
+  name=foo        -> string in both formats
+  proxy=null      -> null in JSON, string in TOML
+  tags=[\"a\",\"b\"]  -> array in both formats
+  db={host=\"a\"}  -> inline table in TOML, string in JSON
+  day=1979-05-27  -> datetime in TOML, string in JSON
 
-Sharp edge: version=1.0 is the number 1.0, not the string \"1.0\". Force a string
-by quoting into JSON: --set version='\"1.0\"'.
+Invalid and out-of-range literals remain strings. version=1.0 is a number;
+force a string with quotes: --set version='\"1.0\"'.
 
 Dotted paths nest, so keys containing a literal dot are not addressable from
 --set; use a file. Brackets name array elements only in ${...} references, so
@@ -233,32 +222,20 @@ This applies to --set layers too, which are ordinary layers: --shallow
     )]
     pub shallow: Vec<ShallowAt>,
 
-    /// Output format; required when inputs are mixed
-    #[arg(short = 'f', long, value_name = "FORMAT")]
-    pub format: Option<FormatArg>,
-
-    /// Write this string in place of null when emitting TOML
+    /// Format for parsing, inline typing and output; required for stdin
     #[arg(
+        short = 'f',
         long,
-        value_name = "STRING",
+        value_name = "FORMAT",
         long_help = "\
-Write this string in place of null when emitting TOML.
+Select the format for the entire pipeline: input parsing, --set and environment
+typing, and output. Overrides every input extension; it never converts values.
 
-TOML has no null, so a null reaching TOML output is an error by default. This
-substitutes a value of your choosing instead:
-
-  knf base.toml override.json -f toml --null-as=none
-
-It applies to TOML output only. JSON can hold a null, so under -f json the flag
-has nothing to rescue and is ignored rather than corrupting a document that was
-never in trouble.
-
-The substitution writes a value that appeared in none of the inputs, which is
-why it is opt-in and why the string is yours to pick. It also applies inside
-arrays, where a null cannot simply be dropped without shifting every index
-after it."
+Required for stdin (-). Without it, infer one format from retained input
+extensions; mixed formats are rejected. No retained inputs default to JSON.
+Use -f toml for TOML output with only --set layers."
     )]
-    pub null_as: Option<String>,
+    pub format: Option<FormatArg>,
 
     /// Resolve ${key.path} and ${env:VAR} references in the merged document
     #[arg(

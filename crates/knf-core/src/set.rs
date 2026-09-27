@@ -16,7 +16,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use crate::{PathError, RefPath, Seg};
+use crate::{ConfigFormat, ConfigObject, PathError, RefPath, Seg};
 use serde_json::{Map, Value};
 
 /// A leaf value addressed by a parsed path.
@@ -86,6 +86,30 @@ impl<V> PathLeaf<V> {
             .rev()
             .fold(self.leaf, |acc, key| nest(key, acc)))
     }
+}
+
+impl PathLeaf<String> {
+    /// Validate this writer's path before reading inputs or selecting a format.
+    pub fn validate_keys(&self) -> Result<(), PathError> {
+        self.path.clone().try_into_keys().map(|_| ())
+    }
+
+    /// Type the RHS in the native format and expand it into a nested object.
+    pub fn into_layer<V: ConfigFormat>(self) -> Result<V, PathError> {
+        let keys = self.path.try_into_keys()?;
+        let leaf = V::parse_inline(self.leaf);
+        Ok(keys.into_iter().rev().fold(leaf, |value, key| {
+            let mut object = V::Object::new();
+            object.insert(key, value);
+            V::object(object)
+        }))
+    }
+}
+
+/// Parse a standalone TOML value, falling back to the original text as a string.
+/// Invalid and out-of-range literals, including `null`, remain strings.
+pub fn toml_or_string(text: String) -> toml::Value {
+    text.parse().unwrap_or_else(|_| toml::Value::String(text))
 }
 
 impl FromStr for PathLeaf<String> {

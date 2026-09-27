@@ -11,7 +11,7 @@ pip install pyknf    # the module, and the `knf` executable
 ```python
 from knf import load
 
-config = load(["base.toml", "prod.json"])
+config = load(["base.toml", "prod.toml"])
 config["server"]["port"] = 8080
 ```
 
@@ -45,7 +45,7 @@ and `.filename`, including `IsADirectoryError` for directory targets.
 Pass `interpolate=True` to resolve references after all files have been merged:
 
 ```python
-config = load(["base.toml", "prod.json"], interpolate=True)
+config = load(["base.toml", "prod.toml"], interpolate=True)
 ```
 
 `${key.path}` reads a value from the final config, including nested keys and
@@ -53,13 +53,13 @@ array elements such as `${servers[0].host}`. A reference that occupies the
 whole string keeps the value's type: `"${server.port}"` can become an `int`,
 and `"${server}"` can become a `dict`. Within other text, it becomes a string:
 `"http://${server.host}:${server.port}/"`. `${env:NAME}` reads the process
-environment; a whole-string environment reference uses the CLI's JSON-or-string
-typing rule, while an embedded one inserts raw text. Use `$$` for a literal
+environment; a whole-string environment reference parses a native JSON or TOML value with string
+fallback, matching the CLI's inline typing, while an embedded one inserts raw text. Use `$$` for a literal
 `$`. Interpolation is off by default, leaving reference strings untouched.
 Invalid or missing references and cycles raise `knf.InterpolationError`, a
 `ValueError`, with the affected key paths.
 
-Files are merged left to right, exactly like `knf base.toml prod.json`.
+Files are merged left to right, exactly like `knf base.toml prod.toml`.
 Objects merge key by key. Arrays, scalars and `None` replace wholesale. Make
 additional changes to the returned dict in Python; for example,
 `config["server"]["port"] = 8080` updates a nested setting.
@@ -67,7 +67,20 @@ additional changes to the returned dict in Python; for example,
 A file that can't be read raises `FileNotFoundError`, `PermissionError` or
 `IsADirectoryError`, as `open()` would. Invalid JSON or TOML raises
 `knf.ParseError`, a `ValueError` like `json.JSONDecodeError`. TOML datetimes
-come back as their TOML spelling in a `str`.
+return native `datetime.datetime`, `datetime.date`, or `datetime.time` objects,
+matching Python's `tomllib` type mapping. Offset datetimes retain fixed UTC
+offsets; local datetimes and times have no timezone. Fractional seconds truncate
+to microseconds. A date/time Python cannot represent raises `ValueError` naming
+its key path.
+
+All inputs must use one format. Mixed JSON/TOML extensions raise `ValueError`
+before document contents are read. An empty file list returns `{}`. JSON nulls
+and large unsigned integers, and TOML non-finite floats, retain their values.
+
+This changes the previous datetime-string and mixed-input behavior. The CLI
+also now uses `-f/--format` for parsing, inline typing and output together;
+`--input-format` and `--null-as` have been removed. No JSON/TOML conversion is
+performed. Parsed values are preserved; source whitespace and comments are not.
 
 See the [project README](https://github.com/binado/knf#merging) for the merge
 semantics in full.

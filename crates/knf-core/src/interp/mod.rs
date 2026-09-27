@@ -1,4 +1,4 @@
-//! `${key.path}` and `${env:VAR}` resolution over the merged [`Value`].
+//! `${key.path}` and `${env:VAR}` resolution over the merged native values.
 //!
 //! One pass over a merged document, replacing references in string values. Keys
 //! are never interpolated; values only.
@@ -16,23 +16,21 @@
 //!
 //! **No `std::env` here.** The environment is injected through [`Env`], so this
 //! module is deterministic and testable without touching process state. It is
-//! also what keeps the JSON-or-string typing rule out of resolution: the caller
-//! parses and hands over a [`Value`]. [`ProcessEnv`](crate::ProcessEnv) is the
+//! also what keeps format-specific typing out of resolution: the native adapter
+//! parses whole-string environment values. [`ProcessEnv`](crate::ProcessEnv) is the
 //! one implementation that reads the real environment.
 
 mod error;
-mod render;
 mod scan;
 
 use std::collections::HashMap;
 
 use crate::path::lookup;
-use crate::{Map, PathError, RefPath, Seg, Value};
+use crate::{ConfigFormat, ConfigObject, PathError, RefPath, Seg};
 
 pub use error::{Cycle, InterpError, Problem};
 pub use scan::Syntax;
 
-use render::stringify;
 use scan::{Piece, Spelled, scan};
 
 /// The one namespace. Matched as a literal **prefix**, not by splitting on the
@@ -42,21 +40,6 @@ use scan::{Piece, Spelled, scan};
 /// dotted-path flags already carry.
 const ENV: &str = "env:";
 
-/// An environment variable in both forms interpolation needs.
-///
-/// Two fields rather than one because the two positions want different things.
-/// Embedded, the variable is spliced as **raw text**: parsing it and rendering
-/// it back could only ever corrupt it. Whole-string, it is typed, by whatever
-/// rule the caller uses for its own inline values — which is the entire
-/// consistency argument for typing environment values at all.
-#[derive(Debug, Clone, PartialEq)]
-pub struct EnvValue {
-    /// Spliced verbatim into surrounding text.
-    pub raw: String,
-    /// Substituted whole, with its type, when the reference is the whole string.
-    pub typed: Value,
-}
-
 /// Where `${env:NAME}` reads from.
 ///
 /// A trait rather than a direct `std::env::var` call so that resolution never
@@ -64,7 +47,7 @@ pub struct EnvValue {
 /// implementation that does.
 pub trait Env {
     /// The variable, or `None` if it is unset.
-    fn lookup(&self, name: &str) -> Option<EnvValue>;
+    fn lookup(&self, name: &str) -> Option<String>;
 }
 
 /// Resolves every reference in `doc`.
@@ -82,7 +65,7 @@ pub trait Env {
 /// Every unresolved reference and every malformed one is collected, so a run
 /// reports all of them. A cycle is the exception and returns alone: there is
 /// nothing meaningful to continue past.
-pub fn interpolate(doc: Value, env: &dyn Env) -> Result<Value, InterpError> {
+pub fn interpolate<V: ConfigFormat>(doc: V, env: &dyn Env) -> Result<V, InterpError> {
     let mut resolver = Resolver {
         doc: &doc,
         env,
@@ -107,19 +90,19 @@ pub fn interpolate(doc: Value, env: &dyn Env) -> Result<Value, InterpError> {
 /// who does the work, never what the answer is), and — since `resolve_value`
 /// runs at most once per path — reporting each problem exactly once however many
 /// references point at it.
-struct Resolver<'a> {
-    doc: &'a Value,
+struct Resolver<'a, V: ConfigFormat> {
+    doc: &'a V,
     env: &'a dyn Env,
-    memo: HashMap<Vec<Seg>, Value>,
+    memo: HashMap<Vec<Seg>, V>,
     /// The paths currently being resolved, innermost last. Doubles as the cycle
     /// chain: the slice from a repeated path to the top *is* the loop.
     visiting: Vec<Vec<Seg>>,
     problems: Vec<Problem>,
 }
 
-impl<'a> Resolver<'a> {
+impl<'a, V: ConfigFormat> Resolver<'a, V> {
     /// Resolves the node at `path`, which the caller has established exists.
-    fn resolve(&mut self, path: &[Seg]) -> Result<Value, Cycle> {
+    fn resolve(&mut self, path: &[Seg]) -> Result<V, Cycle> {
         if let Some(done) = self.memo.get(path) {
             return Ok(done.clone());
         }
@@ -150,38 +133,35 @@ impl<'a> Resolver<'a> {
         Ok(resolved)
     }
 
-    fn resolve_value(&mut self, raw: &'a Value, path: &[Seg]) -> Result<Value, Cycle> {
-        match raw {
-            Value::String(text) => self.resolve_string(text, path),
-            // Children resolve under their own paths and memoize there, which
-            // is what makes a whole-string container reference return a fully
-            // resolved subtree — the cost of allowing aliasing at all.
-            Value::Array(items) => {
-                let mut out = Vec::with_capacity(items.len());
-                for index in 0..items.len() {
-                    out.push(self.resolve(&child(path, Seg::Index(index)))?);
-                }
-                Ok(Value::Array(out))
-            }
-            Value::Object(map) => {
-                let mut out = Map::with_capacity(map.len());
-                for key in map.keys() {
-                    let value = self.resolve(&child(path, Seg::Key(key.clone())))?;
-                    out.insert(key.clone(), value);
-                }
-                Ok(Value::Object(out))
-            }
-            scalar => Ok(scalar.clone()),
+    fn resolve_value(&mut self, raw: &'a V, path: &[Seg]) -> Result<V, Cycle> {
+        if let Some(text) = raw.as_str() {
+            return self.resolve_string(text, path);
         }
+        if let Some(items) = raw.as_array() {
+            let mut out = Vec::with_capacity(items.len());
+            for index in 0..items.len() {
+                out.push(self.resolve(&child(path, Seg::Index(index)))?);
+            }
+            return Ok(V::array(out));
+        }
+        if let Some(map) = raw.as_object() {
+            let mut out = V::Object::new();
+            for (key, _) in map.iter() {
+                let value = self.resolve(&child(path, Seg::Key(key.clone())))?;
+                out.insert(key.clone(), value);
+            }
+            return Ok(V::object(out));
+        }
+        Ok(raw.clone())
     }
 
-    fn resolve_string(&mut self, text: &str, path: &[Seg]) -> Result<Value, Cycle> {
+    fn resolve_string(&mut self, text: &str, path: &[Seg]) -> Result<V, Cycle> {
         let pieces = scan(text);
 
         // No `$` anywhere — the common case, and the reason `scan` reports it
         // as emptiness rather than a list of one literal.
         if pieces.is_empty() {
-            return Ok(Value::String(text.to_string()));
+            return Ok(V::string(text.to_string()));
         }
         if let [Piece::Ref(body)] = pieces.as_slice() {
             return self.substitute(body, path);
@@ -201,23 +181,23 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
-        Ok(Value::String(out))
+        Ok(V::string(out))
     }
 
     /// Whole-string position: the reference *is* the value, so it takes the
     /// referent's type. Containers are allowed here.
-    fn substitute(&mut self, body: &str, path: &[Seg]) -> Result<Value, Cycle> {
+    fn substitute(&mut self, body: &str, path: &[Seg]) -> Result<V, Cycle> {
         if let Some(name) = body.strip_prefix(ENV) {
             return Ok(match self.env_value(name, body, path) {
                 // Environment values are terminal: never re-scanned, so a
                 // variable holding `${x}` cannot reach back into the document.
-                Some(found) => found.typed,
-                None => Value::String(Spelled(body).to_string()),
+                Some(found) => V::parse_inline(found),
+                None => V::string(Spelled(body).to_string()),
             });
         }
         match self.target(body, path) {
             Some(target) => self.resolve(&target),
-            None => Ok(Value::String(Spelled(body).to_string())),
+            None => Ok(V::string(Spelled(body).to_string())),
         }
     }
 
@@ -227,7 +207,7 @@ impl<'a> Resolver<'a> {
             return Ok(match self.env_value(name, body, path) {
                 // Raw, not re-rendered: a variable is text already, and parsing
                 // it only to print it again could only lose something.
-                Some(found) => found.raw,
+                Some(found) => found,
                 None => Spelled(body).to_string(),
             });
         }
@@ -235,7 +215,7 @@ impl<'a> Resolver<'a> {
             return Ok(Spelled(body).to_string());
         };
         let value = self.resolve(&target)?;
-        Ok(match stringify(&value) {
+        Ok(match value.stringify() {
             Some(text) => text,
             None => {
                 self.problems.push(Problem::NotStringifiable {
@@ -250,7 +230,7 @@ impl<'a> Resolver<'a> {
 
     /// The variable, recording a problem and returning `None` if the name is
     /// empty or the variable is unset.
-    fn env_value(&mut self, name: &str, body: &str, path: &[Seg]) -> Option<EnvValue> {
+    fn env_value(&mut self, name: &str, body: &str, path: &[Seg]) -> Option<String> {
         if name.is_empty() {
             self.problems.push(Problem::Syntax {
                 path: path.to_vec(),

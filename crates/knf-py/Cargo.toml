@@ -24,11 +24,11 @@ doctest = false
 
 # No `extension-module` feature: pyo3 deprecated it in favour of the
 # PYO3_BUILD_EXTENSION_MODULE environment variable, which maturin sets.
-# `clap` and `serde_json` are for the command line compiled into this library
-# from `crates/knf/src/main.rs`, not for the Python API.
+# `clap` serves the included CLI. JSON and TOML values convert directly to Python.
 [dependencies]
 knf-core.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 pyo3 = { version = "0.29", features = ["abi3-py39"] }

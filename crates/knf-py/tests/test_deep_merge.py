@@ -1,5 +1,8 @@
 """`knf.load` and the `knf` executable, as an installed wheel exposes them."""
 
+import datetime
+import math
+
 import errno
 import json
 import os
@@ -30,9 +33,9 @@ def test_one_file_is_the_identity(write):
     assert list(merged) == ["b", "a", "c"]
 
 
-def test_files_fold_left_to_right_across_formats(write):
+def test_toml_files_fold_left_to_right(write):
     base = write("base.toml", 'name = "app"\n[server]\nhost = "localhost"\nport = 80\n')
-    prod = write("prod.json", '{"server": {"port": 443}}')
+    prod = write("prod.toml", "[server]\nport = 443\n")
     assert load([base, prod]) == {
         "name": "app",
         "server": {"host": "localhost", "port": 443},
@@ -54,9 +57,9 @@ def test_arrays_and_none_load_from_document(write):
     assert load([path]) == {"xs": [1, 2, 3], "k": {"v": 1}}
 
 
-def test_toml_datetime_is_its_toml_spelling(write):
+def test_toml_datetimes_are_native_python_objects(write):
     path = write("a.toml", "at = 1979-05-27T07:32:00Z\nday = 1979-05-27\n")
-    assert load([path]) == {"at": "1979-05-27T07:32:00Z", "day": "1979-05-27"}
+    assert load([path]) == {"at": datetime.datetime(1979, 5, 27, 7, 32, tzinfo=datetime.timezone.utc), "day": datetime.date(1979, 5, 27)}
 
 
 def test_non_finite_floats_pass_through(write):
@@ -142,7 +145,7 @@ def test_interpolation_sees_final_layers_and_nested_values(write):
             "final": "${next}",
         }),
     )
-    prod = write("prod.toml", '[server]\nhost = "prod"\nport = 443\n')
+    prod = write("prod.json", '{"server":{"host":"prod","port":443}}')
     merged = load([base, prod], interpolate=True)
     assert merged["url"] == "http://prod:443/"
     assert merged["copy"] == {"host": "prod", "port": 443}
@@ -215,13 +218,13 @@ def test_the_knf_executable_accumulates_and_lists_files(tmp_path):
     (tmp_path / "foo" / "bar" / "target.toml").write_text("value = 2\n")
     (tmp_path / "ignored.toml").write_text("invalid ignored root")
     out = subprocess.run(
-        [knf, "-a", "foo/bar/target.toml", "-f", "json", "--compact"],
+        [knf, "-a", "foo/bar/target.toml", "--compact"],
         cwd=tmp_path,
         capture_output=True,
         text=True,
         check=True,
     )
-    assert json.loads(out.stdout) == {"base": 1, "value": 2}
+    assert out.stdout == "base = 1\nvalue = 2\n"
     out = subprocess.run(
         [knf, "-a", "foo/bar/target.toml", "--list-files"],
         cwd=tmp_path,
@@ -256,13 +259,13 @@ def test_the_knf_executable_filters_inputs(tmp_path, flag, pattern):
         pattern,
     ]
     out = subprocess.run(
-        args + ["-f", "json", "--compact"],
+        args + ["--compact"],
         cwd=tmp_path,
         capture_output=True,
         text=True,
         check=True,
     )
-    assert json.loads(out.stdout) == {"value": 1}
+    assert out.stdout == "value = 1\n"
     out = subprocess.run(
         args + ["--list-files"],
         cwd=tmp_path,
@@ -293,3 +296,71 @@ def test_a_bare_str_is_not_a_list_of_files(write):
     path = write("a.json", "{}")
     with pytest.raises(TypeError):
         load(str(path))
+
+
+@pytest.mark.parametrize("interpolate", [False, True])
+def test_mixed_formats_fail_before_reading_contents(tmp_path, interpolate):
+    with pytest.raises(ValueError, match="inputs mix JSON and TOML") as info:
+        load([tmp_path / "missing.json", tmp_path / "missing.toml"], interpolate=interpolate)
+    assert not isinstance(info.value, ParseError)
+
+
+@pytest.mark.parametrize("literal, expected", [
+    ("1979-05-27T07:32:00.123456789Z", datetime.datetime(1979, 5, 27, 7, 32, 0, 123456, tzinfo=datetime.timezone.utc)),
+    ("1979-05-27T07:32:00.123456789-07:30", datetime.datetime(1979, 5, 27, 7, 32, 0, 123456, tzinfo=datetime.timezone(datetime.timedelta(hours=-7, minutes=-30)))),
+    ("1979-05-27T07:32:00+05:45", datetime.datetime(1979, 5, 27, 7, 32, tzinfo=datetime.timezone(datetime.timedelta(hours=5, minutes=45)))),
+    ("1979-05-27T07:32:00.123456789", datetime.datetime(1979, 5, 27, 7, 32, 0, 123456)),
+    ("1979-05-27", datetime.date(1979, 5, 27)),
+    ("07:32:00.123456789", datetime.time(7, 32, 0, 123456)),
+    ("07:32", datetime.time(7, 32)),
+    ("1979-05-27T07:32", datetime.datetime(1979, 5, 27, 7, 32)),
+])
+def test_all_toml_datetime_forms_and_precision(write, literal, expected):
+    text = f"value = {literal}\ncopy = '${{value}}'\n"
+    path = write("dates.toml", text)
+    result = load([path], interpolate=True)
+    assert result["value"] == expected
+    assert result["copy"] == expected
+    assert type(result["value"]) is type(expected)
+    if sys.version_info >= (3, 11) and literal not in ("07:32", "1979-05-27T07:32"):
+        import tomllib
+        assert load([path])["value"] == tomllib.loads(text)["value"]
+
+
+def test_unrepresentable_toml_datetime_reports_key_and_array_path(write):
+    path = write("dates.toml", "[nested]\nvalues = [0000-01-01]\n")
+    with pytest.raises(ValueError, match=r"nested.values\[0\]") as info:
+        load([path])
+    assert not isinstance(info.value, ParseError)
+
+
+def test_toml_environment_typing_is_native_and_terminal(write, monkeypatch):
+    monkeypatch.setenv("KNF_PY_DAY", "1979-05-27")
+    monkeypatch.setenv("KNF_PY_NULL", "null")
+    monkeypatch.setenv("KNF_PY_TABLE", "{host='local'}")
+    monkeypatch.setenv("KNF_PY_TERMINAL", "${missing}")
+    path = write("env.toml", "day = '${env:KNF_PY_DAY}'\nnull = '${env:KNF_PY_NULL}'\nraw = 'day:${env:KNF_PY_DAY}'\ntable = '${env:KNF_PY_TABLE}'\nterminal = '${env:KNF_PY_TERMINAL}'\n")
+    assert load([path], interpolate=True) == {
+        "day": datetime.date(1979, 5, 27), "null": "null", "raw": "day:1979-05-27",
+        "table": {"host": "local"}, "terminal": "${missing}",
+    }
+
+
+def test_toml_nonfinite_values_and_large_json_integers(write):
+    path = write("limits.toml", "positive = inf\nnegative = -inf\nnan = nan\n")
+    values = load([path])
+    assert values["positive"] == math.inf
+    assert values["negative"] == -math.inf
+    assert math.isnan(values["nan"])
+    path = write("large.json", '{"id":18446744073709551615,"null":null}')
+    assert load([path]) == {"id": 18446744073709551615, "null": None}
+
+
+def test_wheel_cli_uses_one_native_format_option(write):
+    path = write("a.toml", "name = 'native'")
+    assert subprocess.run(["knf", str(path), "-f", "json"], capture_output=True).returncode == 1
+    out = subprocess.run(["knf", "-f", "toml", "--set", "day=1979-05-27"], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert "day = 1979-05-27" in out.stdout
+    for flag in ("--input-format", "--null-as"):
+        assert subprocess.run(["knf", flag, "json"], capture_output=True).returncode == 2
