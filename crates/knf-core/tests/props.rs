@@ -50,7 +50,7 @@ fn shallow(mut base: Value, over: Value) -> Value {
 
 fn shallow_at(mut base: Value, over: Value, path: &[&str]) -> Value {
     let opts = MergeOptions {
-        shallow: vec![path.iter().map(|k| k.to_string()).collect()],
+        shallow: Some(format!("{}.*", path.join(".")).parse().unwrap()),
         ..MergeOptions::default()
     };
     merge_into(&mut base, over, &opts).expect("non-strict merge cannot fail");

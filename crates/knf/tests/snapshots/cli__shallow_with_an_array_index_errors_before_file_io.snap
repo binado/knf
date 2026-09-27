@@ -1,7 +1,0 @@
----
-source: crates/knf/tests/cli.rs
-expression: err
----
-error: `servers[0]` contains an array index; merge paths take keys only
-help: --shallow takes a KEY.PATH to an object; an index like servers[0]
-      names an array element, and arrays are never merged into

@@ -1,10 +1,10 @@
 //! clap derive structs.
 
 use std::path::PathBuf;
-use std::str::FromStr;
 
-use clap::{ArgAction, Parser};
-use knf::{Format, PathError, PathLeaf, RefPath};
+use clap::Parser;
+use knf::glob::KeyGlobPattern;
+use knf::{Format, PathLeaf};
 
 /// `-f`, as clap sees them.
 ///
@@ -27,30 +27,6 @@ impl From<FormatArg> for Format {
     }
 }
 
-/// Where one `--shallow` applies.
-///
-/// clap's derive cannot group values per occurrence, so a bare `--shallow`
-/// arrives as its `default_missing_value`, the empty string, which is the
-/// root — as the empty key path is in `MergeOptions`. `--shallow=` spells the
-/// same thing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ShallowAt {
-    Root,
-    Path(RefPath),
-}
-
-impl FromStr for ShallowAt {
-    type Err = PathError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.is_empty() {
-            Ok(Self::Root)
-        } else {
-            s.parse().map(Self::Path)
-        }
-    }
-}
-
 #[derive(Parser, Debug)]
 #[command(
     name = "knf",
@@ -65,13 +41,13 @@ format: JSON or TOML. Exactly one document goes to stdout.
   knf base.toml prod.toml
   knf base.json - -f json          # stdin as a layer
   knf defaults.toml --set server.port=8080
-  knf base.toml prod.toml --shallow            # top-level keys only
-  knf base.toml prod.toml --shallow=db         # shallow inside db only
+  knf base.toml prod.toml --shallow '*'        # top-level keys only
+  knf base.toml prod.toml --shallow 'db.*'     # shallow inside db only
 
 Objects merge key by key, recursively. Arrays, scalars and null all replace
 wholesale — null is an ordinary value that overwrites, not a delete
-instruction. This is jq's `a * b`; --shallow gives jq's `a + b`, at the root or
-at a key path."
+instruction. This is jq's `a * b`; --shallow selects key paths whose values
+replace wholesale. Use --shallow '*' for jq's `a + b` at the root."
 )]
 pub struct Cli {
     /// Files to merge as layers; `-` reads stdin
@@ -101,7 +77,7 @@ Invalid patterns are usage errors. Accepts one pattern and conflicts with
 
   knf config/**/*.toml -g 'config/**/prod.toml'"
     )]
-    pub glob: Option<knf::fs::GlobPattern>,
+    pub glob: Option<knf::glob::GlobPattern>,
 
     /// Filter inputs by a case-sensitive glob matching just the filename
     #[arg(
@@ -118,7 +94,7 @@ with --glob.
   knf config/**/*.toml -G '*.prod.toml'
   knf -a services/api/prod.toml -G '{defaults,prod}.toml'"
     )]
-    pub glob_filename: Option<knf::fs::GlobPattern>,
+    pub glob_filename: Option<knf::glob::GlobPattern>,
 
     /// Accumulate same-format layers along one relative target path
     #[arg(
@@ -188,39 +164,35 @@ literally spelled a[0]; only a file can carry either."
     )]
     pub set: Vec<PathLeaf<String>>,
 
-    /// Merge shallowly at the root, or at KEY.PATH; repeatable
+    /// Replace values whose full key paths match one glob
     #[arg(
         long,
-        value_name = "KEY.PATH",
-        num_args = 0..=1,
-        require_equals = true,
-        default_missing_value = "",
-        action = ArgAction::Append,
+        value_name = "PATTERN",
         long_help = "\
-Merge shallowly at the root, or at KEY.PATH. Repeatable.
+Replace values whose full key paths match one glob, without recursing into them.
+The default is deep merge, like jq's `a * b`. Use '*' for root shallow merge
+(jq's `a + b`), 'db' to replace db entirely, or 'db.*' to merge db shallowly.
 
-The default is a deep merge, like jq's `a * b`: objects recurse key by key.
-A shallow merge is jq's `a + b`: a later layer's value for each key replaces
-the earlier one entirely, so keys it omits are dropped.
+Dots separate keys. * matches within one key; ** crosses keys when it occupies
+an entire segment. Supports ?, character classes, braces, and leading ! negation.
+Matching is case-sensitive and byte-based: ? matches one UTF-8 byte.
 
-Bare --shallow merges the root shallowly. --shallow=KEY.PATH merges only the
-object at that path shallowly; everything else stays deep:
+Single-quoted spans are literal, including dots and glob characters. These
+quotes must reach knf: --shallow \"'foo.bar'.*\" selects children of the literal
+key foo.bar. Backslash escapes the next character inside quotes; outside quotes
+it follows glob escaping. Arrays are never traversed; brackets are character
+classes, not array indices. --set and interpolation keep their existing syntax.
 
-  knf base.toml prod.toml --shallow       # [db] is prod's [db], entirely
-  knf base.toml prod.toml --shallow=db    # db.pool is prod's db.pool, entirely;
-                                          # db's other keys and all siblings
-                                          # still merge deep
+Quote patterns to prevent shell expansion. Requires exactly one nonempty
+pattern; cannot be repeated. Invalid patterns are usage errors before file I/O.
+Matching ancestors stop traversal; omitted children of replaced objects drop.
+Strict mode checks kinds at replacement boundaries. Arrays and null replace
+wholesale as usual. Applies to --set layers too.
 
-A path that is missing, or is not an object in both layers, changes nothing.
-The `=` is required, so a bare --shallow never takes a filename as its path;
---shallow= (empty) is the root, like bare --shallow.
-
-Arrays replace wholesale either way; nothing is ever concatenated.
-
-This applies to --set layers too, which are ordinary layers: --shallow
---set db.host=x leaves db with nothing but host."
+  knf base.toml prod.toml --shallow '*'
+  knf base.toml prod.toml --shallow '{db,app}.*'"
     )]
-    pub shallow: Vec<ShallowAt>,
+    pub shallow: Option<KeyGlobPattern>,
 
     /// Format for parsing, inline typing and output; required for stdin
     #[arg(
@@ -296,38 +268,29 @@ passed through as literal text."
 mod tests {
     use super::*;
 
-    /// Each `--shallow` occurrence as its rendered path; `""` is the bare flag.
-    fn shallow(args: &[&str]) -> (Vec<String>, Vec<PathBuf>) {
-        let cli = Cli::try_parse_from(std::iter::once("knf").chain(args.iter().copied()))
-            .expect("argv parses");
-        let paths = cli
-            .shallow
-            .iter()
-            .map(|at| match at {
-                ShallowAt::Root => String::new(),
-                ShallowAt::Path(path) => path.to_string(),
-            })
-            .collect();
-        (paths, cli.files)
-    }
-
     #[test]
-    fn shallow_occurrences_keep_the_bare_flag_as_the_root() {
-        assert_eq!(shallow(&["a.json"]).0, Vec::<String>::new());
-        assert_eq!(shallow(&["a.json", "--shallow"]).0, [""]);
-        assert_eq!(shallow(&["a.json", "--shallow="]).0, [""]);
-        assert_eq!(shallow(&["--shallow=db.pool"]).0, ["db.pool"]);
-        assert_eq!(
-            shallow(&["--shallow", "--shallow=db", "--shallow=x"]).0,
-            ["", "db", "x"]
+    fn shallow_accepts_one_required_glob() {
+        for args in [
+            vec!["--shallow", "{db,app}.*"],
+            vec!["--shallow={db,app}.*"],
+        ] {
+            let cli = Cli::try_parse_from(std::iter::once("knf").chain(args)).unwrap();
+            let glob = cli.shallow.unwrap();
+            assert!(glob.matches_keys(&["db".into(), "pool".into()]));
+            assert!(!glob.matches_keys(&["db".into()]));
+        }
+        assert!(
+            Cli::try_parse_from(["knf", "a.json"])
+                .unwrap()
+                .shallow
+                .is_none()
         );
-    }
-
-    /// Without `require_equals`, a bare `--shallow` would swallow the first file.
-    #[test]
-    fn bare_shallow_before_files_leaves_them_as_files() {
-        let (paths, files) = shallow(&["--shallow", "a.json", "b.json"]);
-        assert_eq!(paths, [""]);
-        assert_eq!(files, [PathBuf::from("a.json"), PathBuf::from("b.json")]);
+        for args in [
+            vec!["knf", "--shallow"],
+            vec!["knf", "--shallow="],
+            vec!["knf", "--shallow=a", "--shallow=b"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
     }
 }

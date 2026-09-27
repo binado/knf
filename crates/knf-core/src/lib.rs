@@ -6,6 +6,7 @@
 
 pub mod format;
 pub mod fs;
+pub mod glob;
 mod interp;
 mod merge;
 mod path;

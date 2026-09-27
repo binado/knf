@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use crate::{Format, STDIN};
 
 /// An invalid glob pattern.
-pub use fast_glob::Error as GlobError;
+pub use crate::glob::{GlobError, GlobPattern};
 
 /// A validated relative JSON or TOML target, with `.` components removed.
 #[derive(Debug, Clone)]
@@ -162,19 +162,6 @@ pub fn accumulate(
     Ok(files)
 }
 
-/// A case-sensitive glob predicate, validated before any filesystem access.
-#[derive(Debug, Clone)]
-pub struct GlobPattern(String);
-
-impl std::str::FromStr for GlobPattern {
-    type Err = GlobError;
-
-    fn from_str(pattern: &str) -> Result<Self, Self::Err> {
-        fast_glob::validate(pattern)?;
-        Ok(Self(pattern.to_owned()))
-    }
-}
-
 impl GlobPattern {
     /// Match the entire supplied spelling, normalizing Windows separators only.
     pub fn matches_path(&self, path: &Path) -> bool {
@@ -184,13 +171,13 @@ impl GlobPattern {
             .iter()
             .map(|&byte| if byte == b'\\' { b'/' } else { byte })
             .collect::<Vec<_>>();
-        fast_glob::glob_match(&self.0, bytes)
+        self.matches(bytes)
     }
 
     /// Match only the filename; paths without one do not match.
     pub fn matches_filename(&self, path: &Path) -> bool {
         path.file_name()
-            .is_some_and(|name| fast_glob::glob_match(&self.0, name.as_encoded_bytes()))
+            .is_some_and(|name| self.matches(name.as_encoded_bytes()))
     }
 }
 

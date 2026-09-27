@@ -10,8 +10,8 @@ struct Case {
     /// JSON literals, merged left to right.
     layers: &'static [&'static str],
     strict: bool,
-    /// Dotted key paths merged shallowly; `""` is the root.
-    shallow: &'static [&'static str],
+    /// A full key-path glob selecting replacement values.
+    shallow: Option<&'static str>,
     expect: Expect,
 }
 
@@ -27,7 +27,7 @@ const fn ok(name: &'static str, layers: &'static [&'static str], doc: &'static s
         name,
         layers,
         strict: false,
-        shallow: &[],
+        shallow: None,
         expect: Doc(doc),
     }
 }
@@ -37,7 +37,7 @@ const fn strict(name: &'static str, layers: &'static [&'static str], doc: &'stat
         name,
         layers,
         strict: true,
-        shallow: &[],
+        shallow: None,
         expect: Doc(doc),
     }
 }
@@ -47,7 +47,7 @@ const fn conflict(name: &'static str, layers: &'static [&'static str], path: &'s
         name,
         layers,
         strict: true,
-        shallow: &[],
+        shallow: None,
         expect: Error(path),
     }
 }
@@ -57,14 +57,14 @@ const fn shallow(name: &'static str, layers: &'static [&'static str], expect: Ex
         name,
         layers,
         strict: false,
-        shallow: &[""],
+        shallow: Some("*"),
         expect,
     }
 }
 
 const fn shallow_at(
     name: &'static str,
-    at: &'static [&'static str],
+    at: &'static str,
     layers: &'static [&'static str],
     expect: Expect,
 ) -> Case {
@@ -72,7 +72,7 @@ const fn shallow_at(
         name,
         layers,
         strict: false,
-        shallow: at,
+        shallow: Some(at),
         expect,
     }
 }
@@ -86,14 +86,14 @@ const fn strict_shallow(
         name,
         layers,
         strict: true,
-        shallow: &[""],
+        shallow: Some("*"),
         expect,
     }
 }
 
 const fn strict_shallow_at(
     name: &'static str,
-    at: &'static [&'static str],
+    at: &'static str,
     layers: &'static [&'static str],
     expect: Expect,
 ) -> Case {
@@ -101,7 +101,7 @@ const fn strict_shallow_at(
         name,
         layers,
         strict: true,
-        shallow: at,
+        shallow: Some(at),
         expect,
     }
 }
@@ -109,14 +109,7 @@ const fn strict_shallow_at(
 fn options(case: &Case) -> MergeOptions {
     MergeOptions {
         strict: case.strict,
-        shallow: case
-            .shallow
-            .iter()
-            .map(|path| match *path {
-                "" => Vec::new(),
-                path => path.split('.').map(String::from).collect(),
-            })
-            .collect(),
+        shallow: case.shallow.map(|pattern| pattern.parse().unwrap()),
     }
 }
 
@@ -191,23 +184,34 @@ const CASES: &[Case] = &[
     // Nothing below the top level is compared: `x` changes kind unseen.
     strict_shallow("strict shallow never looks below the top level", &[r#"{"a":{"x":1}}"#, r#"{"a":{"x":"s"}}"#], Doc(r#"{"a":{"x":"s"}}"#)),
 
-    // --- shallow at a key path: `+` at that object, `*` everywhere else -----
-    // `db`'s children are replaced whole; `db` itself and its siblings merge deep.
-    shallow_at("shallow at a path takes its children whole", &["db"], &[r#"{"db":{"pool":{"min":1,"max":5},"host":"a"}}"#, r#"{"db":{"pool":{"max":9}}}"#], Doc(r#"{"db":{"pool":{"max":9},"host":"a"}}"#)),
-    shallow_at("shallow at a path leaves siblings deep", &["db"], &[r#"{"db":{"x":{"a":1}},"app":{"x":{"a":1}}}"#, r#"{"db":{"x":{"b":2}},"app":{"x":{"b":2}}}"#], Doc(r#"{"db":{"x":{"b":2}},"app":{"x":{"a":1,"b":2}}}"#)),
-    shallow_at("shallow at a nested path", &["a.b"], &[r#"{"a":{"b":{"c":{"x":1}},"d":{"x":1}}}"#, r#"{"a":{"b":{"c":{"y":2}},"d":{"y":2}}}"#], Doc(r#"{"a":{"b":{"c":{"y":2}},"d":{"x":1,"y":2}}}"#)),
-    shallow_at("several shallow paths", &["a", "b"], &[r#"{"a":{"x":{"k":1}},"b":{"x":{"k":1}},"c":{"x":{"k":1}}}"#, r#"{"a":{"x":{"j":2}},"b":{"x":{"j":2}},"c":{"x":{"j":2}}}"#], Doc(r#"{"a":{"x":{"j":2}},"b":{"x":{"j":2}},"c":{"x":{"k":1,"j":2}}}"#)),
-    // The outer path replaces `a`'s children whole, so `a.b` is never reached.
-    shallow_at("an outer shallow path makes an inner one moot", &["a", "a.b"], &[r#"{"a":{"b":{"c":{"x":1}}}}"#, r#"{"a":{"b":{"d":2}}}"#], Doc(r#"{"a":{"b":{"d":2}}}"#)),
-    shallow_at("root and a path together are just root", &["", "a"], &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":2}}"#], Doc(r#"{"a":{"y":2}}"#)),
-    // A path decided by argv may not exist, or name a non-object, in the layers.
-    shallow_at("a missing shallow path is a deep merge", &["nope"], &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":2}}"#], Doc(r#"{"a":{"x":1,"y":2}}"#)),
-    shallow_at("a shallow path at a scalar just replaces it", &["a"], &[r#"{"a":1}"#, r#"{"a":2}"#], Doc(r#"{"a":2}"#)),
-    shallow_at("a shallow path at an array just replaces it", &["a"], &[r#"{"a":[{"x":1}]}"#, r#"{"a":[{"y":2}]}"#], Doc(r#"{"a":[{"y":2}]}"#)),
-    shallow_at("a shallow path shadowed by a scalar", &["a"], &[r#"{"a":{"x":1}}"#, r#"{"a":5}"#, r#"{"a":{"y":2}}"#], Doc(r#"{"a":{"y":2}}"#)),
+    // --- selectors replace matching values; `foo.*` is shallow inside foo --
 
-    strict_shallow_at("strict kind-checks a pathed shallow replace", &["a"], &[r#"{"a":{"b":{"x":1}}}"#, r#"{"a":{"b":5}}"#], Error("a.b")),
-    strict_shallow_at("strict pathed shallow never looks below the path's children", &["a"], &[r#"{"a":{"b":{"x":1}}}"#, r#"{"a":{"b":{"x":"s"}}}"#], Doc(r#"{"a":{"b":{"x":"s"}}}"#)),
+    shallow_at("a selected object replaces entirely", "db", &[r#"{"db":{"pool":{"min":1},"host":"a"},"app":{"x":1}}"#, r#"{"db":{"pool":{"max":9}},"app":{"y":2}}"#], Doc(r#"{"db":{"pool":{"max":9}},"app":{"x":1,"y":2}}"#)),
+    shallow_at("globstar selects cache at every depth", "**.cache", &[r#"{"cache":{"old":1},"a":{"cache":{"old":1},"keep":{"x":1}}}"#, r#"{"cache":{"new":2},"a":{"cache":{"new":2},"keep":{"y":2}}}"#], Doc(r#"{"cache":{"new":2},"a":{"cache":{"new":2},"keep":{"x":1,"y":2}}}"#)),
+    shallow_at("selected ancestor stops descendant traversal", "{a,a.b}", &[r#"{"a":{"b":{"old":1},"keep":1}}"#, r#"{"a":{"b":{"new":2}}}"#], Doc(r#"{"a":{"b":{"new":2}}}"#)),
+    shallow_at("negation can select a parent before its children", "!a.*", &[r#"{"a":{"old":1}}"#, r#"{"a":{"new":2}}"#], Doc(r#"{"a":{"new":2}}"#)),
+    shallow_at("quoted dot and slash keys differ from nested paths", "{'a.b','a/b'}", &[r#"{"a.b":{"old":1},"a/b":{"old":1},"a":{"b":{"old":1}}}"#, r#"{"a.b":{"new":2},"a/b":{"new":2},"a":{"b":{"new":2}}}"#], Doc(r#"{"a.b":{"new":2},"a/b":{"new":2},"a":{"b":{"old":1,"new":2}}}"#)),
+    shallow_at("brackets name a literal key when quoted", "'servers[0]'", &[r#"{"servers[0]":{"old":1},"servers":[{"old":1}]}"#, r#"{"servers[0]":{"new":2},"servers":[{"new":2}]}"#], Doc(r#"{"servers[0]":{"new":2},"servers":[{"new":2}]}"#)),
+    shallow_at("selected null is an ordinary overwrite", "a", &[r#"{"a":{"old":1}}"#, r#"{"a":null}"#], Doc(r#"{"a":null}"#)),
+    shallow_at("selected paths still fold left across scalar shadows", "a.b", &[r#"{"a":{"b":{"old":1},"keep":1}}"#, r#"{"a":5}"#, r#"{"a":{"b":{"new":2}}}"#], Doc(r#"{"a":{"b":{"new":2}}}"#)),
+    strict_shallow_at("strict checks a selected object boundary", "a", &[r#"{"a":{"old":1}}"#, r#"{"a":5}"#], Error("a")),
+    strict_shallow_at("strict never visits selected descendants", "a", &[r#"{"a":{"b":1}}"#, r#"{"a":{"b":"s"}}"#], Doc(r#"{"a":{"b":"s"}}"#)),
+    // `db`'s children are replaced whole; `db` itself and its siblings merge deep.
+    shallow_at("shallow at a path takes its children whole", "db.*", &[r#"{"db":{"pool":{"min":1,"max":5},"host":"a"}}"#, r#"{"db":{"pool":{"max":9}}}"#], Doc(r#"{"db":{"pool":{"max":9},"host":"a"}}"#)),
+    shallow_at("shallow at a path leaves siblings deep", "db.*", &[r#"{"db":{"x":{"a":1}},"app":{"x":{"a":1}}}"#, r#"{"db":{"x":{"b":2}},"app":{"x":{"b":2}}}"#], Doc(r#"{"db":{"x":{"b":2}},"app":{"x":{"a":1,"b":2}}}"#)),
+    shallow_at("shallow at a nested path", "a.b.*", &[r#"{"a":{"b":{"c":{"x":1}},"d":{"x":1}}}"#, r#"{"a":{"b":{"c":{"y":2}},"d":{"y":2}}}"#], Doc(r#"{"a":{"b":{"c":{"y":2}},"d":{"x":1,"y":2}}}"#)),
+    shallow_at("several shallow paths", "{a.*,b.*}", &[r#"{"a":{"x":{"k":1}},"b":{"x":{"k":1}},"c":{"x":{"k":1}}}"#, r#"{"a":{"x":{"j":2}},"b":{"x":{"j":2}},"c":{"x":{"j":2}}}"#], Doc(r#"{"a":{"x":{"j":2}},"b":{"x":{"j":2}},"c":{"x":{"k":1,"j":2}}}"#)),
+    // The outer path replaces `a`'s children whole, so `a.b` is never reached.
+    shallow_at("an outer shallow path makes an inner one moot", "{a.*,a.b.*}", &[r#"{"a":{"b":{"c":{"x":1}}}}"#, r#"{"a":{"b":{"d":2}}}"#], Doc(r#"{"a":{"b":{"d":2}}}"#)),
+    shallow_at("root and a path together are just root", "{*,a.*}", &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":2}}"#], Doc(r#"{"a":{"y":2}}"#)),
+    // A path decided by argv may not exist, or name a non-object, in the layers.
+    shallow_at("a missing shallow path is a deep merge", "nope.*", &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":2}}"#], Doc(r#"{"a":{"x":1,"y":2}}"#)),
+    shallow_at("a shallow path at a scalar just replaces it", "a.*", &[r#"{"a":1}"#, r#"{"a":2}"#], Doc(r#"{"a":2}"#)),
+    shallow_at("a shallow path at an array just replaces it", "a.*", &[r#"{"a":[{"x":1}]}"#, r#"{"a":[{"y":2}]}"#], Doc(r#"{"a":[{"y":2}]}"#)),
+    shallow_at("a shallow path shadowed by a scalar", "a.*", &[r#"{"a":{"x":1}}"#, r#"{"a":5}"#, r#"{"a":{"y":2}}"#], Doc(r#"{"a":{"y":2}}"#)),
+
+    strict_shallow_at("strict kind-checks a pathed shallow replace", "a.*", &[r#"{"a":{"b":{"x":1}}}"#, r#"{"a":{"b":5}}"#], Error("a.b")),
+    strict_shallow_at("strict pathed shallow never looks below the path's children", "a.*", &[r#"{"a":{"b":{"x":1}}}"#, r#"{"a":{"b":{"x":"s"}}}"#], Doc(r#"{"a":{"b":{"x":"s"}}}"#)),
 ];
 
 #[test]

@@ -14,7 +14,8 @@ use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 #[path = "../../knf/src/main.rs"]
 mod cli_bin;
 
-use knf::fs::{AccumulateError, AccumulateTarget, GlobPattern};
+use knf::fs::{AccumulateError, AccumulateTarget};
+use knf::glob::{GlobError, GlobPattern};
 use knf::{
     ConfigFormat, Format, InterpError, LoadError, MergeError, MergeOptions, ProcessEnv, Seg,
     interpolate as interpolate_value, merge, render_path, resolve_format,
@@ -74,7 +75,7 @@ fn accumulate(
 fn filter_paths(files: Vec<PathBuf>, pattern: &str, filename_only: bool) -> PyResult<Vec<PathBuf>> {
     let pattern: GlobPattern = pattern
         .parse()
-        .map_err(|err: knf::fs::GlobError| PyValueError::new_err(err.to_string()))?;
+        .map_err(|err: GlobError| PyValueError::new_err(err.to_string()))?;
     Ok(knf::fs::filter_paths(&files, &pattern, filename_only))
 }
 

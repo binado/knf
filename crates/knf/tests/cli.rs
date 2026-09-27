@@ -163,8 +163,8 @@ fn accumulate_uses_the_existing_merge_and_interpolation_pipeline() {
     ]);
     for flags in [
         vec!["--strict"],
-        vec!["--shallow"],
-        vec!["--shallow=db"],
+        vec!["--shallow=*"],
+        vec!["--shallow=db.*"],
         vec!["--set", "db.port=8080"],
         vec!["--interpolate", "--compact"],
     ] {
@@ -831,12 +831,15 @@ fn by_default_arrays_replace_and_tables_merge() {
     assert!(out.contains("port = 5432"), "{out}");
 }
 
-/// `--shallow` is jq's `+`: the overlay's table is taken whole and `port` is
+/// `--shallow '*'` is jq's `+`: the overlay's table is taken whole and `port` is
 /// gone. Compare the native TOML output with the expected value.
 #[test]
 fn shallow_takes_top_level_tables_whole() {
     let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
-    let out = run(&dir, &["base.toml", "prod.toml", "--shallow", "--compact"]);
+    let out = run(
+        &dir,
+        &["base.toml", "prod.toml", "--shallow=*", "--compact"],
+    );
     assert_toml_eq_json(
         &out,
         "{\"plugins\":[\"metrics\"],\"db\":{\"host\":\"prod\"}}\n",
@@ -848,7 +851,7 @@ fn shallow_takes_top_level_tables_whole() {
 fn shallow_single_layer_is_identity() {
     let dir = tree(&[("base.toml", BASE)]);
     assert_eq!(
-        run(&dir, &["base.toml", "--shallow"]),
+        run(&dir, &["base.toml", "--shallow=*"]),
         run(&dir, &["base.toml"])
     );
 }
@@ -859,7 +862,7 @@ fn shallow_single_layer_is_identity() {
 #[test]
 fn shallow_applies_to_set_layers_too() {
     let dir = tree(&[("base.toml", BASE)]);
-    let out = run(&dir, &["base.toml", "--shallow", "--set", "db.host=x"]);
+    let out = run(&dir, &["base.toml", "--shallow=*", "--set", "db.host=x"]);
     assert!(out.contains("host = \"x\""), "{out}");
     assert!(
         !out.contains("port"),
@@ -879,14 +882,14 @@ max = 5
 ";
 const NESTED_PROD: &str = "[db.pool]\nmax = 9\n[app.pool]\nmax = 9\n";
 
-/// `--shallow=db` is `+` at `db` only: `db.pool` is prod's whole, `db.host`
+/// `--shallow 'db.*'` is `+` at `db` only: `db.pool` is prod's whole, `db.host`
 /// survives, and `app` is still a deep merge.
 #[test]
 fn shallow_at_a_path_keeps_everything_else_deep() {
     let dir = tree(&[("base.toml", NESTED_BASE), ("prod.toml", NESTED_PROD)]);
     let out = run(
         &dir,
-        &["base.toml", "prod.toml", "--shallow=db", "--compact"],
+        &["base.toml", "prod.toml", "--shallow=db.*", "--compact"],
     );
     assert_toml_eq_json(
         &out,
@@ -895,15 +898,14 @@ fn shallow_at_a_path_keeps_everything_else_deep() {
 }
 
 #[test]
-fn shallow_paths_are_repeatable() {
+fn shallow_braces_select_multiple_objects() {
     let dir = tree(&[("base.toml", NESTED_BASE), ("prod.toml", NESTED_PROD)]);
     let out = run(
         &dir,
         &[
             "base.toml",
             "prod.toml",
-            "--shallow=db",
-            "--shallow=app",
+            "--shallow={db,app}.*",
             "--compact",
         ],
     );
@@ -913,25 +915,117 @@ fn shallow_paths_are_repeatable() {
     );
 }
 
-/// The `=` is required, so a bare `--shallow` ahead of the files cannot take
-/// the first one as its path.
 #[test]
-fn bare_shallow_before_files_still_reads_them() {
-    let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
-    assert_eq!(
-        run(&dir, &["--shallow", "base.toml", "prod.toml"]),
-        run(&dir, &["base.toml", "prod.toml", "--shallow"])
+fn shallow_exact_object_selector_drops_omitted_children() {
+    let dir = tree(&[("base.toml", NESTED_BASE), ("prod.toml", NESTED_PROD)]);
+    let out = run(&dir, &["base.toml", "prod.toml", "--shallow", "db"]);
+    assert_toml_eq_json(
+        &out,
+        r#"{"db":{"pool":{"max":9}},"app":{"pool":{"min":1,"max":9}}}"#,
     );
 }
 
-/// `--shallow=` is the empty path, which is the root, like the bare flag.
 #[test]
-fn empty_shallow_path_is_the_root() {
+fn shallow_quoted_keys_and_nested_paths_are_distinct_in_both_formats() {
+    let base = serde_json::json!({
+        "foo.bar": {"old": 1},
+        "foo/bar": {"old": 1},
+        "foo\\bar": {"old": 1},
+        "servers[0]": {"old": 1},
+        "*": {"old": 1},
+        "": {"old": 1},
+        "foo": {"bar": {"old": 1}},
+    });
+    let over = serde_json::json!({
+        "foo.bar": {"new": 2},
+        "foo/bar": {"new": 2},
+        "foo\\bar": {"new": 2},
+        "servers[0]": {"new": 2},
+        "*": {"new": 2},
+        "": {"new": 2},
+        "foo": {"bar": {"new": 2}},
+    });
+    let expected = serde_json::json!({
+        "foo.bar": {"new": 2},
+        "foo/bar": {"new": 2},
+        "foo\\bar": {"new": 2},
+        "servers[0]": {"new": 2},
+        "*": {"new": 2},
+        "": {"new": 2},
+        "foo": {"bar": {"old": 1, "new": 2}},
+    });
+    let dir = tree(&[
+        ("base.json", &base.to_string()),
+        ("over.json", &over.to_string()),
+        (
+            "base.toml",
+            &toml::to_string(&toml::Value::try_from(&base).unwrap()).unwrap(),
+        ),
+        (
+            "over.toml",
+            &toml::to_string(&toml::Value::try_from(&over).unwrap()).unwrap(),
+        ),
+    ]);
+    let pattern = r"{'foo.bar','foo/bar','foo\\bar','servers[0]','*',''}";
+    for (base_file, over_file) in [("base.json", "over.json"), ("base.toml", "over.toml")] {
+        let out = run(&dir, &[base_file, over_file, "--shallow", pattern]);
+        if base_file.ends_with("json") {
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&out).unwrap(),
+                expected
+            );
+        } else {
+            assert_toml_eq_json(&out, &expected.to_string());
+        }
+    }
+}
+
+#[test]
+fn shallow_glob_set_layers_and_interpolation_compose() {
+    let dir = tree(&[("base.toml", NESTED_BASE)]);
+    let out = run(
+        &dir,
+        &[
+            "base.toml",
+            "--shallow",
+            "db.*",
+            "--set",
+            "db.pool={max=9}",
+            "--set",
+            "copy=${db.pool}",
+            "--interpolate",
+        ],
+    );
+    assert_toml_eq_json(
+        &out,
+        r#"{"db":{"host":"local","pool":{"max":9}},"app":{"pool":{"min":1,"max":5}},"copy":{"max":9}}"#,
+    );
+}
+
+#[test]
+fn shallow_accepts_a_separate_pattern_before_files() {
     let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
     assert_eq!(
-        run(&dir, &["base.toml", "prod.toml", "--shallow="]),
-        run(&dir, &["base.toml", "prod.toml", "--shallow"])
+        run(&dir, &["--shallow", "*", "base.toml", "prod.toml"]),
+        run(&dir, &["base.toml", "prod.toml", "--shallow=*"])
     );
+}
+
+#[test]
+fn shallow_requires_one_nonempty_valid_pattern_before_file_io() {
+    let dir = tree(&[]);
+    for args in [
+        vec!["missing.toml", "--shallow"],
+        vec!["missing.toml", "--shallow="],
+        vec!["missing.toml", "--shallow=a", "--shallow=b"],
+        vec!["missing.toml", "--shallow='unclosed"],
+        vec!["missing.toml", "--shallow={a,b"],
+    ] {
+        let output = knf(&dir).args(&args).output().unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let err = String::from_utf8(output.stderr).unwrap();
+        assert!(!err.contains("No such file"), "{err}");
+    }
 }
 
 /// A string fallback can be overwritten by a later typed inline layer.
@@ -1354,16 +1448,16 @@ fn set_with_an_array_index_errors_before_file_io() {
     insta::assert_snapshot!(err);
 }
 
-/// Like `--set`, an index in a `--shallow` path is an argv mistake, reported
-/// before any file is read.
 #[test]
-fn shallow_with_an_array_index_errors_before_file_io() {
+fn shallow_invalid_glob_errors_before_file_io() {
     let dir = tree(&[]);
-    let err = run_err(&dir, &["missing.toml", "--shallow=servers[0]"]);
-    assert!(
-        !err.contains("missing.toml"),
-        "the --shallow path should be rejected before the file is read:\n{err}"
-    );
+    let output = knf(&dir)
+        .args(["missing.toml", "--shallow=servers[0"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let err = String::from_utf8(output.stderr).unwrap();
+    assert!(!err.contains("No such file"), "{err}");
     insta::assert_snapshot!(err);
 }
 

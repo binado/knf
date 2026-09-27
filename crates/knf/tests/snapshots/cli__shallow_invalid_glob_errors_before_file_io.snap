@@ -1,0 +1,8 @@
+---
+source: crates/knf/tests/cli.rs
+assertion_line: 1374
+expression: err
+---
+error: invalid value 'servers[0' for '--shallow <PATTERN>': unclosed character class at byte 7; missing ']' (to match a literal '[', escape it as '\[' or '[[]')
+
+For more information, try '--help'.

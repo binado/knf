@@ -1,5 +1,6 @@
 //! Generic layered merge over native configuration values.
 
+use crate::glob::KeyGlobPattern;
 use crate::path::render_keys;
 use crate::{ConfigObject, ConfigValue};
 
@@ -11,30 +12,29 @@ use crate::{ConfigObject, ConfigValue};
 pub struct MergeOptions {
     /// Error when a layer changes the kind of an existing key.
     pub strict: bool,
-    /// Key paths whose objects merge shallowly: each child is replaced
-    /// wholesale instead of recursed into — jq's `a + b` rather than `a * b`,
-    /// at that path. The empty path is the root. A path that is missing, or
-    /// is not an object on both sides, changes nothing.
-    pub shallow: Vec<Vec<String>>,
+    /// Full key paths selected for wholesale replacement, rather than recursion.
+    /// `None` is deep merge; `*` replaces top-level values; `foo.*` replaces
+    /// the immediate children of `foo`. Matching ancestors stop traversal.
+    pub shallow: Option<KeyGlobPattern>,
 }
 
 impl MergeOptions {
     /// The default: deep merge, last layer wins, no type checking.
     pub const LAST_WINS: Self = Self {
         strict: false,
-        shallow: Vec::new(),
+        shallow: None,
     };
     /// Error when a layer changes the kind of an existing key.
     pub const STRICT: Self = Self {
         strict: true,
-        shallow: Vec::new(),
+        shallow: None,
     };
 
     /// Top-level keys only: a later layer's value replaces the earlier one whole.
     pub fn shallow_root() -> Self {
         Self {
             strict: false,
-            shallow: vec![Vec::new()],
+            shallow: Some("*".parse().expect("valid root selector")),
         }
     }
 }
@@ -71,9 +71,9 @@ impl MergeError {
 /// is an ordinary value that overwrites rather than a delete instruction. This
 /// is jq's `a * b`.
 ///
-/// At each path in [`MergeOptions::shallow`] the object is merged one level
-/// only: every colliding child is replaced whole, objects included — jq's
-/// `a + b`. The empty path makes the whole merge shallow.
+/// Colliding values selected by [`MergeOptions::shallow`] replace wholesale,
+/// without visiting descendants. `*` makes the root merge shallow (jq's
+/// `a + b`); `foo.*` makes only the object at `foo` shallow.
 pub fn merge_into<V: ConfigValue>(
     base: &mut V,
     over: V,
@@ -113,8 +113,7 @@ pub fn merge<V: ConfigValue>(
 /// The recursive worker. `path` is a breadcrumb threaded by push/pop so that a
 /// conflict can report where it happened without every frame allocating.
 ///
-/// Shallow paths need no extra state: the breadcrumb already names the object
-/// being merged, so it is compared against them once per object.
+/// The breadcrumb names each colliding value before matching the selector.
 fn merge_at<V: ConfigValue>(
     base: &mut V,
     over: V,
@@ -124,11 +123,14 @@ fn merge_at<V: ConfigValue>(
     if let Some(base_map) = base.as_object_mut() {
         match over.into_object() {
             Ok(over_map) => {
-                let shallow = opts.shallow.iter().any(|p| p == path);
                 for (k, v) in over_map {
                     if let Some(slot) = base_map.get_mut(&k) {
                         path.push(k);
-                        if shallow {
+                        if opts
+                            .shallow
+                            .as_ref()
+                            .is_some_and(|glob| glob.matches_keys(path))
+                        {
                             replace(slot, v, opts, path)?;
                         } else {
                             merge_at(slot, v, opts, path)?;

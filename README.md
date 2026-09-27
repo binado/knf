@@ -128,10 +128,12 @@ involved. In-memory overlays are native objects/tables appended to the flat
 layer list. `PathLeaf<String>::into_layer::<V>()` builds an inline layer in the
 selected native format.
 
-`MergeOptions` sets strict mode and the key paths merged shallowly (the empty
-path is the root; `MergeOptions::shallow_root()` is `--shallow`). All numbers
-share one strict kind; TOML datetimes are distinct from strings. Arrays replace
-wholesale; JSON null overwrites as an ordinary value.
+`MergeOptions` sets strict mode and an optional `knf::glob::KeyGlobPattern`
+selecting full key paths for wholesale replacement. For example,
+`MergeOptions { shallow: Some("db.*".parse()?), ..Default::default() }` merges
+inside `db` shallowly. `MergeOptions::shallow_root()` uses `*`, equivalent to
+`--shallow '*'`. All numbers share one strict kind; TOML datetimes are distinct
+from strings. Arrays replace wholesale; JSON null overwrites as an ordinary value.
 
 `load_layers` infers one format from all extensions; pass `Some(Format::…)` to
 override parsing for every input (required for stdin `-`). Empty input returns
@@ -328,32 +330,74 @@ Writable paths contain keys only, never array indices.
 
 ### Shallow merge
 
-The default is a deep merge. `--shallow` merges top-level keys only: a later
-layer's value replaces the earlier one whole, so keys it omits are dropped.
-These are jq's two object operators:
+The default is a deep merge. `--shallow PATTERN` selects full key paths whose
+values replace wholesale, without recursing into their descendants. Use `*`
+to replace top-level values, giving jq's shallow `a + b`:
 
 | knf | jq | `{"db":{"host":"a","port":1}}` then `{"db":{"host":"b"}}` |
 | --- | --- | --- |
 | `knf a.json b.json` | `a * b` | `{"db":{"host":"b","port":1}}` |
-| `knf a.json b.json --shallow` | `a + b` | `{"db":{"host":"b"}}` |
+| `knf a.json b.json --shallow '*'` | `a + b` | `{"db":{"host":"b"}}` |
 
-`--shallow=KEY.PATH` applies `+` at that object only, and `*` everywhere else:
-the object's children are replaced whole, while the object itself and its
-siblings still merge deep.
+`foo` replaces the entire value at `foo`, dropping children omitted by the later
+layer. `foo.*` replaces its immediate children, preserving children omitted by
+the later layer and keeping siblings deep:
 
 | knf | `{"db":{"pool":{"min":1,"max":5},"host":"a"},"app":{"x":1}}` then `{"db":{"pool":{"max":9}},"app":{"y":2}}` |
 | --- | --- |
-| `knf a.json b.json --shallow=db` | `{"db":{"pool":{"max":9},"host":"a"},"app":{"x":1,"y":2}}` |
+| `knf a.json b.json --shallow 'db'` | `{"db":{"pool":{"max":9}},"app":{"x":1,"y":2}}` |
+| `knf a.json b.json --shallow 'db.*'` | `{"db":{"pool":{"max":9},"host":"a"},"app":{"x":1,"y":2}}` |
 
-The flag is repeatable (`--shallow=db --shallow=cache`), and bare `--shallow`
-(or `--shallow=`) is the root. The `=` is required, so `knf --shallow a.json
-b.json` still reads both files. A path that is missing, or is not an object in
-both layers, changes nothing; an outer path makes any path below it moot. Paths
-use the `--set` key syntax, so an array index such as `servers[0]` is an error.
+The flag accepts exactly one nonempty pattern and cannot be repeated. Both
+`--shallow PATTERN` and `--shallow=PATTERN` work. Bare `--shallow`, `--shallow=`,
+and malformed patterns are usage errors (exit code 2), before discovery or
+file I/O. Quote patterns to prevent shell expansion.
 
-Arrays replace wholesale in both, exactly as in jq; nothing is ever
-concatenated. `--set` layers are ordinary layers, so `--shallow --set
-db.host=x` leaves `db` with nothing but `host`.
+Matching is case-sensitive against the **full key path**. Dots separate keys;
+`*` stays within one key and `**` crosses keys when it occupies a complete
+segment. `?` matches one UTF-8 byte, not one Unicode character. Character
+classes, ranges, brace alternatives, and leading `!` negation use the same
+syntax as [input globs](#filtering-inputs-with-globs):
+
+```bash
+knf a.json b.json --shallow '{db,cache}.*' # shallow inside both objects
+knf a.json b.json --shallow '**.cache'    # replace cache at any depth
+```
+
+Single-quoted spans are literal, including dots and glob metacharacters. The
+inner quotes must reach knf; shell quoting alone does not make a key literal:
+
+```bash
+knf a.json b.json --shallow "foo.bar"     # nested foo -> bar
+knf a.json b.json --shallow "'foo.bar'"   # one literal key foo.bar
+knf a.json b.json --shallow "'foo.bar'.*" # children of that literal key
+knf a.json b.json --shallow "'*'"         # one literal key named *
+```
+
+Inside quoted spans, backslash escapes the next character literally, including
+single quotes and backslashes. Outside quotes, glob escaping applies (including
+`\n`, `\r`, `\t`, and `\b`); `foo\.bar` also selects the literal key `foo.bar`.
+Dots inside character classes are literal. Slashes are always literal key
+characters, so `foo/bar` selects one key and `foo.bar` selects two segments.
+Literal slash and backslash keys match consistently across platforms.
+`''` selects an empty key. Quoted spans may occur inside brace alternatives or
+next to unquoted pattern text. Double quotes have no special meaning to knf.
+
+A matching ancestor stops traversal, making selectors below it moot. Negation
+applies to each visited full path: `!foo.*` matches `foo` itself, replacing it
+whole before its children are visited. A missing path changes nothing. Arrays
+are never traversed; brackets are glob character classes, not array indices.
+Use a quoted segment such as `'servers[0]'` to select a literal bracketed key.
+`--set` and interpolation references retain their existing path grammar.
+
+Strict mode checks kinds at replacement boundaries without inspecting replaced
+descendants. Arrays replace wholesale either way; null overwrites normally.
+`--set` layers are ordinary layers, so `--shallow '*' --set db.host=x` leaves
+`db` with nothing but `host`. Interpolation still runs once after the merge.
+
+Migration from the previous path-list API: bare or empty `--shallow` becomes
+`--shallow '*'`; old `--shallow=foo` becomes `--shallow 'foo.*'`; multiple paths
+such as `--shallow=foo --shallow=bar` become `--shallow '{foo,bar}.*'`.
 
 ### Variable and environment references
 
