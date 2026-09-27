@@ -3,7 +3,7 @@
 Guidance for AI agents working in this repo:
 
 - Commits must follow Conventional Commits.
-- Keep `README.md` in sync with any changes to merge behaviour, `--set` typing, interpolation, format selection, or error text.
+- Keep `README.md` examples and tables in sync with CLI and Python API changes. Keep the README and comments concise: detail belongs in `--help`, rustdoc and tests.
 
 ## Commands
 

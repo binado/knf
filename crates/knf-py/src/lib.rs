@@ -1,9 +1,5 @@
-//! Native Python loading, file discovery and path filtering from `knf-core`.
-//!
-//! A frontend, sibling to `knf-cli`: that one is argv and stderr, this one is
-//! arguments and exceptions. Published to PyPI as `pyknf`. The `knf` command
-//! installed by that wheel calls `cli_bin::main_from`, the same source
-//! `knf-cli` compiles, so there is one command line and no second package.
+//! Python bindings for `knf-core`, published as `pyknf`. The wheel's `knf`
+//! command runs the same `main_from` as `knf-cli`.
 
 use anyhow::Context;
 use std::io;
@@ -119,11 +115,8 @@ fn discovery_os_error(py: Python<'_>, path: Option<&Path>, source: io::Error) ->
 
 /// Load and merge homogeneous JSON or TOML files into one `dict`.
 ///
-/// `files` are merged left to right. Objects merge key by key; arrays, scalars
-/// and `None` replace wholesale. Interpolation, when requested, runs once
-/// after all layers have been merged.
-/// `shallow` selects full key paths for wholesale replacement using the CLI's
-/// key-path glob syntax; `None` keeps the default deep merge.
+/// `files` merge left to right. `shallow` is a key-path glob whose matches
+/// replace wholesale. Interpolation runs once after merging.
 #[pyfunction]
 #[pyo3(signature = (files, *, interpolate = false, shallow = None))]
 fn load<'py>(
@@ -198,10 +191,8 @@ enum Failure {
     Interpolate(InterpError),
 }
 
-/// The exception Python's own I/O and parsers would raise for the same
-/// failure: `OSError` subclasses the way `open()` raises them, `ValueError`
-/// for a path knf cannot read as a layer, and [`ParseError`] — a `ValueError`,
-/// like `json.JSONDecodeError` — for a file that is not a valid document.
+/// Maps a load failure to the exception Python itself would raise: an
+/// `OSError` subclass, `ValueError`, or [`ParseError`].
 fn file_error(py: Python<'_>, path: &Path, err: anyhow::Error) -> PyErr {
     if let Some(load) = err.downcast_ref::<LoadError>() {
         return match load {
@@ -228,12 +219,9 @@ fn file_error(py: Python<'_>, path: &Path, err: anyhow::Error) -> PyErr {
     ParseError::new_err(format!("{err:#}"))
 }
 
-/// `E(errno, strerror, filename)`, which is how `open()` raises, so `.errno`,
-/// `.strerror` and `.filename` are all set.
+/// Builds `E(errno, strerror, filename)` as `open()` does.
 ///
-/// By [`io::ErrorKind`] rather than [`io::Error::raw_os_error`]: on Windows the
-/// raw code is not an errno, and passing it through would pick the wrong
-/// `OSError` subclass. The errno comes from Python's own `errno` module.
+/// Maps by [`io::ErrorKind`] because Windows raw OS codes are not errnos.
 fn os_error<E: PyTypeInfo>(
     py: Python<'_>,
     errno_name: &str,
@@ -253,9 +241,7 @@ fn os_error<E: PyTypeInfo>(
     build().unwrap_or_else(|_| PyOSError::new_err(format!("{err:#}")))
 }
 
-/// Run the `knf` command line and exit. The installed script is a thin wrapper
-/// around this. Its process was started by Python, so the arguments are
-/// `sys.argv`, not `std::env::args`.
+/// Runs the `knf` command line with `sys.argv` and exits.
 #[pyfunction]
 fn cli(py: Python<'_>) -> PyResult<()> {
     let sys_argv = py.import("sys")?.getattr("argv")?;

@@ -9,9 +9,6 @@ use crate::ConfigValue;
 use anyhow::{Context, bail};
 
 /// The two supported native formats. A pipeline selects one for every stage.
-///
-/// No `clap::ValueEnum` here — this crate has no clap. `knf-cli` parses `-f`
-/// into a local enum and converts, which the orphan rule would force anyway.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     Json,
@@ -47,10 +44,7 @@ impl fmt::Display for Format {
     }
 }
 
-/// Which input a parse error came from. Names an input being *read*, so there
-/// is no variant for `-c`: a bad `-c` expression is rejected by
-/// [`PathLeaf`](crate::PathLeaf) during argument parsing, long before anything
-/// reaches here.
+/// Which input a parse error came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceName {
     File(PathBuf),
@@ -74,9 +68,7 @@ mod private {
 
 /// Parsing and emission for the two supported native formats.
 ///
-/// Sealed to JSON and TOML; structural algorithms use the open
-/// [`ConfigValue`] interface. Inline values and whole-string environment
-/// references always share this trait's typing rule.
+/// Sealed to JSON and TOML; structural algorithms use [`ConfigValue`].
 pub trait ConfigFormat: ConfigValue + private::Sealed {
     /// The format represented by this native value.
     const FORMAT: Format;

@@ -1,5 +1,4 @@
-//! Resolution behaviour, over a stub [`Env`] so nothing here reads the ambient
-//! environment.
+//! Resolution tests over a stub [`Env`].
 
 use std::collections::HashMap;
 
@@ -65,7 +64,7 @@ macro_rules! common_tests {
 
         // --- positions ------------------------------------------------------------
 
-        /// The whole-string rule: the reference *is* the value, so it keeps its type.
+        /// A whole-string reference keeps its type.
         #[test]
         fn a_whole_string_reference_takes_the_referents_type() {
             let doc = obj(vec![("p", n(8080)), ("port", s("${p}"))]);
@@ -181,8 +180,7 @@ macro_rules! common_tests {
             );
         }
 
-        /// Declaration order must not matter: a forward reference resolves the same as
-        /// a backward one.
+        /// Forward and backward references resolve the same.
         #[test]
         fn a_forward_reference_resolves_like_a_backward_one() {
             let forward = interp(obj(vec![("a", s("${b}")), ("b", s("v"))])).unwrap();
@@ -205,8 +203,7 @@ macro_rules! common_tests {
             );
         }
 
-        /// A reference back into the container currently being resolved closes a cycle
-        /// through the container, and the chain says so.
+        /// A reference into its own enclosing container is a cycle.
         #[test]
         fn a_cycle_through_a_container_names_every_hop() {
             let doc = obj(vec![("a", obj(vec![("b", s("${a}"))]))]);
@@ -215,7 +212,7 @@ macro_rules! common_tests {
 
         // --- containers -----------------------------------------------------------
 
-        /// Whole-string: allowed, and the alias is the *resolved* subtree.
+        /// A whole-string container reference aliases the resolved subtree.
         #[test]
         fn a_whole_string_container_reference_aliases_a_resolved_subtree() {
             let doc = obj(vec![
@@ -249,8 +246,7 @@ macro_rules! common_tests {
             );
         }
 
-        /// A null referent is fine as a whole string — it becomes an ordinary null, and
-        /// meets the existing TOML-null error (and its existing escape) at emit.
+        /// A whole-string null reference yields null.
 
         // --- environment ----------------------------------------------------------
 
@@ -269,8 +265,7 @@ macro_rules! common_tests {
             );
         }
 
-        /// The raw form is spliced verbatim: parsing it and printing it back is the one
-        /// thing guaranteed to be able to corrupt it.
+        /// Embedded environment values are spliced verbatim.
         #[test]
         fn an_embedded_variable_splices_its_raw_text() {
             let doc = obj(vec![("v", s("[${env:V}]"))]);
@@ -280,8 +275,7 @@ macro_rules! common_tests {
             );
         }
 
-        /// Environment values are terminal — a variable holding `${x}` is text, not a
-        /// second round of resolution.
+        /// Environment values are never re-scanned.
         #[test]
         fn environment_values_are_not_rescanned() {
             let doc = obj(vec![("x", s("secret")), ("v", s("${env:V}"))]);
@@ -302,16 +296,14 @@ macro_rules! common_tests {
             );
         }
 
-        /// `env:` is a prefix match, not a split on the first `:`, so a key containing a
-        /// colon is an ordinary key.
+        /// `env:` is a prefix match; other colons are ordinary key characters.
         #[test]
         fn a_colon_in_a_key_is_not_a_namespace() {
             let doc = obj(vec![("a:b", n(1)), ("v", s("${a:b}"))]);
             assert_eq!(interp(doc).unwrap(), obj(vec![("a:b", n(1)), ("v", n(1))]));
         }
 
-        /// The same rule keeps a dotted path with a colon in it from reading as a
-        /// namespace nobody named.
+        /// A dotted path containing a colon is not a namespace.
         #[test]
         fn a_dotted_path_with_a_colon_reports_as_a_key() {
             let doc = obj(vec![("v", s("${db.host:port}"))]);
@@ -354,7 +346,7 @@ macro_rules! common_tests {
             );
         }
 
-        /// Every kind in one run, so a user fixing a config learns everything at once.
+        /// All problem kinds are reported in one run.
         #[test]
         fn every_kind_of_problem_is_reported_in_one_run() {
             let doc = obj(vec![
@@ -374,8 +366,7 @@ macro_rules! common_tests {
             );
         }
 
-        /// A scanner-level syntax error must not hide valid references elsewhere in
-        /// the same string: the collection contract is per document, not per leaf.
+        /// A syntax error does not hide other references in the same string.
         #[test]
         fn problems_in_one_string_are_collected() {
             let doc = obj(vec![("value", s("${before} ${} ${after}"))]);
@@ -389,9 +380,7 @@ macro_rules! common_tests {
             );
         }
 
-        /// Several references to one broken key report once per *site*, not once per
-        /// visit: memoization is what keeps a widely-referenced value from flooding the
-        /// report.
+        /// A broken key referenced many times is reported once per site.
         #[test]
         fn a_problem_is_reported_once_per_site() {
             let doc = obj(vec![
@@ -402,8 +391,7 @@ macro_rules! common_tests {
             assert_eq!(err(doc), "unresolved reference\n  --> a: `gone`");
         }
 
-        /// `${env:}` is malformed, not a lookup of the empty name — so an environment
-        /// that somehow holds one cannot make it resolve.
+        /// `${env:}` is malformed, not a lookup of the empty name.
         #[test]
         fn an_empty_variable_name_is_syntax_not_a_lookup() {
             assert_eq!(
@@ -414,7 +402,7 @@ macro_rules! common_tests {
 
         // --- shape ----------------------------------------------------------------
 
-        /// References may live inside arrays…
+        /// References may live inside arrays.
         #[test]
         fn references_resolve_inside_arrays() {
             let doc = obj(vec![
@@ -444,8 +432,7 @@ macro_rules! common_tests {
 
         // --- indexed references ---------------------------------------------------
 
-        /// …and may point into one. A whole-string reference to an element types like
-        /// the element, exactly as a key reference types like the value it names.
+        /// A whole-string reference to an element keeps the element's type.
         #[test]
         fn a_whole_string_indexed_reference_takes_the_elements_type() {
             let doc = obj(vec![
@@ -475,8 +462,7 @@ macro_rules! common_tests {
             assert_eq!(map["url"], s("http://a:1"));
         }
 
-        /// Whole-string, an element that is a container aliases the *resolved*
-        /// subtree — the same rule as for a plain key reference.
+        /// A whole-string container element aliases the resolved subtree.
         #[test]
         fn a_whole_string_element_reference_aliases_a_resolved_subtree() {
             let doc = obj(vec![
@@ -493,8 +479,7 @@ macro_rules! common_tests {
             assert_eq!(map["primary"], expected);
         }
 
-        /// Embedded, an element that is a container has no spelling — the same rule
-        /// as for a plain key reference.
+        /// An embedded container element is an error.
         #[test]
         fn an_embedded_element_container_is_rejected() {
             let doc = obj(vec![
@@ -507,8 +492,7 @@ macro_rules! common_tests {
             );
         }
 
-        /// An element that is a datetime copies whole-string — the same copy rule as
-        /// for a key, so the datetime never reaches an emitter as fabricated text.
+        /// A whole-string datetime element stays a datetime.
 
         #[test]
         fn an_out_of_range_index_is_unresolved() {
@@ -539,9 +523,7 @@ macro_rules! common_tests {
             assert_eq!(err(doc), "reference cycle: `a` -> `b[0]` -> `a`");
         }
 
-        /// A key literally spelled `a[0]` can exist — only a file can carry one,
-        /// since `-c` rejects indices — and the reference grammar reads brackets
-        /// as the index, so `${a[0]}` resolves into the array rather than the key.
+        /// `${a[0]}` indexes the array, never a key literally named `a[0]`.
         #[test]
         fn a_bracket_body_reads_as_an_index_not_a_weird_key() {
             let doc = obj(vec![

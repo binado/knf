@@ -1,20 +1,8 @@
-//! Splitting a string into literal text and reference bodies.
-//!
-//! Flat and non-recursive by design. This runs on [`Value::String`] leaves
-//! *after* the document has been parsed, so it never meets a TOML literal-vs-basic
-//! string, a multi-line string, or a JSON `\u` escape — those were resolved by
-//! the format parser long before the merge, let alone this pass.
-//!
-//! [`Value::String`]: crate::Value::String
+//! Splitting a parsed string value into literal text and reference bodies.
 
 use std::fmt;
 
-/// One span of a scanned string.
-///
-/// A `Ref` body is deliberately left unparsed: the `env:` prefix and the
-/// [`RefPath`](crate::RefPath) split are resolution's business, not the
-/// scanner's, and keeping them apart is what makes this a `find` loop rather
-/// than a grammar.
+/// One span of a scanned string. `Ref` bodies are left unparsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Piece<'a> {
     Literal(&'a str),
@@ -23,9 +11,6 @@ pub enum Piece<'a> {
 }
 
 /// A malformed reference.
-///
-/// Carries the offending text or offset and nothing else — no key path (the
-/// caller knows where it was reading) and no flag names.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Syntax {
     /// `${` with no `}` after it.
@@ -34,36 +19,24 @@ pub enum Syntax {
     /// `${}` — a reference to nothing.
     #[error("empty reference `${{}}`")]
     EmptyRef,
-    /// `${a${b}}`. Finding the end of a reference is `find('}')`, so a nested
-    /// `${` has no reading that is not a guess.
+    /// `${a${b}}`: nesting is not supported.
     #[error("nested `${{` in `${{{body}}}`")]
     Nested { body: String },
-    /// `${env:}` — the namespace with no variable after it. Raised downstream,
-    /// where the prefix is recognised, but it is the same class of mistake.
+    /// `${env:}`. Raised by the resolver.
     #[error("empty variable name in `${{env:}}`")]
     EmptyEnvName,
-    /// `${a..b}` — a dotted path with an empty segment. Also raised downstream,
-    /// where the body is parsed as a reference path.
+    /// `${a..b}`. Raised by the resolver.
     #[error("empty segment in reference `${{{body}}}`")]
     EmptySegment { body: String },
-    /// `${servers[x]}` — a bracket step that is not an array index: empty,
-    /// non-numeric, too big, or unclosed. Also raised downstream.
+    /// `${servers[x]}`. Raised by the resolver.
     #[error("malformed index in reference `${{{body}}}`")]
     BadIndex { body: String },
 }
 
 /// Splits `s` into literals and reference bodies.
 ///
-/// Returns an **empty** vector when `s` contains no `$` at all — the common
-/// case, and the caller's signal to leave the value alone rather than rebuild an
-/// identical string.
-///
-/// `$$` yields a literal `$`; a `$` followed by anything else is ordinary text,
-/// so `USD $5` needs no escaping.
-///
-/// Malformed references are returned as pieces rather than aborting the scan.
-/// A delimited malformed reference is recoverable, so later references are
-/// still found; an unterminated reference consumes the remainder of the string.
+/// Returns an empty vector when `s` has no `$`. Malformed references become
+/// [`Piece::Malformed`]; an unterminated one consumes the rest of the string.
 pub fn scan(s: &str) -> Vec<Piece<'_>> {
     if !s.contains('$') {
         return Vec::new();
@@ -75,8 +48,6 @@ pub fn scan(s: &str) -> Vec<Piece<'_>> {
 
     while let Some(rel) = s[cursor..].find('$') {
         let at = cursor + rel;
-        // `$` is ASCII, so `at + 1` is in bounds-or-None and a UTF-8
-        // continuation byte can never equal `$` or `{`.
         match s.as_bytes().get(at + 1) {
             Some(b'$') => {
                 push_literal(&mut pieces, &s[literal..at]);
@@ -125,7 +96,7 @@ pub fn scan(s: &str) -> Vec<Piece<'_>> {
                 cursor = after;
                 literal = cursor;
             }
-            // A bare `$`: ordinary text, and part of the pending literal.
+            // A bare `$` is ordinary text.
             _ => cursor = at + 1,
         }
     }
@@ -139,8 +110,7 @@ fn push_literal<'a>(pieces: &mut Vec<Piece<'a>>, text: &'a str) {
     }
 }
 
-/// The source spelling of a reference, for splicing back the text of a piece
-/// that could not be resolved.
+/// Renders a reference body back as `${body}`.
 pub struct Spelled<'a>(pub &'a str);
 
 impl fmt::Display for Spelled<'_> {
@@ -165,8 +135,6 @@ mod tests {
         Piece::Malformed { spelling, error }
     }
 
-    /// The empty result is load-bearing: it is how the resolver tells "nothing
-    /// to do" from "all literal, rebuild it".
     #[test]
     fn a_string_without_a_dollar_scans_to_nothing() {
         assert_eq!(scan("plain text"), []);
@@ -193,8 +161,6 @@ mod tests {
         );
     }
 
-    /// Adjacent references have no literal between them, which is exactly the
-    /// case an off-by-one in the cursor would corrupt.
     #[test]
     fn adjacent_references_have_no_literal_between_them() {
         assert_eq!(scan("${a}${b}"), [re("a"), re("b")]);
@@ -207,7 +173,6 @@ mod tests {
         assert_eq!(scan("a$$b"), [lit("a"), lit("$"), lit("b")]);
     }
 
-    /// Only `${` starts a reference, so prose and prices need no escaping.
     #[test]
     fn a_bare_dollar_is_ordinary_text() {
         assert_eq!(scan("USD $5"), [lit("USD $5")]);
@@ -262,7 +227,6 @@ mod tests {
         );
     }
 
-    /// Multi-byte text must not shift the offsets a `${` is found at.
     #[test]
     fn non_ascii_literals_survive() {
         assert_eq!(
