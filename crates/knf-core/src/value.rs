@@ -42,6 +42,7 @@ pub trait ConfigValue: Clone {
     /// Construct a string.
     fn string(text: String) -> Self;
     /// Render a scalar for an embedded reference. Containers and null reject.
+    /// Finite floats keep Rust float spelling; serializers may use another spelling.
     fn stringify(&self) -> Option<String>;
 }
 
@@ -229,6 +230,19 @@ mod tests {
         );
         assert_eq!(V::array(Vec::new()).stringify(), None);
         assert_eq!(V::object(V::Object::new()).stringify(), None);
+    }
+
+    #[test]
+    fn embedded_float_spelling_is_independent_of_serialization() {
+        let json = serde_json::json!({"v": 1e20});
+        let toml = toml::Value::parse_document("v = 1e20").unwrap();
+        assert_eq!(json["v"].stringify().as_deref(), Some("1e20"));
+        assert_eq!(toml["v"].stringify().as_deref(), Some("1e20"));
+        assert_eq!(crate::format::emit(json, false).unwrap(), "{\"v\":1e+20}\n");
+        assert_eq!(
+            crate::format::emit(toml, false).unwrap(),
+            "v = 100000000000000000000.0\n"
+        );
     }
 
     #[test]

@@ -975,6 +975,34 @@ fn toml_inline_typing_uses_native_values_and_string_fallback() {
     assert!(value["limit"].as_float().unwrap().is_infinite());
 }
 
+#[test]
+fn toml_inline_literals_accept_surrounding_whitespace() {
+    let dir = tree(&[]);
+    let out = run(
+        &dir,
+        &[
+            "-f",
+            "toml",
+            "--set",
+            "port= \t8080\r\n",
+            "--set",
+            "enabled=true\n",
+            "--set",
+            "ratio=1.0 ",
+            "--set",
+            "fallback= text\n",
+            "--set",
+            "quoted= ' text ' ",
+        ],
+    );
+    let value: toml::Value = toml::from_str(&out).unwrap();
+    assert_eq!(value["port"].as_integer(), Some(8080));
+    assert_eq!(value["enabled"].as_bool(), Some(true));
+    assert_eq!(value["ratio"].as_float(), Some(1.0));
+    assert_eq!(value["fallback"].as_str(), Some(" text\n"));
+    assert_eq!(value["quoted"].as_str(), Some(" text "));
+}
+
 // --- native inline values -------------------------------------------------
 
 #[test]

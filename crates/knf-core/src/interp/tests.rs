@@ -87,7 +87,7 @@ macro_rules! common_tests {
             assert_eq!(map["url"], s("http://db:8080/health"));
         }
 
-        /// A float embedded in text must render as the emitters would write it.
+        /// Embedded floats retain the established spelling, including integral floats.
         #[test]
         fn an_embedded_float_keeps_its_point() {
             let doc = obj(vec![
@@ -97,6 +97,43 @@ macro_rules! common_tests {
             let out = interp(doc).unwrap();
             let map = out.as_object().expect("an object");
             assert_eq!(map["tag"], s("v1.0"));
+        }
+
+        #[test]
+        fn embedded_exponents_keep_existing_spelling_while_whole_references_keep_values() {
+            for spelling in ["1e20", "1e300", "1e-7"] {
+                let value = Value::parse_inline(spelling.into());
+                let doc = obj(vec![
+                    ("v", value.clone()),
+                    ("tag", s("n=${v}")),
+                    ("whole", s("${v}")),
+                ]);
+                let out = interp(doc).unwrap();
+                let map = out.as_object().unwrap();
+                assert_eq!(map["tag"], s(&format!("n={spelling}")));
+                assert_eq!(map["whole"], value);
+                let emitted = crate::format::emit(out.clone(), false).unwrap();
+                let round = Value::parse_document(&emitted).unwrap();
+                assert_eq!(round, out);
+            }
+        }
+
+        #[test]
+        fn whole_environment_literals_ignore_whitespace_but_embedded_text_and_fallbacks_keep_it() {
+            let doc = obj(vec![
+                ("port", s("${env:PORT}")),
+                ("raw", s("n=${env:PORT}")),
+                ("fallback", s("${env:TEXT}")),
+            ]);
+            let out = interp_env(doc, &[("PORT", " \t8080\r\n"), ("TEXT", " text\n")]).unwrap();
+            assert_eq!(
+                out,
+                obj(vec![
+                    ("port", n(8080)),
+                    ("raw", s("n= \t8080\r\n")),
+                    ("fallback", s(" text\n"))
+                ])
+            );
         }
 
         // --- escapes and non-references -------------------------------------------

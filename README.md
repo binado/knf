@@ -308,7 +308,9 @@ explicit file lists.
 
 Repeat `--set KEY.PATH=VALUE` to append layers after all files, in occurrence
 order. Values parse in the selected format; invalid or out-of-range literals
-fall back to their original text as strings.
+fall back to their original text as strings. Surrounding spaces, tabs and line
+breaks are ignored when parsing a literal; quoted string contents and string
+fallbacks retain their whitespace.
 
 | RHS | JSON | TOML |
 | --- | --- | --- |
@@ -388,6 +390,11 @@ Where the reference sits decides what it yields:
 | --- | --- |
 | whole string — `port = "${p}"` | takes the referent's **value and type**; `port` above is a number, and `"${db}"` is the whole table |
 | embedded — `url = "x/${p}"` | stringifies; objects, arrays and JSON null are errors in embedded positions |
+
+Embedded finite floats keep their existing Rust float spelling, including
+`1.0`, `1e20` and `1e-7`. Serializers may spell the same number differently:
+JSON emits `1e+20`, and TOML emits `100000000000000000000.0`. Whole-string
+references retain the native numeric value and use the selected serializer.
 
 An environment variable is typed by the same rule as `--set`'s right-hand side
 when it is the whole string, and spliced as raw text when it is embedded —

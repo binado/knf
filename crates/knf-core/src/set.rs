@@ -107,9 +107,12 @@ impl PathLeaf<String> {
 }
 
 /// Parse a standalone TOML value, falling back to the original text as a string.
-/// Invalid and out-of-range literals, including `null`, remain strings.
+/// Surrounding TOML whitespace is ignored when parsing a literal. Invalid and
+/// out-of-range literals, including `null`, retain the original text as strings.
 pub fn toml_or_string(text: String) -> toml::Value {
-    text.parse().unwrap_or_else(|_| toml::Value::String(text))
+    text.trim_matches([' ', '\t', '\r', '\n'])
+        .parse()
+        .unwrap_or_else(|_| toml::Value::String(text))
 }
 
 impl FromStr for PathLeaf<String> {
@@ -188,6 +191,44 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn toml_inline_literals_ignore_surrounding_whitespace() {
+        for literal in [
+            "8080",
+            "true",
+            "1.0",
+            "1979-05-27",
+            "inf",
+            "[1, 2]",
+            "{a=1}",
+            "' name '",
+        ] {
+            for padding in [" ", "\t", "\n", "\r\n", " \t\r\n"] {
+                let expected = toml_or_string(literal.into());
+                for text in [
+                    format!("{padding}{literal}"),
+                    format!("{literal}{padding}"),
+                    format!("{padding}{literal}{padding}"),
+                ] {
+                    assert_eq!(toml_or_string(text.clone()), expected, "{text:?}");
+                }
+            }
+        }
+        for text in [
+            " \tnull\n",
+            " 9223372036854775808\n",
+            " [a,b] ",
+            " text\n",
+            " \t\r\n",
+            "\u{a0}8080\u{a0}",
+        ] {
+            assert_eq!(
+                toml_or_string(text.into()),
+                toml::Value::String(text.into())
+            );
+        }
+    }
 
     #[test]
     fn rejects_malformed_expressions() {
