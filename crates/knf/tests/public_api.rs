@@ -49,6 +49,9 @@ mod named {
 /// several of these have no public constructor, by design.
 #[allow(dead_code)]
 struct EveryError {
+    accumulate: knf::fs::AccumulateError,
+    accumulate_target: knf::fs::AccumulateTargetError,
+    glob: knf::fs::GlobError,
     merge: MergeError,
     path: PathError,
     load: LoadError,
@@ -70,6 +73,12 @@ fn dir(files: &[(&str, &str)]) -> tempfile::TempDir {
 /// Every re-export, exercised the way a consumer would reach it.
 #[test]
 fn the_public_surface_is_nameable_from_outside_the_crate() {
+    let target = knf::fs::AccumulateTarget::try_from(std::path::PathBuf::from("a.json"))
+        .expect("a relative target");
+    let tree = dir(&[("a.json", "{}")]);
+    let files = knf::fs::accumulate(&target, Some(tree.path())).expect("discovery");
+    let pattern: knf::fs::GlobPattern = "*.json".parse().expect("a valid glob");
+    assert_eq!(knf::fs::filter_paths(&files, &pattern, true), files);
     // The path vocabulary, and the renderer for the segments it hands out.
     let refpath = RefPath::from_str("servers[0].host").expect("a well-formed path");
     assert_eq!(named::path(refpath.segs()), "servers[0].host");

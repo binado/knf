@@ -40,6 +40,34 @@ config = load(["base.toml", "prod.json"])
 config["server"]["port"] = 8080
 ```
 
+Discover and filter inputs separately before loading them:
+
+```python
+from knf import accumulate, filter_paths, load
+
+files = accumulate("services/api/prod.toml", base_dir=project_root)
+files = filter_paths(files, "{defaults,prod}.toml", filename_only=True)
+config = load(files, interpolate=True)
+```
+
+Both helpers return `list[pathlib.Path]` and accept strings or `os.PathLike`
+objects. `accumulate` uses the [same discovery rules as the CLI](#accumulating-layers-from-a-target-path).
+Its target must be relative, even with `base_dir`. Without a base, results are
+relative to the working directory; an explicit base (relative or absolute)
+produces absolute paths without changing the working directory or resolving
+symlinks. Discovery does not read configuration contents.
+
+`filter_paths` filters an existing list without filesystem access. By default
+the pattern matches the entire supplied path; `filename_only=True` matches just
+its filename. It uses the [CLI's glob syntax](#filtering-inputs-with-globs),
+preserving order and duplicates. Matching happens before conversion to `Path`;
+returned `Path` objects normalize components such as `./`, so later filtering
+sees the normalized spelling. An empty selection is allowed.
+
+Invalid targets or patterns and other non-regular targets raise `ValueError`.
+Discovery filesystem failures raise `OSError` subclasses with `.errno` and
+`.filename` set, including `IsADirectoryError` for a directory target.
+
 Set `interpolate=True` to resolve `${key.path}` references against the final
 merged config, including nested keys and array elements such as
 `${servers[0].host}`. A whole-string reference keeps its value's type (so
@@ -78,6 +106,25 @@ use knf::{MergeOptions, load_layers, merge};
 let (layers, _formats) = load_layers(&["base.toml", "prod.toml"], None)?;
 let merged = merge(layers, &MergeOptions::default())?;
 ```
+
+`knf::fs` exposes the same discovery and filtering independently of loading:
+
+```rust
+use std::path::{Path, PathBuf};
+use knf::fs::{AccumulateTarget, GlobPattern, accumulate, filter_paths};
+
+let target = AccumulateTarget::try_from(PathBuf::from("services/api/prod.toml"))?;
+let files = accumulate(&target, Some(Path::new("project")))?;
+let pattern: GlobPattern = "{defaults,prod}.toml".parse()?;
+let files = filter_paths(&files, &pattern, true); // filename-only matching
+let (layers, _formats) = load_layers(&files, None)?;
+let merged = merge(layers, &MergeOptions::default())?;
+```
+
+Pass `None` as the base for working-directory-relative results, or `Some(base)`
+for absolute results. Target validation, glob validation and discovery failures
+are typed (`AccumulateTargetError`, `GlobError`, `AccumulateError`); discovery
+failures carry paths and underlying I/O errors for frontend diagnostics.
 
 `load_layers` infers each file's format from its extension; pass `Some(Format::…)`
 to override (required for `-`, which reads stdin). It also returns the format
@@ -239,9 +286,10 @@ with replacement characters; file operations preserve the original names.
 
 Normal merging flags work with accumulate mode: `--set` layers apply after all
 files, `--strict` and `--shallow` use the discovered order, interpolation runs
-once on the merged result, and `-f` controls the output format. Accumulate and
-glob filtering are command-line options; the Rust library and Python `load`
-still take explicit file lists.
+once on the merged result, and `-f` controls the output format. The Rust
+`knf::fs` module and Python `accumulate`/`filter_paths` helpers expose the same
+discovery and filtering; `load_layers` and Python `load` take the resulting
+explicit file lists.
 
 ### Shallow merge
 

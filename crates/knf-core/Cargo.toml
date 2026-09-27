@@ -16,6 +16,7 @@ name = "knf"
 # `cargo tree -p knf-core --depth 1` is the enforcement.
 [dependencies]
 anyhow.workspace = true
+fast-glob.workspace = true
 indexmap = "2"
 serde_json.workspace = true
 thiserror.workspace = true

@@ -1,4 +1,4 @@
-//! `knf.load`: the `knf-core` pipeline as one Python function.
+//! Native Python loading, file discovery and path filtering from `knf-core`.
 //!
 //! A frontend, sibling to `knf-cli`: that one is argv and stderr, this one is
 //! arguments and exceptions. Published to PyPI as `pyknf`. The `knf` command
@@ -13,6 +13,7 @@ use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 #[path = "../../knf/src/main.rs"]
 mod cli_bin;
 
+use knf::fs::{AccumulateError, AccumulateTarget, GlobPattern};
 use knf::{
     InterpError, LoadError, MergeError, MergeOptions, Number, ProcessEnv, Value,
     interpolate as interpolate_value, load_layers, merge,
@@ -38,6 +39,81 @@ create_exception!(
     PyValueError,
     "A configuration reference cannot be resolved."
 );
+
+/// Discover ordered JSON or TOML paths without reading their contents.
+/// An explicit base produces absolute paths; the default produces relative paths.
+#[pyfunction]
+#[pyo3(signature = (target, *, base_dir = None))]
+fn accumulate(
+    py: Python<'_>,
+    target: PathBuf,
+    base_dir: Option<PathBuf>,
+) -> PyResult<Vec<PathBuf>> {
+    let target =
+        AccumulateTarget::try_from(target).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    py.detach(move || knf::fs::accumulate(&target, base_dir.as_deref()))
+        .map_err(|err| match err {
+            AccumulateError::Inspect { path, source } | AccumulateError::List { path, source } => {
+                discovery_os_error(py, Some(&path), source)
+            }
+            AccumulateError::CurrentDirectory(source) => discovery_os_error(py, None, source),
+            AccumulateError::Directory { path } => discovery_os_error(
+                py,
+                Some(&path),
+                io::Error::from(io::ErrorKind::IsADirectory),
+            ),
+            err @ AccumulateError::NonRegular { .. } => PyValueError::new_err(err.to_string()),
+        })
+}
+
+/// Filter candidates without filesystem access, preserving their order and duplicates.
+/// Matching precedes conversion to pathlib.Path, which can normalize `./`.
+#[pyfunction]
+#[pyo3(signature = (files, pattern, *, filename_only = false))]
+fn filter_paths(files: Vec<PathBuf>, pattern: &str, filename_only: bool) -> PyResult<Vec<PathBuf>> {
+    let pattern: GlobPattern = pattern
+        .parse()
+        .map_err(|err: knf::fs::GlobError| PyValueError::new_err(err.to_string()))?;
+    Ok(knf::fs::filter_paths(&files, &pattern, filename_only))
+}
+
+/// Build OSError with native filenames and errno, letting Python select its subclass.
+fn discovery_os_error(py: Python<'_>, path: Option<&Path>, source: io::Error) -> PyErr {
+    let build = || -> PyResult<PyErr> {
+        let errno_name = match source.kind() {
+            io::ErrorKind::NotFound => "ENOENT",
+            io::ErrorKind::PermissionDenied => "EACCES",
+            io::ErrorKind::IsADirectory => "EISDIR",
+            io::ErrorKind::NotADirectory => "ENOTDIR",
+            io::ErrorKind::AlreadyExists => "EEXIST",
+            io::ErrorKind::Interrupted => "EINTR",
+            io::ErrorKind::InvalidInput => "EINVAL",
+            _ => "EIO",
+        };
+        let fallback: i32 = py.import("errno")?.getattr(errno_name)?.extract()?;
+        #[cfg(unix)]
+        let errno = source.raw_os_error().unwrap_or(fallback);
+        #[cfg(not(unix))]
+        let errno = fallback;
+        let strerror = py.import("os")?.call_method1("strerror", (errno,))?;
+        let filename = match path {
+            Some(path) => path.as_os_str().into_pyobject(py)?.into_any().unbind(),
+            None => py.None(),
+        };
+        #[cfg(windows)]
+        let args = (
+            errno,
+            strerror.unbind(),
+            filename,
+            py.None(),
+            source.raw_os_error(),
+        );
+        #[cfg(not(windows))]
+        let args = (errno, strerror.unbind(), filename);
+        Ok(PyOSError::new_err(args))
+    };
+    build().unwrap_or_else(|_| PyOSError::new_err(source.to_string()))
+}
 
 /// Load and merge layered JSON and TOML files into one `dict`.
 ///
@@ -168,6 +244,8 @@ fn cli(py: Python<'_>) -> PyResult<()> {
 #[pymodule]
 fn _knf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load, m)?)?;
+    m.add_function(wrap_pyfunction!(accumulate, m)?)?;
+    m.add_function(wrap_pyfunction!(filter_paths, m)?)?;
     m.add_function(wrap_pyfunction!(cli, m)?)?;
     m.add("ParseError", m.py().get_type::<ParseError>())?;
     m.add(

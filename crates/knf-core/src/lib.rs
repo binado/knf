@@ -19,6 +19,7 @@
 //! command-line remedy are typed, so the caller decides how to name them.
 
 pub mod format;
+pub mod fs;
 mod interp;
 mod ir;
 mod merge;
