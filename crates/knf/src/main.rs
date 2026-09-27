@@ -18,8 +18,8 @@ use knf::{
     Format, MergeOptions, PathLeaf, ProcessEnv, Value, format, interpolate, load_layers, merge,
 };
 
-use cli::Cli;
-use explain::{explain_pipeline, name_the_set_flag};
+use cli::{Cli, ShallowAt};
+use explain::{explain_pipeline, name_the_set_flag, name_the_shallow_flag};
 
 // Entry point for the `knf-cli` binary. `knf-py` includes this file and calls
 // `main_from` instead, so the function is unused in that compilation.
@@ -57,6 +57,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     // Before anything is read: a malformed --set is a mistake in the command
     // line, and saying so must not wait on the files existing or parsing.
     let overlays = overlays(&cli)?;
+    let opts = merge_options(&cli)?;
 
     let mut files = if let Some(target) = &cli.accumulate {
         knf::fs::accumulate(target, None).map_err(explain::explain_accumulate)?
@@ -77,13 +78,18 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         return write_stdout(&text);
     }
 
-    run_pipeline(&cli, &files, overlays)
+    run_pipeline(&cli, &files, overlays, &opts)
 }
 
 /// One pipeline for explicit and discovered files: every layer becomes a
 /// `Value`, the fold runs once, and the output format is only consulted at emit.
 /// Nothing about JSON or TOML reaches the merge.
-fn run_pipeline(cli: &Cli, files: &[PathBuf], overlays: Vec<Value>) -> anyhow::Result<()> {
+fn run_pipeline(
+    cli: &Cli,
+    files: &[PathBuf],
+    overlays: Vec<Value>,
+    opts: &MergeOptions,
+) -> anyhow::Result<()> {
     // Between the parse and the fold: the output format is a decision about
     // argv, and the formats it needs are known as soon as the inputs are read.
     // Deciding it after the merge would make a forgotten `-f` queue behind
@@ -93,12 +99,8 @@ fn run_pipeline(cli: &Cli, files: &[PathBuf], overlays: Vec<Value>) -> anyhow::R
     let out_format = resolve_output_format(cli.format.map(Format::from), &input_formats)?;
 
     // One flat, strictly-left fold: --set layers are appended after every file.
-    let opts = MergeOptions {
-        strict: cli.strict,
-        shallow: cli.shallow,
-    };
     let layers = layers.into_iter().chain(overlays);
-    let merged = merge(layers, &opts).map_err(explain_pipeline)?;
+    let merged = merge(layers, opts).map_err(explain_pipeline)?;
     // After the merge, before the emit, and never per layer.
     let merged = if cli.interpolate {
         interpolate(merged, &ProcessEnv).map_err(explain_pipeline)?
@@ -131,6 +133,27 @@ fn overlays(cli: &Cli) -> anyhow::Result<Vec<Value>> {
         overlays.push(Value::Object(knf::value::object_from_json(obj)));
     }
     Ok(overlays)
+}
+
+/// Builds the merge knobs, validating every `--shallow` path up front, for the
+/// same reason as [`overlays`]: the paths come from argv alone.
+fn merge_options(cli: &Cli) -> anyhow::Result<MergeOptions> {
+    let mut shallow = Vec::with_capacity(cli.shallow.len());
+    for occurrence in &cli.shallow {
+        // The root is the empty key path.
+        let keys = match occurrence {
+            ShallowAt::Root => Vec::new(),
+            ShallowAt::Path(path) => path
+                .clone()
+                .try_into_keys()
+                .map_err(name_the_shallow_flag)?,
+        };
+        shallow.push(keys);
+    }
+    Ok(MergeOptions {
+        strict: cli.strict,
+        shallow,
+    })
 }
 
 /// Decides the output format from `-f` and the inputs.

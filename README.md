@@ -130,7 +130,8 @@ failures carry paths and underlying I/O errors for frontend diagnostics.
 to override (required for `-`, which reads stdin). It also returns the format
 each file was read as, so you can pick an output format before merging.
 
-`MergeOptions` sets strict mode and shallow merge. `merge` takes any list of
+`MergeOptions` sets strict mode and the key paths merged shallowly (the empty
+path is the root; `MergeOptions::shallow_root()` is `--shallow`). `merge` takes any list of
 `knf::Value`s, so in-memory overlays are just more layers appended after the
 files. An overlay should be a `Value::Object`: a scalar layer replaces the whole
 document instead of shadowing a key. The result is the format-independent
@@ -301,6 +302,20 @@ These are jq's two object operators:
 | --- | --- | --- |
 | `knf a.json b.json` | `a * b` | `{"db":{"host":"b","port":1}}` |
 | `knf a.json b.json --shallow` | `a + b` | `{"db":{"host":"b"}}` |
+
+`--shallow=KEY.PATH` applies `+` at that object only, and `*` everywhere else:
+the object's children are replaced whole, while the object itself and its
+siblings still merge deep.
+
+| knf | `{"db":{"pool":{"min":1,"max":5},"host":"a"},"app":{"x":1}}` then `{"db":{"pool":{"max":9}},"app":{"y":2}}` |
+| --- | --- |
+| `knf a.json b.json --shallow=db` | `{"db":{"pool":{"max":9},"host":"a"},"app":{"x":1,"y":2}}` |
+
+The flag is repeatable (`--shallow=db --shallow=cache`), and bare `--shallow`
+(or `--shallow=`) is the root. The `=` is required, so `knf --shallow a.json
+b.json` still reads both files. A path that is missing, or is not an object in
+both layers, changes nothing; an outer path makes any path below it moot. Paths
+use the `--set` key syntax, so an array index such as `servers[0]` is an error.
 
 Arrays replace wholesale in both, exactly as in jq; nothing is ever
 concatenated. `--set` layers are ordinary layers, so `--shallow --set

@@ -61,7 +61,7 @@ fn shallow_terminal_overlays_and_interpolation_compose() {
 
     let (mut layers, _) = knf::load_layers(&paths, None).expect("layers load");
     layers.push(overlay);
-    let merged = knf::merge(layers, &MergeOptions::SHALLOW).expect("shallow merge succeeds");
+    let merged = knf::merge(layers, &MergeOptions::shallow_root()).expect("shallow merge succeeds");
     let merged = knf::interpolate(merged, &knf::ProcessEnv).expect("document references resolve");
 
     assert_eq!(

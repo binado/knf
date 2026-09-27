@@ -39,7 +39,7 @@ No cargo features; no new dependencies without deliberate reason. Reusable logic
 
 - **Merge fold:** Strictly left-fold over a flat layer list (merge is not associative).
 - **Arrays & Null:** Arrays replace wholesale (never merged by index or concatenated). Null is an ordinary value that overwrites, not a delete.
-- **Deep by default:** Default merge is deep (`jq *`); `--shallow` is `jq +`.
+- **Deep by default:** Default merge is deep (`jq *`); `--shallow` is `jq +` at the root, `--shallow=KEY.PATH` at that object only.
 - **Interpolation:** Opt-in, runs once over the merged document. Env values are terminal; container references are whole-string only.
 - **Format representation:** Unsupported values (TOML: null, `> i64::MAX`, datetimes; JSON: `NaN`/`inf`) error with path; never silently substituted.
 - **Input/Output:** Every input is a top-level object. Output format is never guessed for mixed inputs (`-f` required).

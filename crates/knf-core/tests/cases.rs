@@ -9,7 +9,8 @@ struct Case {
     /// JSON literals, merged left to right.
     layers: &'static [&'static str],
     strict: bool,
-    shallow: bool,
+    /// Dotted key paths merged shallowly; `""` is the root.
+    shallow: &'static [&'static str],
     expect: Expect,
 }
 
@@ -25,7 +26,7 @@ const fn ok(name: &'static str, layers: &'static [&'static str], doc: &'static s
         name,
         layers,
         strict: false,
-        shallow: false,
+        shallow: &[],
         expect: Doc(doc),
     }
 }
@@ -35,7 +36,7 @@ const fn strict(name: &'static str, layers: &'static [&'static str], doc: &'stat
         name,
         layers,
         strict: true,
-        shallow: false,
+        shallow: &[],
         expect: Doc(doc),
     }
 }
@@ -45,7 +46,7 @@ const fn conflict(name: &'static str, layers: &'static [&'static str], path: &'s
         name,
         layers,
         strict: true,
-        shallow: false,
+        shallow: &[],
         expect: Error(path),
     }
 }
@@ -55,7 +56,22 @@ const fn shallow(name: &'static str, layers: &'static [&'static str], expect: Ex
         name,
         layers,
         strict: false,
-        shallow: true,
+        shallow: &[""],
+        expect,
+    }
+}
+
+const fn shallow_at(
+    name: &'static str,
+    at: &'static [&'static str],
+    layers: &'static [&'static str],
+    expect: Expect,
+) -> Case {
+    Case {
+        name,
+        layers,
+        strict: false,
+        shallow: at,
         expect,
     }
 }
@@ -69,7 +85,22 @@ const fn strict_shallow(
         name,
         layers,
         strict: true,
-        shallow: true,
+        shallow: &[""],
+        expect,
+    }
+}
+
+const fn strict_shallow_at(
+    name: &'static str,
+    at: &'static [&'static str],
+    layers: &'static [&'static str],
+    expect: Expect,
+) -> Case {
+    Case {
+        name,
+        layers,
+        strict: true,
+        shallow: at,
         expect,
     }
 }
@@ -77,7 +108,14 @@ const fn strict_shallow(
 fn options(case: &Case) -> MergeOptions {
     MergeOptions {
         strict: case.strict,
-        shallow: case.shallow,
+        shallow: case
+            .shallow
+            .iter()
+            .map(|path| match *path {
+                "" => Vec::new(),
+                path => path.split('.').map(String::from).collect(),
+            })
+            .collect(),
     }
 }
 
@@ -151,6 +189,24 @@ const CASES: &[Case] = &[
     strict_shallow("strict allows a same-kind shallow replace", &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":"s"}}"#], Doc(r#"{"a":{"y":"s"}}"#)),
     // Nothing below the top level is compared: `x` changes kind unseen.
     strict_shallow("strict shallow never looks below the top level", &[r#"{"a":{"x":1}}"#, r#"{"a":{"x":"s"}}"#], Doc(r#"{"a":{"x":"s"}}"#)),
+
+    // --- shallow at a key path: `+` at that object, `*` everywhere else -----
+    // `db`'s children are replaced whole; `db` itself and its siblings merge deep.
+    shallow_at("shallow at a path takes its children whole", &["db"], &[r#"{"db":{"pool":{"min":1,"max":5},"host":"a"}}"#, r#"{"db":{"pool":{"max":9}}}"#], Doc(r#"{"db":{"pool":{"max":9},"host":"a"}}"#)),
+    shallow_at("shallow at a path leaves siblings deep", &["db"], &[r#"{"db":{"x":{"a":1}},"app":{"x":{"a":1}}}"#, r#"{"db":{"x":{"b":2}},"app":{"x":{"b":2}}}"#], Doc(r#"{"db":{"x":{"b":2}},"app":{"x":{"a":1,"b":2}}}"#)),
+    shallow_at("shallow at a nested path", &["a.b"], &[r#"{"a":{"b":{"c":{"x":1}},"d":{"x":1}}}"#, r#"{"a":{"b":{"c":{"y":2}},"d":{"y":2}}}"#], Doc(r#"{"a":{"b":{"c":{"y":2}},"d":{"x":1,"y":2}}}"#)),
+    shallow_at("several shallow paths", &["a", "b"], &[r#"{"a":{"x":{"k":1}},"b":{"x":{"k":1}},"c":{"x":{"k":1}}}"#, r#"{"a":{"x":{"j":2}},"b":{"x":{"j":2}},"c":{"x":{"j":2}}}"#], Doc(r#"{"a":{"x":{"j":2}},"b":{"x":{"j":2}},"c":{"x":{"k":1,"j":2}}}"#)),
+    // The outer path replaces `a`'s children whole, so `a.b` is never reached.
+    shallow_at("an outer shallow path makes an inner one moot", &["a", "a.b"], &[r#"{"a":{"b":{"c":{"x":1}}}}"#, r#"{"a":{"b":{"d":2}}}"#], Doc(r#"{"a":{"b":{"d":2}}}"#)),
+    shallow_at("root and a path together are just root", &["", "a"], &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":2}}"#], Doc(r#"{"a":{"y":2}}"#)),
+    // A path decided by argv may not exist, or name a non-object, in the layers.
+    shallow_at("a missing shallow path is a deep merge", &["nope"], &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":2}}"#], Doc(r#"{"a":{"x":1,"y":2}}"#)),
+    shallow_at("a shallow path at a scalar just replaces it", &["a"], &[r#"{"a":1}"#, r#"{"a":2}"#], Doc(r#"{"a":2}"#)),
+    shallow_at("a shallow path at an array just replaces it", &["a"], &[r#"{"a":[{"x":1}]}"#, r#"{"a":[{"y":2}]}"#], Doc(r#"{"a":[{"y":2}]}"#)),
+    shallow_at("a shallow path shadowed by a scalar", &["a"], &[r#"{"a":{"x":1}}"#, r#"{"a":5}"#, r#"{"a":{"y":2}}"#], Doc(r#"{"a":{"y":2}}"#)),
+
+    strict_shallow_at("strict kind-checks a pathed shallow replace", &["a"], &[r#"{"a":{"b":{"x":1}}}"#, r#"{"a":{"b":5}}"#], Error("a.b")),
+    strict_shallow_at("strict pathed shallow never looks below the path's children", &["a"], &[r#"{"a":{"b":{"x":1}}}"#, r#"{"a":{"b":{"x":"s"}}}"#], Doc(r#"{"a":{"b":{"x":"s"}}}"#)),
 ];
 
 #[test]
