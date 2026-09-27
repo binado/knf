@@ -14,6 +14,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [**breaking**] keep JSON and TOML pipelines native ([#45](https://github.com/binado/knf/pull/45))
 - [**breaking**] accept key paths in --shallow ([#43](https://github.com/binado/knf/pull/43))
 
+### Migration
+
+| Previous behavior/API | Replacement |
+| --- | --- |
+| Mixed JSON/TOML layers | Merge one format per invocation or Python `load()` call |
+| `--input-format FORMAT` | `-f/--format FORMAT` |
+| `-f` selecting a different output encoding | `-f` selects the entire native pipeline; use a separate conversion tool if needed |
+| `--null-as` | Removed; TOML `-c proxy=null` now produces the string `"null"` |
+| `knf::Value`, `Map`, `Number`, conversion helpers/errors | Native JSON/TOML values and `ConfigValue`/`ConfigObject` traits |
+| `load_layers` returning values and format lists | `Layers::Json` or `Layers::Toml` |
+| `EnvValue { raw, typed }` | `Env::lookup` returns raw `Option<String>` |
+| `format::parse(format, …)` / `emit(value, format, …)` | Generic `parse::<V>(text, source)` / `emit(value, pretty)` |
+| Python TOML datetime strings | Native Python date/time objects; fractional seconds truncate to microseconds |
+| `--shallow` (bare) / `--shallow=foo` | `--shallow '*'` / `--shallow 'foo.*'` |
+
 ## [0.3.3](https://github.com/binado/knf/compare/knf-core-v0.3.2...knf-core-v0.3.3) - 2026-09-27
 
 ### Added
