@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/binado/knf/compare/knf-cli-v0.3.3...knf-cli-v0.4.0) - 2026-09-27
+
+### Added
+
+- [**breaking**] keep JSON and TOML pipelines native ([#45](https://github.com/binado/knf/pull/45))
+- [**breaking**] accept key paths in --shallow ([#43](https://github.com/binado/knf/pull/43))
+
 ## [0.3.3](https://github.com/binado/knf/compare/knf-cli-v0.3.2...knf-cli-v0.3.3) - 2026-09-27
 
 ### Added
