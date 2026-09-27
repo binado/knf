@@ -94,7 +94,7 @@ impl ConfigFormat for serde_json::Value {
         Ok(serde_json::from_str(text)?)
     }
     fn parse_inline(text: String) -> Self {
-        crate::set::json_or_string(text)
+        crate::inline::json_or_string(text)
     }
     fn serialize(&self, pretty: bool) -> anyhow::Result<String> {
         Ok(if pretty {
@@ -111,7 +111,7 @@ impl ConfigFormat for toml::Value {
         Ok(toml::from_str(text)?)
     }
     fn parse_inline(text: String) -> Self {
-        crate::set::toml_or_string(text)
+        crate::inline::toml_or_string(text)
     }
     fn serialize(&self, pretty: bool) -> anyhow::Result<String> {
         Ok(if pretty {
