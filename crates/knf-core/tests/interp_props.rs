@@ -1,11 +1,9 @@
-//! The property the opt-in flag exists to protect.
+//! Interpolation is the identity on documents without `$`.
 
 use knf::{ConfigFormat, ConfigValue, Env, interpolate};
 use proptest::prelude::*;
 
-/// An environment that has nothing in it. The property below never reaches a
-/// lookup — no generated string contains a `$` — so an empty one is the honest
-/// stub rather than a limitation.
+/// An empty environment.
 struct NoEnv;
 
 impl Env for NoEnv {
@@ -14,9 +12,7 @@ impl Env for NoEnv {
     }
 }
 
-/// Arbitrary native values over an alphabet with no `$` in it, and no floats — the
-/// same exclusion `props.rs` makes, so equality stays total. A second, smaller
-/// copy of that generator, with `$` kept out of the string alphabet.
+/// Arbitrary native values without `$` or floats (so equality is total).
 macro_rules! properties {
     ($value:ty, $map:ty) => {
         type Value = $value;
@@ -47,14 +43,7 @@ macro_rules! properties {
         }
 
         proptest! {
-            /// A document with no `$` in it is unchanged by a pass. Braces and colons
-            /// *are* in the alphabet, so `{}` and `a:b` have to survive on their own —
-            /// only `$` starts a reference.
-            ///
-            /// This is the identity `--interpolate` is layered on top of, and the reason
-            /// the flag is opt-in: `knf a.json` preserves parsed values, and a document
-            /// full of `${...}` bound for compose or Actions passes through untouched
-            /// unless the user asked otherwise.
+            /// A document with no `$` is unchanged, even with `{}` and `:`.
             #[test]
             fn a_document_without_a_dollar_is_unchanged(doc in arb_doc()) {
                 prop_assert_eq!(interpolate(doc.clone(), &NoEnv).expect("nothing to resolve"), doc);

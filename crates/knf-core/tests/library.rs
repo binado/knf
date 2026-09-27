@@ -142,9 +142,7 @@ fn load_layers_accepts_borrowed_paths() {
     assert_eq!(merged, json!({"a": 1}));
 }
 
-/// The load failures are typed, so a caller can act on the *kind* rather than
-/// matching a message — and, unlike the string they replaced, they name no
-/// command-line flag for a caller that has no command line.
+/// Load failures are typed and name no CLI flags.
 #[test]
 fn load_errors_are_typed_and_flag_free() {
     let dir = tree(&[("layer", "{}")]);
@@ -168,8 +166,7 @@ fn load_errors_are_typed_and_flag_free() {
     ));
 }
 
-/// `${env:...}` resolves against whatever the caller calls the environment.
-/// Nothing here reads process state, which is the whole point of the seam.
+/// `${env:...}` resolves against a caller-supplied `Env`.
 #[test]
 fn interpolate_resolves_against_a_supplied_environment() {
     struct StubEnv;
@@ -191,8 +188,7 @@ fn interpolate_resolves_against_a_supplied_environment() {
     assert_eq!(merged, json!({"port": 8080, "url": "x:8080"}));
 }
 
-/// Interpolation is a separate step: `merge` alone preserves the values in a
-/// document full of `${...}`.
+/// `merge` alone leaves `${...}` untouched.
 #[test]
 fn merge_does_not_interpolate() {
     let dir = tree(&[("base.json", r#"{"a":"${b}","b":"literal"}"#)]);
