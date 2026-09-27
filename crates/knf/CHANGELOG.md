@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/binado/knf/compare/knf-cli-v0.4.0...knf-cli-v0.5.0) - 2026-09-27
+
+### Added
+
+- *(cli)* replace --set with -c and add -i alias ([#49](https://github.com/binado/knf/pull/49))
+- [**breaking**] select shallow replacements with quoted path globs ([#46](https://github.com/binado/knf/pull/46))
+- *(python)* expose shallow key-path globs in load ([#48](https://github.com/binado/knf/pull/48))
+
+### Other
+
+- condense README, --help text and code comments ([#50](https://github.com/binado/knf/pull/50))
+
 ## [0.4.0](https://github.com/binado/knf/compare/knf-cli-v0.3.3...knf-cli-v0.4.0) - 2026-09-27
 
 ### Added
