@@ -17,7 +17,8 @@ struct PublicErrors {
     syntax: Syntax,
     accumulate: knf::fs::AccumulateError,
     target: knf::fs::AccumulateTargetError,
-    glob: knf::fs::GlobError,
+    glob: knf::glob::GlobError,
+    key_glob: knf::glob::KeyGlobError,
 }
 
 fn native_pipeline<V: ConfigFormat + std::fmt::Debug>(env: &dyn Env) {
@@ -75,6 +76,10 @@ fn public_interfaces_support_both_native_types() {
     assert!(layers.is_empty());
     let target = knf::fs::AccumulateTarget::try_from(std::path::PathBuf::from("a.json")).unwrap();
     let _: knf::fs::GlobPattern = "*.json".parse().unwrap();
+    let glob: knf::glob::GlobPattern = "*.json".parse().unwrap();
+    assert!(glob.matches("config.json"));
+    let selector: knf::glob::KeyGlobPattern = "db.*".parse().unwrap();
+    assert!(selector.matches_keys(&["db".into(), "pool".into()]));
     let _ = target;
 }
 

@@ -88,6 +88,36 @@ fn strict_overlay_errors_name_the_key_path() {
 }
 
 #[test]
+fn selected_values_keep_their_native_scalar_representations() {
+    let opts = MergeOptions {
+        shallow: Some("payload.*".parse().unwrap()),
+        ..Default::default()
+    };
+    let json = knf::merge(
+        [
+            json!({"payload": {"n": 0, "nil": {"x": 1}}}),
+            json!({"payload": {"n": u64::MAX, "nil": null}}),
+        ],
+        &opts,
+    )
+    .unwrap();
+    assert_eq!(json["payload"]["n"].as_u64(), Some(u64::MAX));
+    assert!(json["payload"]["nil"].is_null());
+
+    let layers = [
+        "[payload]\nstamp = 1979-05-27T07:32:00.123456789+02:00\nx = 0.0\n",
+        "[payload]\nstamp = 1980-01-01T00:00:00.987654321Z\nx = inf\n",
+    ]
+    .map(|text| toml::from_str::<toml::Value>(text).unwrap());
+    let toml = knf::merge(layers, &opts).unwrap();
+    assert_eq!(
+        toml["payload"]["stamp"].as_datetime().unwrap().to_string(),
+        "1980-01-01T00:00:00.987654321Z"
+    );
+    assert_eq!(toml["payload"]["x"].as_float(), Some(f64::INFINITY));
+}
+
+#[test]
 fn input_format_can_override_paths_without_extensions() {
     let dir = tree(&[("base", r#"{"a":1}"#), ("over", r#"{"b":2}"#)]);
     let paths = [dir.path().join("base"), dir.path().join("over")];

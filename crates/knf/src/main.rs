@@ -17,8 +17,8 @@ use knf::{
     ConfigFormat, Layers, MergeOptions, ProcessEnv, format, interpolate, load_layers, merge,
 };
 
-use cli::{Cli, ShallowAt};
-use explain::{explain_pipeline, name_the_set_flag, name_the_shallow_flag};
+use cli::Cli;
+use explain::{explain_pipeline, name_the_set_flag};
 
 // Entry point for the `knf-cli` binary. `knf-py` includes this file and calls
 // `main_from` instead, so the function is unused in that compilation.
@@ -56,7 +56,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     for leaf in &cli.set {
         leaf.validate_keys().map_err(name_the_set_flag)?;
     }
-    let opts = merge_options(&cli)?;
+    let opts = MergeOptions {
+        strict: cli.strict,
+        shallow: cli.shallow.clone(),
+    };
 
     let mut files = if let Some(target) = &cli.accumulate {
         knf::fs::accumulate(target, None).map_err(explain::explain_accumulate)?
@@ -105,27 +108,6 @@ fn run_native<V: ConfigFormat>(
     };
     let text = format::emit(merged, !cli.compact).map_err(explain_pipeline)?;
     write_stdout(&text)
-}
-
-/// Builds the merge knobs, validating every `--shallow` path up front, for the
-/// same reason as [`overlays`]: the paths come from argv alone.
-fn merge_options(cli: &Cli) -> anyhow::Result<MergeOptions> {
-    let mut shallow = Vec::with_capacity(cli.shallow.len());
-    for occurrence in &cli.shallow {
-        // The root is the empty key path.
-        let keys = match occurrence {
-            ShallowAt::Root => Vec::new(),
-            ShallowAt::Path(path) => path
-                .clone()
-                .try_into_keys()
-                .map_err(name_the_shallow_flag)?,
-        };
-        shallow.push(keys);
-    }
-    Ok(MergeOptions {
-        strict: cli.strict,
-        shallow,
-    })
 }
 
 /// Writes to stdout, treating a closed pipe as success so `knf big.json | head`

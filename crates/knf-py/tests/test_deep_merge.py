@@ -239,6 +239,43 @@ def test_the_knf_executable_accumulates_and_lists_files(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("pattern", "expected"),
+    [
+        ("*", {"db": {"pool": {"max": 9}}, "foo.bar": {"new": 2}}),
+        ("db.*", {"db": {"host": "local", "pool": {"max": 9}}, "foo.bar": {"old": 1, "new": 2}}),
+        ("'foo.bar'", {"db": {"host": "local", "pool": {"min": 1, "max": 9}}, "foo.bar": {"new": 2}}),
+        ("{db,'foo.bar'}", {"db": {"pool": {"max": 9}}, "foo.bar": {"new": 2}}),
+    ],
+)
+def test_the_knf_executable_selects_shallow_globs(tmp_path, pattern, expected):
+    executable = shutil.which("knf")
+    assert executable is not None
+    base = {"db": {"host": "local", "pool": {"min": 1}}, "foo.bar": {"old": 1}}
+    over = {"db": {"pool": {"max": 9}}, "foo.bar": {"new": 2}}
+    (tmp_path / "base.json").write_text(json.dumps(base))
+    (tmp_path / "over.json").write_text(json.dumps(over))
+    out = subprocess.run(
+        [executable, "base.json", "over.json", "--shallow", pattern],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(out.stdout) == expected
+
+
+@pytest.mark.parametrize("args", [["--shallow"], ["--shallow="], ["--shallow=a", "--shallow=b"], ["--shallow='unclosed"]])
+def test_the_knf_executable_rejects_invalid_shallow_before_io(tmp_path, args):
+    executable = shutil.which("knf")
+    assert executable is not None
+    out = subprocess.run(
+        [executable, "missing.json", *args], cwd=tmp_path, capture_output=True, text=True
+    )
+    assert out.returncode == 2
+    assert "No such file" not in out.stderr
+
+
+@pytest.mark.parametrize(
     ("flag", "pattern"),
     [("--glob", "config/*.prod.toml"), ("--glob-filename", "*.prod.toml")],
 )

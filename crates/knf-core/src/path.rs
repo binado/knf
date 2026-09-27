@@ -1,6 +1,6 @@
 //! The path vocabulary: one step type, one parsed spelling, one witness.
 //!
-//! [`Seg`] is the single step every path in the workspace is built from — an
+//! [`Seg`] is the step assignment and reference paths are built from — an
 //! object key or an array index — and [`render_path`] the one display for a
 //! chain of them. Over `Vec<Seg>` there is one parsed spelling and one witness:
 //!
@@ -13,13 +13,16 @@
 //!
 //! Writers take keys only. Reading an array element has one obvious meaning;
 //! writing one conflicts with arrays replacing wholesale on the merge side, so
-//! an [`Index`](Seg::Index) step can never address a merge location. That
+//! an [`Index`](Seg::Index) step can never address an assignment location. That
 //! predicate is enforced once, at the boundary, by [`RefPath::try_into_keys`] —
 //! a path that reaches a writer has been through it, and
 //! [`IndexInKeyPath`](PathError::IndexInKeyPath) is the failure. A key
 //! literally spelled `a[0]` is consequently unwritable from the command line
 //! and unreferenceable from `${...}` — the same accepted loss as keys
 //! containing a literal dot, which the dotted grammar has always split.
+//!
+//! Merge selectors have their own quoted glob grammar in [`crate::glob`],
+//! matching actual key segments rather than this module's display spelling.
 //!
 //! Parsing is pure text: nothing here reads a configuration value, and the
 //! walkers that do — interpolation, `merge_at` — build
