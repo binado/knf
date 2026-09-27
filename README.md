@@ -83,6 +83,19 @@ Files are merged left to right, exactly like `knf base.toml prod.toml`. Make
 additional changes to the returned `dict` in Python, including nested updates
 such as `config["server"]["port"] = 8080`.
 
+Pass `shallow="PATTERN"` to `load` to replace matching full key paths wholesale,
+using the [same key-path glob syntax as `--shallow`](#shallow-merge).
+`shallow="*"` replaces top-level values; `shallow="db"` replaces the entire
+`db` object, while `shallow="db.*"` replaces its immediate children.
+Dots separate keys; single-quoted spans select literal keys, for example
+`shallow="'foo.bar'.*"`. Matching ancestors stop traversal. The default,
+`shallow=None`, keeps deep merging. Empty or invalid patterns raise `ValueError`
+before files are read. Interpolation still runs once after merging.
+
+```python
+config = load(["base.toml", "prod.toml"], shallow="{db,cache}.*")
+```
+
 A file that can't be read raises `FileNotFoundError`, `PermissionError` or
 `IsADirectoryError`, as `open()` would. Invalid JSON or TOML raises
 `knf.ParseError`, a `ValueError` like `json.JSONDecodeError`. All files must use

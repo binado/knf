@@ -15,7 +15,7 @@ use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 mod cli_bin;
 
 use knf::fs::{AccumulateError, AccumulateTarget};
-use knf::glob::{GlobError, GlobPattern};
+use knf::glob::{GlobError, GlobPattern, KeyGlobError, KeyGlobPattern};
 use knf::{
     ConfigFormat, Format, InterpError, LoadError, MergeError, MergeOptions, ProcessEnv, Seg,
     interpolate as interpolate_value, merge, render_path, resolve_format,
@@ -122,13 +122,24 @@ fn discovery_os_error(py: Python<'_>, path: Option<&Path>, source: io::Error) ->
 /// `files` are merged left to right. Objects merge key by key; arrays, scalars
 /// and `None` replace wholesale. Interpolation, when requested, runs once
 /// after all layers have been merged.
+/// `shallow` selects full key paths for wholesale replacement using the CLI's
+/// key-path glob syntax; `None` keeps the default deep merge.
 #[pyfunction]
-#[pyo3(signature = (files, *, interpolate = false))]
+#[pyo3(signature = (files, *, interpolate = false, shallow = None))]
 fn load<'py>(
     py: Python<'py>,
     files: Vec<PathBuf>,
     interpolate: bool,
+    shallow: Option<&str>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    let shallow: Option<KeyGlobPattern> = shallow
+        .map(str::parse)
+        .transpose()
+        .map_err(|err: KeyGlobError| PyValueError::new_err(err.to_string()))?;
+    let opts = MergeOptions {
+        shallow,
+        ..Default::default()
+    };
     let merged = py
         .detach(move || {
             let format = resolve_format(&files, None).map_err(|err| {
@@ -138,8 +149,8 @@ fn load<'py>(
                 )
             })?;
             match format {
-                Format::Json => load_native(&files, interpolate).map(Document::Json),
-                Format::Toml => load_native(&files, interpolate).map(Document::Toml),
+                Format::Json => load_native(&files, interpolate, &opts).map(Document::Json),
+                Format::Toml => load_native(&files, interpolate, &opts).map(Document::Toml),
             }
         })
         .map_err(|failure| match failure {
@@ -159,7 +170,11 @@ enum Document {
     Toml(toml::Value),
 }
 
-fn load_native<V: ConfigFormat>(files: &[PathBuf], interpolate: bool) -> Result<V, Failure> {
+fn load_native<V: ConfigFormat>(
+    files: &[PathBuf],
+    interpolate: bool,
+    opts: &MergeOptions,
+) -> Result<V, Failure> {
     let mut layers = Vec::with_capacity(files.len());
     for path in files {
         let read = || -> anyhow::Result<V> {
@@ -169,7 +184,7 @@ fn load_native<V: ConfigFormat>(files: &[PathBuf], interpolate: bool) -> Result<
         };
         layers.push(read().map_err(|err| Failure::File(path.clone(), err))?);
     }
-    let merged = merge(layers, &MergeOptions::default()).map_err(Failure::Merge)?;
+    let merged = merge(layers, opts).map_err(Failure::Merge)?;
     if interpolate {
         interpolate_value(merged, &ProcessEnv).map_err(Failure::Interpolate)
     } else {

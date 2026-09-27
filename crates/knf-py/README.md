@@ -64,6 +64,18 @@ Objects merge key by key. Arrays, scalars and `None` replace wholesale. Make
 additional changes to the returned dict in Python; for example,
 `config["server"]["port"] = 8080` updates a nested setting.
 
+Pass `shallow="PATTERN"` to replace matching full key paths wholesale with the
+CLI's key-path glob syntax. `shallow="*"` replaces top-level values;
+`shallow="db"` replaces all of `db`, while `shallow="db.*"` replaces its
+immediate children. Dots separate keys; single-quoted spans are literal, as in
+`shallow="'foo.bar'.*"`. Matching ancestors stop traversal. The default,
+`shallow=None`, keeps deep merging. Empty or invalid patterns raise `ValueError`
+before files are read. Interpolation runs once after merging.
+
+```python
+config = load(["base.toml", "prod.toml"], shallow="{db,cache}.*")
+```
+
 A file that can't be read raises `FileNotFoundError`, `PermissionError` or
 `IsADirectoryError`, as `open()` would. Invalid JSON or TOML raises
 `knf.ParseError`, a `ValueError` like `json.JSONDecodeError`. TOML datetimes

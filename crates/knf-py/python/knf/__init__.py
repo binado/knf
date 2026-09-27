@@ -2,6 +2,8 @@
 
 Inputs must share one format. TOML dates and times become Python date/time
 objects, with fractional seconds truncated to microseconds.
+Pass ``shallow="db.*"`` to ``load`` to replace the immediate children of ``db``
+wholesale, using the same key-path glob syntax as the command line.
 
 The same Rust pipeline the ``knf`` command line runs, called natively::
 

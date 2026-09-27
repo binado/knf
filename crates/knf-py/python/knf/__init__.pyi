@@ -42,11 +42,18 @@ def load(
     files: Sequence[Union[str, os.PathLike[str]]],
     *,
     interpolate: bool = False,
+    shallow: Optional[str] = None,
 ) -> dict[str, Any]:
     """Load and merge homogeneous JSON or TOML files into one ``dict``.
 
     ``files`` are merged left to right. Objects merge key by key; arrays,
     scalars and ``None`` replace wholesale.
+    ``shallow`` selects full key paths for wholesale replacement with a key-path
+    glob: ``"*"`` selects top-level keys, ``"foo"`` replaces all of ``foo``, and
+    ``"foo.*"`` replaces its immediate children. Dots separate keys;
+    single-quoted spans are literal. Matching ancestors stop traversal.
+    ``None`` (the default) keeps deep merging. Invalid globs raise ValueError
+    before reading files, including an empty pattern.
     With ``interpolate=True``, references resolve once against the final merged
     document; ``${env:NAME}`` reads raw process text and types whole-string
     values as JSON-or-string or TOML-or-string, matching the input format.
@@ -59,5 +66,5 @@ def load(
             would, with ``.filename`` set.
         ParseError: A file is not a valid JSON or TOML document.
         InterpolationError: A reference is invalid, unresolved, or cyclic.
-        ValueError: Unknown extension, mixed formats, or an unrepresentable Python datetime (with its key path).
+        ValueError: Invalid shallow glob, unknown extension, mixed formats, or an unrepresentable Python datetime (with its key path).
     """

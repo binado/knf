@@ -52,6 +52,73 @@ def test_empty_file_list_returns_empty_dict():
     assert load([]) == {}
 
 
+@pytest.mark.parametrize("format", ["json", "toml"])
+@pytest.mark.parametrize(
+    "pattern, expected_db",
+    [
+        (None, {"pool": {"min": 1, "max": 9}, "host": "local"}),
+        ("*", {"pool": {"max": 9}}),
+        ("db", {"pool": {"max": 9}}),
+        ("db.*", {"pool": {"max": 9}, "host": "local"}),
+        ("**.pool", {"pool": {"max": 9}, "host": "local"}),
+        ("{db,cache}.*", {"pool": {"max": 9}, "host": "local"}),
+        ("missing.*", {"pool": {"min": 1, "max": 9}, "host": "local"}),
+    ],
+)
+def test_shallow_key_globs(write, format, pattern, expected_db):
+    if format == "json":
+        base = json.dumps({"db": {"pool": {"min": 1, "max": 5}, "host": "local"}, "app": {"x": 1}})
+        over = json.dumps({"db": {"pool": {"max": 9}}, "app": {"y": 2}})
+    else:
+        base = '[db]\nhost = "local"\n[db.pool]\nmin = 1\nmax = 5\n[app]\nx = 1\n'
+        over = "[db.pool]\nmax = 9\n[app]\ny = 2\n"
+    files = [write(f"base.{format}", base), write(f"over.{format}", over)]
+    assert load(files, shallow=pattern) == {
+        "db": expected_db,
+        "app": {"y": 2} if pattern == "*" else {"x": 1, "y": 2},
+    }
+
+
+def test_shallow_glob_matches_literal_keys(write):
+    base = {"foo.bar": {"pool": {"min": 1, "max": 5}}, "foo": {"bar": {"pool": {"min": 2}}}}
+    over = {"foo.bar": {"pool": {"max": 9}}, "foo": {"bar": {"pool": {"max": 8}}}}
+    files = [write("base.json", json.dumps(base)), write("over.json", json.dumps(over))]
+    assert load(files, shallow="'foo.bar'.*") == {
+        "foo.bar": {"pool": {"max": 9}},
+        "foo": {"bar": {"pool": {"min": 2, "max": 8}}},
+    }
+
+
+@pytest.mark.parametrize("pattern", ["", "[", "{db,", "'unclosed"])
+@pytest.mark.parametrize("empty", [False, True])
+def test_invalid_shallow_glob_fails_before_io(tmp_path, pattern, empty):
+    with pytest.raises(ValueError) as info:
+        load([] if empty else [tmp_path / "missing.json"], shallow=pattern)
+    assert not isinstance(info.value, ParseError)
+
+
+@pytest.mark.parametrize("shallow", [True, ["db"], 1])
+def test_shallow_requires_a_string(shallow):
+    with pytest.raises(TypeError):
+        load([], shallow=shallow)
+
+
+def test_shallow_interpolates_after_merging_and_keeps_native_toml(write):
+    base = write("base.toml", "[db]\nold = '${missing}'\n[db.pool]\nmin = 1\n")
+    over = write("over.toml", "copy = '${db}'\n[db]\nday = 1979-05-27\n[db.pool]\nmax = 9\n")
+    db = {"day": datetime.date(1979, 5, 27), "pool": {"max": 9}}
+    assert load([base, over], shallow="db", interpolate=True) == {"db": db, "copy": db}
+
+
+def test_shallow_load_still_folds_left_to_right(write):
+    files = [
+        write("base.json", '{"a":{"old":1},"other":{"old":1}}'),
+        write("middle.json", '{"a":5,"other":{"new":2}}'),
+        write("last.json", '{"a":{"new":2}}'),
+    ]
+    assert load(files, shallow="other") == {"a": {"new": 2}, "other": {"new": 2}}
+
+
 def test_arrays_and_none_load_from_document(write):
     path = write("a.json", '{"xs": [1, 2, 3], "k": {"v": 1}}')
     assert load([path]) == {"xs": [1, 2, 3], "k": {"v": 1}}
