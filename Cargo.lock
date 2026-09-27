@@ -305,7 +305,6 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
- "fast-glob",
  "insta",
  "knf-core",
  "serde_json",
@@ -317,6 +316,7 @@ name = "knf-core"
 version = "0.3.2"
 dependencies = [
  "anyhow",
+ "fast-glob",
  "indexmap",
  "proptest",
  "serde_json",
@@ -331,7 +331,6 @@ version = "0.3.2"
 dependencies = [
  "anyhow",
  "clap",
- "fast-glob",
  "knf-core",
  "pyo3",
  "serde_json",

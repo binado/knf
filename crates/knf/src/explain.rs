@@ -8,10 +8,43 @@
 //! message.
 
 use anyhow::anyhow;
+use knf::fs::{AccumulateError, AccumulateTargetError};
 use knf::{
     IntegerOutOfRange, InterpError, LoadError, MergeError, NonFiniteFloat, NullInToml, PathError,
     Problem, TomlError,
 };
+
+/// Preserve the command-line vocabulary for target validation.
+pub fn explain_accumulate_target(err: AccumulateTargetError) -> String {
+    match err {
+        AccumulateTargetError::Stdin => "--accumulate does not accept stdin",
+        AccumulateTargetError::InvalidPath => {
+            "--accumulate requires a relative target path without .. components"
+        }
+        AccumulateTargetError::UnknownExtension => {
+            "--accumulate requires a target with a JSON or TOML extension"
+        }
+    }
+    .to_owned()
+}
+
+/// Render discovery paths and I/O context exactly as the CLI did before extraction.
+pub fn explain_accumulate(err: AccumulateError) -> anyhow::Error {
+    match err {
+        AccumulateError::Inspect { path, source } => {
+            anyhow::Error::new(source).context(format!("inspecting `{}`", path.display()))
+        }
+        AccumulateError::List { path, source } => {
+            anyhow::Error::new(source).context(format!("listing `{}`", path.display()))
+        }
+        AccumulateError::Directory { path } | AccumulateError::NonRegular { path } => {
+            anyhow!("`{}` is not a regular file", path.display())
+        }
+        AccumulateError::CurrentDirectory(source) => {
+            anyhow::Error::new(source).context("determining the working directory")
+        }
+    }
+}
 
 /// Adds the command-line spelling to errors produced by the reusable pipeline.
 ///

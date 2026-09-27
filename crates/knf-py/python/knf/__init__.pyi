@@ -1,12 +1,42 @@
 import os
+from pathlib import Path
 from collections.abc import Sequence
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 class ParseError(ValueError):
     """A file is not valid JSON or TOML, or is not an object at the top level."""
 
 class InterpolationError(ValueError):
     """A configuration reference cannot be resolved."""
+
+def accumulate(
+    target: Union[str, os.PathLike[str]],
+    *,
+    base_dir: Optional[Union[str, os.PathLike[str]]] = None,
+) -> list[Path]:
+    """Discover same-format files along a relative target path, with the target last.
+
+    Excludes files directly in the base directory. Without a base, returns
+    working-directory-relative paths; an explicit base produces absolute paths.
+    Does not read configuration contents or canonicalize symlinks.
+
+    Raises:
+        ValueError: Invalid target or a target that is not a regular file.
+        OSError: Discovery failed, with filesystem subclass and filename set.
+    """
+
+def filter_paths(
+    files: Sequence[Union[str, os.PathLike[str]]],
+    pattern: str,
+    *,
+    filename_only: bool = False,
+) -> list[Path]:
+    """Filter existing candidates without I/O, preserving order and duplicates.
+
+    Case-sensitive glob matching uses native bytes against the supplied spelling
+    or just its filename. Returned Path objects normalize components such as './'.
+    An empty selection is allowed. Invalid patterns raise ValueError.
+    """
 
 def load(
     files: Sequence[Union[str, os.PathLike[str]]],

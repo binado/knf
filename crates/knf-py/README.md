@@ -15,6 +15,33 @@ config = load(["base.toml", "prod.json"])
 config["server"]["port"] = 8080
 ```
 
+Discover and filter paths before loading them:
+
+```python
+from knf import accumulate, filter_paths, load
+
+files = accumulate("services/api/prod.toml", base_dir=project_root)
+files = filter_paths(files, "{defaults,prod}.toml", filename_only=True)
+config = load(files, interpolate=True)
+```
+
+Both helpers accept strings and `os.PathLike` objects and return `pathlib.Path`
+objects. `accumulate` discovers same-format files along the relative target's
+directories, excluding files directly in the base directory, sorting each
+directory by filename and placing the target last. It does not parse contents.
+Without `base_dir`, results are relative to the working directory; an explicit
+base produces absolute paths without changing the working directory or
+canonicalizing symlinks. Absolute targets, `..`, stdin and unsupported
+extensions are rejected.
+
+`filter_paths` filters existing candidates without filesystem access and
+preserves order and duplicates. Patterns match entire paths unless
+`filename_only=True`; matching uses the command line's case-sensitive glob
+syntax. Matching precedes conversion to `Path`, which normalizes components
+such as `./`. Invalid targets/patterns and other non-regular targets raise
+`ValueError`; discovery I/O failures raise `OSError` subclasses with `.errno`
+and `.filename`, including `IsADirectoryError` for directory targets.
+
 Pass `interpolate=True` to resolve references after all files have been merged:
 
 ```python

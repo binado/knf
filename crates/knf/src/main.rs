@@ -8,7 +8,6 @@
 mod accumulate;
 mod cli;
 mod explain;
-mod filter;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -60,14 +59,14 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     let overlays = overlays(&cli)?;
 
     let mut files = if let Some(target) = &cli.accumulate {
-        accumulate::accumulate(target)?
+        knf::fs::accumulate(target, None).map_err(explain::explain_accumulate)?
     } else {
         cli.files.clone()
     };
     if let Some(pattern) = &cli.glob {
-        files.retain(|path| pattern.matches_path(path));
+        files = knf::fs::filter_paths(&files, pattern, false);
     } else if let Some(pattern) = &cli.glob_filename {
-        files.retain(|path| pattern.matches_filename(path));
+        files = knf::fs::filter_paths(&files, pattern, true);
     }
     if cli.list_files {
         let mut text = String::new();

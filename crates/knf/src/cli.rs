@@ -74,7 +74,7 @@ Invalid patterns are usage errors. Accepts one pattern and conflicts with
 
   knf config/**/*.toml -g 'config/**/prod.toml'"
     )]
-    pub glob: Option<super::filter::GlobPattern>,
+    pub glob: Option<knf::fs::GlobPattern>,
 
     /// Filter inputs by a case-sensitive glob matching just the filename
     #[arg(
@@ -91,7 +91,7 @@ with --glob.
   knf config/**/*.toml -G '*.prod.toml'
   knf -a services/api/prod.toml -G '{defaults,prod}.toml'"
     )]
-    pub glob_filename: Option<super::filter::GlobPattern>,
+    pub glob_filename: Option<knf::fs::GlobPattern>,
 
     /// Accumulate same-format layers along one relative target path
     #[arg(
@@ -116,7 +116,7 @@ Symlinks follow ordinary filesystem semantics.
   knf -a foo/bar/config.toml
   knf -a foo/bar/config.toml --list-files"
     )]
-    pub accumulate: Option<super::accumulate::AccumulateTarget>,
+    pub accumulate: Option<knf::fs::AccumulateTarget>,
 
     /// Print the file list in merge order without reading contents
     #[arg(
