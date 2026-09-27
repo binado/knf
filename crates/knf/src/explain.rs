@@ -150,6 +150,18 @@ pub fn name_the_set_flag(err: PathError) -> anyhow::Error {
     }
 }
 
+/// The `--shallow` counterpart of [`name_the_set_flag`]: the path error names
+/// the path, and only this layer knows which flag it came from.
+pub fn name_the_shallow_flag(err: PathError) -> anyhow::Error {
+    match err {
+        PathError::IndexInKeyPath { .. } => anyhow!(
+            "{err}\nhelp: --shallow takes a KEY.PATH to an object; an index like servers[0]\n      \
+             names an array element, and arrays are never merged into"
+        ),
+        other => other.into(),
+    }
+}
+
 /// The same division of labour for interpolation.
 ///
 /// Interpolation names key paths and reference spellings; it has never heard of

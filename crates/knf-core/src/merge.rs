@@ -15,27 +15,32 @@ use crate::{Map, Value};
 pub struct MergeOptions {
     /// Error when a layer changes the kind of an existing key.
     pub strict: bool,
-    /// Replace top-level keys wholesale instead of recursing into them — jq's
-    /// `a + b` rather than `a * b`.
-    pub shallow: bool,
+    /// Key paths whose objects merge shallowly: each child is replaced
+    /// wholesale instead of recursed into — jq's `a + b` rather than `a * b`,
+    /// at that path. The empty path is the root. A path that is missing, or
+    /// is not an object on both sides, changes nothing.
+    pub shallow: Vec<Vec<String>>,
 }
 
 impl MergeOptions {
     /// The default: deep merge, last layer wins, no type checking.
     pub const LAST_WINS: Self = Self {
         strict: false,
-        shallow: false,
+        shallow: Vec::new(),
     };
     /// Error when a layer changes the kind of an existing key.
     pub const STRICT: Self = Self {
         strict: true,
-        shallow: false,
+        shallow: Vec::new(),
     };
+
     /// Top-level keys only: a later layer's value replaces the earlier one whole.
-    pub const SHALLOW: Self = Self {
-        strict: false,
-        shallow: true,
-    };
+    pub fn shallow_root() -> Self {
+        Self {
+            strict: false,
+            shallow: vec![Vec::new()],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -70,8 +75,9 @@ impl MergeError {
 /// is an ordinary value that overwrites rather than a delete instruction. This
 /// is jq's `a * b`.
 ///
-/// Under [`MergeOptions::shallow`] only the top level is merged key by key;
-/// every colliding value is replaced whole, objects included — jq's `a + b`.
+/// At each path in [`MergeOptions::shallow`] the object is merged one level
+/// only: every colliding child is replaced whole, objects included — jq's
+/// `a + b`. The empty path makes the whole merge shallow.
 pub fn merge_into(base: &mut Value, over: Value, opts: &MergeOptions) -> Result<(), MergeError> {
     let mut path = Vec::new();
     merge_at(base, over, opts, &mut path)
@@ -89,8 +95,8 @@ pub fn merge_into(base: &mut Value, over: Value, opts: &MergeOptions) -> Result<
 /// ```
 ///
 /// So callers must never merge subgroups and then combine the results.
-/// Flatten first, fold second. (The shallow merge happens to be associative,
-/// but the fold does not rely on it.)
+/// Flatten first, fold second. (A merge shallow at the root happens to be
+/// associative, but the fold does not rely on it.)
 pub fn merge(
     layers: impl IntoIterator<Item = Value>,
     opts: &MergeOptions,
@@ -107,8 +113,8 @@ pub fn merge(
 /// The recursive worker. `path` is a breadcrumb threaded by push/pop so that a
 /// conflict can report where it happened without every frame allocating.
 ///
-/// Shallow mode needs no depth counter: it replaces at the first collision
-/// below the root, so the walk never gets deeper than one level.
+/// Shallow paths need no extra state: the breadcrumb already names the object
+/// being merged, so it is compared against them once per object.
 fn merge_at(
     base: &mut Value,
     over: Value,
@@ -117,10 +123,11 @@ fn merge_at(
 ) -> Result<(), MergeError> {
     match (base, over) {
         (Value::Object(base_map), Value::Object(over_map)) => {
+            let shallow = opts.shallow.iter().any(|p| p == path);
             for (k, v) in over_map {
                 if let Some(slot) = base_map.get_mut(&k) {
                     path.push(k);
-                    if opts.shallow {
+                    if shallow {
                         replace(slot, v, opts, path)?;
                     } else {
                         merge_at(slot, v, opts, path)?;

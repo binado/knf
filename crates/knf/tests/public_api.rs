@@ -96,7 +96,7 @@ fn the_public_surface_is_nameable_from_outside_the_crate() {
 
     // The merge knobs, and a merged document whose numbers are `Number`s.
     let opts = MergeOptions {
-        shallow: true,
+        shallow: vec![vec!["db".to_string()]],
         ..MergeOptions::default()
     };
     named::knobs(&Map::new(), &opts, Format::Json, &knf::ProcessEnv);

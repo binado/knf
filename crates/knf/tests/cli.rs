@@ -157,6 +157,7 @@ fn accumulate_uses_the_existing_merge_and_interpolation_pipeline() {
     for flags in [
         vec!["--strict"],
         vec!["--shallow"],
+        vec!["--shallow=db"],
         vec!["--set", "db.port=8080"],
         vec!["--interpolate", "-f", "json", "--compact"],
     ] {
@@ -891,6 +892,82 @@ fn shallow_applies_to_set_layers_too() {
     );
 }
 
+const NESTED_BASE: &str = "\
+[db]
+host = \"local\"
+[db.pool]
+min = 1
+max = 5
+[app.pool]
+min = 1
+max = 5
+";
+const NESTED_PROD: &str = "[db.pool]\nmax = 9\n[app.pool]\nmax = 9\n";
+
+/// `--shallow=db` is `+` at `db` only: `db.pool` is prod's whole, `db.host`
+/// survives, and `app` is still a deep merge.
+#[test]
+fn shallow_at_a_path_keeps_everything_else_deep() {
+    let dir = tree(&[("base.toml", NESTED_BASE), ("prod.toml", NESTED_PROD)]);
+    let out = run(
+        &dir,
+        &[
+            "base.toml",
+            "prod.toml",
+            "--shallow=db",
+            "-f",
+            "json",
+            "--compact",
+        ],
+    );
+    assert_eq!(
+        out,
+        "{\"db\":{\"host\":\"local\",\"pool\":{\"max\":9}},\"app\":{\"pool\":{\"min\":1,\"max\":9}}}\n"
+    );
+}
+
+#[test]
+fn shallow_paths_are_repeatable() {
+    let dir = tree(&[("base.toml", NESTED_BASE), ("prod.toml", NESTED_PROD)]);
+    let out = run(
+        &dir,
+        &[
+            "base.toml",
+            "prod.toml",
+            "--shallow=db",
+            "--shallow=app",
+            "-f",
+            "json",
+            "--compact",
+        ],
+    );
+    assert_eq!(
+        out,
+        "{\"db\":{\"host\":\"local\",\"pool\":{\"max\":9}},\"app\":{\"pool\":{\"max\":9}}}\n"
+    );
+}
+
+/// The `=` is required, so a bare `--shallow` ahead of the files cannot take
+/// the first one as its path.
+#[test]
+fn bare_shallow_before_files_still_reads_them() {
+    let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
+    assert_eq!(
+        run(&dir, &["--shallow", "base.toml", "prod.toml"]),
+        run(&dir, &["base.toml", "prod.toml", "--shallow"])
+    );
+}
+
+/// `--shallow=` is the empty path, which is the root, like the bare flag.
+#[test]
+fn empty_shallow_path_is_the_root() {
+    let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
+    assert_eq!(
+        run(&dir, &["base.toml", "prod.toml", "--shallow="]),
+        run(&dir, &["base.toml", "prod.toml", "--shallow"])
+    );
+}
+
 /// The null pre-check runs on the *merged* document, so a null that a later
 /// layer overwrites never reaches TOML conversion and is not an error.
 #[test]
@@ -1273,6 +1350,19 @@ fn set_with_an_array_index_errors_before_file_io() {
     assert!(
         !err.contains("missing.toml"),
         "the --set path should be rejected before the file is read:\n{err}"
+    );
+    insta::assert_snapshot!(err);
+}
+
+/// Like `--set`, an index in a `--shallow` path is an argv mistake, reported
+/// before any file is read.
+#[test]
+fn shallow_with_an_array_index_errors_before_file_io() {
+    let dir = tree(&[]);
+    let err = run_err(&dir, &["missing.toml", "--shallow=servers[0]"]);
+    assert!(
+        !err.contains("missing.toml"),
+        "the --shallow path should be rejected before the file is read:\n{err}"
     );
     insta::assert_snapshot!(err);
 }

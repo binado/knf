@@ -1,9 +1,10 @@
 //! clap derive structs.
 
 use std::path::PathBuf;
+use std::str::FromStr;
 
-use clap::Parser;
-use knf::{Format, PathLeaf};
+use clap::{ArgAction, Parser};
+use knf::{Format, PathError, PathLeaf, RefPath};
 
 /// `-f` and `--input-format`, as clap sees them.
 ///
@@ -26,6 +27,30 @@ impl From<FormatArg> for Format {
     }
 }
 
+/// Where one `--shallow` applies.
+///
+/// clap's derive cannot group values per occurrence, so a bare `--shallow`
+/// arrives as its `default_missing_value`, the empty string, which is the
+/// root — as the empty key path is in `MergeOptions`. `--shallow=` spells the
+/// same thing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShallowAt {
+    Root,
+    Path(RefPath),
+}
+
+impl FromStr for ShallowAt {
+    type Err = PathError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            Ok(Self::Root)
+        } else {
+            s.parse().map(Self::Path)
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "knf",
@@ -41,10 +66,12 @@ mixed freely. Exactly one document goes to stdout.
   knf base.json - --input-format json          # stdin as a layer
   knf defaults.json --set server.port=8080 -f toml
   knf base.toml prod.toml --shallow            # top-level keys only
+  knf base.toml prod.toml --shallow=db         # shallow inside db only
 
 Objects merge key by key, recursively. Arrays, scalars and null all replace
 wholesale — null is an ordinary value that overwrites, not a delete
-instruction. This is jq's `a * b`; --shallow gives jq's `a + b`."
+instruction. This is jq's `a * b`; --shallow gives jq's `a + b`, at the root or
+at a key path."
 )]
 pub struct Cli {
     /// Files to merge as layers; `-` reads stdin
@@ -172,24 +199,39 @@ literally spelled a[0]; only a file can carry either."
     )]
     pub set: Vec<PathLeaf<String>>,
 
-    /// Merge top-level keys only, replacing each value whole
+    /// Merge shallowly at the root, or at KEY.PATH; repeatable
     #[arg(
         long,
+        value_name = "KEY.PATH",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = ArgAction::Append,
         long_help = "\
-Merge top-level keys only, replacing each value whole.
+Merge shallowly at the root, or at KEY.PATH. Repeatable.
 
 The default is a deep merge, like jq's `a * b`: objects recurse key by key.
---shallow is jq's `a + b`: a later layer's value for a top-level key replaces
-the earlier one entirely, so keys it omits are dropped:
+A shallow merge is jq's `a + b`: a later layer's value for each key replaces
+the earlier one entirely, so keys it omits are dropped.
 
-  knf base.toml prod.toml --shallow    # [db] is prod's [db], entirely
+Bare --shallow merges the root shallowly. --shallow=KEY.PATH merges only the
+object at that path shallowly; everything else stays deep:
+
+  knf base.toml prod.toml --shallow       # [db] is prod's [db], entirely
+  knf base.toml prod.toml --shallow=db    # db.pool is prod's db.pool, entirely;
+                                          # db's other keys and all siblings
+                                          # still merge deep
+
+A path that is missing, or is not an object in both layers, changes nothing.
+The `=` is required, so a bare --shallow never takes a filename as its path;
+--shallow= (empty) is the root, like bare --shallow.
 
 Arrays replace wholesale either way; nothing is ever concatenated.
 
 This applies to --set layers too, which are ordinary layers: --shallow
 --set db.host=x leaves db with nothing but host."
     )]
-    pub shallow: bool,
+    pub shallow: Vec<ShallowAt>,
 
     /// Output format; required when inputs are mixed
     #[arg(short = 'f', long, value_name = "FORMAT")]
@@ -271,4 +313,44 @@ passed through as literal text."
     /// Disable pretty-printing
     #[arg(long)]
     pub compact: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each `--shallow` occurrence as its rendered path; `""` is the bare flag.
+    fn shallow(args: &[&str]) -> (Vec<String>, Vec<PathBuf>) {
+        let cli = Cli::try_parse_from(std::iter::once("knf").chain(args.iter().copied()))
+            .expect("argv parses");
+        let paths = cli
+            .shallow
+            .iter()
+            .map(|at| match at {
+                ShallowAt::Root => String::new(),
+                ShallowAt::Path(path) => path.to_string(),
+            })
+            .collect();
+        (paths, cli.files)
+    }
+
+    #[test]
+    fn shallow_occurrences_keep_the_bare_flag_as_the_root() {
+        assert_eq!(shallow(&["a.json"]).0, Vec::<String>::new());
+        assert_eq!(shallow(&["a.json", "--shallow"]).0, [""]);
+        assert_eq!(shallow(&["a.json", "--shallow="]).0, [""]);
+        assert_eq!(shallow(&["--shallow=db.pool"]).0, ["db.pool"]);
+        assert_eq!(
+            shallow(&["--shallow", "--shallow=db", "--shallow=x"]).0,
+            ["", "db", "x"]
+        );
+    }
+
+    /// Without `require_equals`, a bare `--shallow` would swallow the first file.
+    #[test]
+    fn bare_shallow_before_files_leaves_them_as_files() {
+        let (paths, files) = shallow(&["--shallow", "a.json", "b.json"]);
+        assert_eq!(paths, [""]);
+        assert_eq!(files, [PathBuf::from("a.json"), PathBuf::from("b.json")]);
+    }
 }
