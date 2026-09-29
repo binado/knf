@@ -13,8 +13,8 @@ mod cli_bin;
 use knf::fs::{AccumulateError, AccumulateTarget};
 use knf::glob::{GlobError, GlobPattern, KeyGlobError, KeyGlobPattern};
 use knf::{
-    ConfigFormat, Format, InterpError, LoadError, MergeError, MergeOptions, ProcessEnv, Seg,
-    interpolate as interpolate_value, interpolate_with_context, merge, render_path, resolve_format,
+    ConfigFormat, Format, InterpError, InterpOptions, LoadError, MergeError, MergeOptions,
+    ProcessEnv, Seg, interpolate_with_options, merge, render_path, resolve_format,
 };
 use pyo3::PyTypeInfo;
 use pyo3::create_exception;
@@ -119,15 +119,21 @@ fn discovery_os_error(py: Python<'_>, path: Option<&Path>, source: io::Error) ->
 /// replace wholesale. Interpolation runs once after merging.
 /// `context` is one filepath used only for interpolation, with output-first
 /// lookup; it requires `interpolate=True`.
+/// `merge_key` selects a literal inheritance key containing one whole-string
+/// object reference; requires `interpolate=True` and honors `shallow`.
 #[pyfunction]
-#[pyo3(signature = (files, *, interpolate = false, shallow = None, context = None))]
+#[pyo3(signature = (files, *, interpolate = false, shallow = None, context = None, merge_key = None))]
 fn load<'py>(
     py: Python<'py>,
     files: Vec<PathBuf>,
     interpolate: bool,
     shallow: Option<&str>,
     context: Option<PathBuf>,
+    merge_key: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    if merge_key.is_some() && !interpolate {
+        return Err(PyValueError::new_err("merge_key requires interpolate=True"));
+    }
     if let Some(path) = &context {
         if !interpolate {
             return Err(PyValueError::new_err("context requires interpolate=True"));
@@ -144,6 +150,10 @@ fn load<'py>(
         shallow,
         ..Default::default()
     };
+    let interp_options = InterpOptions {
+        merge_key,
+        shallow: opts.shallow.clone(),
+    };
     let merged = py
         .detach(move || {
             let mut inputs = files.clone();
@@ -155,12 +165,22 @@ fn load<'py>(
                 )
             })?;
             match format {
-                Format::Json => {
-                    load_native(&files, context.as_deref(), interpolate, &opts).map(Document::Json)
-                }
-                Format::Toml => {
-                    load_native(&files, context.as_deref(), interpolate, &opts).map(Document::Toml)
-                }
+                Format::Json => load_native(
+                    &files,
+                    context.as_deref(),
+                    interpolate,
+                    &opts,
+                    &interp_options,
+                )
+                .map(Document::Json),
+                Format::Toml => load_native(
+                    &files,
+                    context.as_deref(),
+                    interpolate,
+                    &opts,
+                    &interp_options,
+                )
+                .map(Document::Toml),
             }
         })
         .map_err(|failure| match failure {
@@ -185,6 +205,7 @@ fn load_native<V: ConfigFormat>(
     context_path: Option<&Path>,
     interpolate: bool,
     opts: &MergeOptions,
+    interp_options: &InterpOptions,
 ) -> Result<V, Failure> {
     let mut layers = Vec::with_capacity(files.len() + usize::from(context_path.is_some()));
     for path in files.iter().map(PathBuf::as_path).chain(context_path) {
@@ -198,11 +219,8 @@ fn load_native<V: ConfigFormat>(
     let context = context_path.map(|_| layers.pop().expect("context was loaded last"));
     let merged = merge(layers, opts).map_err(Failure::Merge)?;
     if interpolate {
-        match &context {
-            Some(context) => interpolate_with_context(merged, context, &ProcessEnv),
-            None => interpolate_value(merged, &ProcessEnv),
-        }
-        .map_err(Failure::Interpolate)
+        interpolate_with_options(merged, context.as_ref(), &ProcessEnv, interp_options)
+            .map_err(Failure::Interpolate)
     } else {
         Ok(merged)
     }

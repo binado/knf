@@ -1,0 +1,8 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"missing.json\", \"-i\", \"-m\", \"extends\"])"
+---
+error: unresolved reference
+  --> bar.extends: `missing`
+help: `${key.path}` names a key in the merged document, `${env:NAME}` an environment variable
+help: drop --interpolate and --merge-key to pass `${...}` through untouched

@@ -72,6 +72,130 @@ fn with_env<'a>(cmd: &'a mut Command, vars: &[(&str, Option<&str>)]) -> &'a mut 
 }
 
 #[test]
+fn merge_key_resolves_final_layers_and_inline_overrides_in_both_formats() {
+    let dir = tree(&[
+        (
+            "base.toml",
+            "[foo]\na=1\nb=2\nc=3\n[bar]\nextends='${foo}'\nc=4\nread='${bar.a}'\n",
+        ),
+        ("over.toml", "[foo]\na=9\n"),
+        (
+            "base.json",
+            r#"{"foo":{"a":1,"b":2,"c":3},"bar":{"extends":"${foo}","c":4,"read":"${bar.a}"}}"#,
+        ),
+        ("over.json", r#"{"foo":{"a":9}}"#),
+        (
+            "plain.json",
+            r#"{"foo":{"a":1},"bar":{"extends":"${foo}","c":4}}"#,
+        ),
+    ]);
+    for (base, over) in [("base.toml", "over.toml"), ("base.json", "over.json")] {
+        let text = run(&dir, &[base, over, "-i", "-m", "extends", "-c", "foo.b=8"]);
+        let expected = r#"{"foo":{"a":9,"b":8,"c":3},"bar":{"a":9,"b":8,"c":4,"read":9}}"#;
+        if base.ends_with("toml") {
+            assert_toml_eq_json(&text, expected);
+        } else {
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+                serde_json::from_str::<serde_json::Value>(expected).unwrap()
+            );
+        }
+    }
+    let text = run(&dir, &["plain.json", "-i"]);
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["bar"]["extends"], value["foo"]);
+    let text = run(&dir, &["plain.json"]);
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["bar"]["extends"], "${foo}");
+}
+
+#[test]
+fn merge_key_uses_lazy_context_and_destination_shallow_rules() {
+    let dir = tree(&[
+        (
+            "doc.json",
+            r#"{"bar":{"extends":"${base}","bad":false,"db":{"port":90}}}"#,
+        ),
+        (
+            "context.json",
+            r#"{"base":{"a":1,"bad":"${missing}","db":{"host":"shared","port":80}},"unused":{"extends":42}}"#,
+        ),
+    ]);
+    let text = run(
+        &dir,
+        &[
+            "doc.json",
+            "-i",
+            "--merge-key",
+            "extends",
+            "--with",
+            "context.json",
+            "--shallow",
+            "bar.db",
+        ],
+    );
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({"bar":{"a":1,"bad":false,"db":{"port":90}}})
+    );
+}
+
+#[test]
+fn merge_key_argument_errors_precede_document_io() {
+    let dir = tree(&[]);
+    for args in [
+        vec!["missing.json", "-m", "extends"],
+        vec!["missing.json", "-i", "-m"],
+        vec!["missing.json", "-i", "-m", "extends", "-m", "merge"],
+    ] {
+        let output = knf(&dir).args(args).output().unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("No such file"));
+    }
+    assert_eq!(
+        run(
+            &dir,
+            &["missing.json", "-i", "-m", "extends", "--list-files"]
+        ),
+        "missing.json\n"
+    );
+}
+
+#[test]
+fn merge_key_diagnostics_and_environment_bases() {
+    let dir = tree(&[
+        ("bad.json", r#"{"foo":1,"bar":{"extends":"${foo}"}}"#),
+        ("missing.json", r#"{"bar":{"extends":"${missing}"}}"#),
+        ("cycle.json", r#"{"bar":{"extends":"${bar}"}}"#),
+        ("env.json", r#"{"bar":{"extends":"${env:KNF_BASE}","a":2}}"#),
+    ]);
+    insta::assert_snapshot!(
+        "merge_key_type",
+        run_err(&dir, &["bad.json", "-i", "-m", "extends"])
+    );
+    insta::assert_snapshot!(
+        "merge_key_missing",
+        run_err(&dir, &["missing.json", "-i", "-m", "extends"])
+    );
+    insta::assert_snapshot!(
+        "merge_key_cycle",
+        run_err(&dir, &["cycle.json", "-i", "-m", "extends"])
+    );
+    let text = ok_stdout(
+        with_env(
+            knf(&dir).args(["env.json", "-i", "-m", "extends"]),
+            &[("KNF_BASE", Some(r#"{"a":1,"raw":"${missing}"}"#))],
+        ),
+        &[],
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+        serde_json::json!({"bar":{"a":2,"raw":"${missing}"}})
+    );
+}
+
+#[test]
 fn context_supplies_values_without_merging_and_sees_final_overrides() {
     let dir = tree(&[
         (

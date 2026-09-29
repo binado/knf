@@ -13,6 +13,7 @@ from knf import accumulate, filter_paths, load
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
 config = load(["foo.toml", "bar.toml"], interpolate=True, context="config.toml")
+config = load(["config.toml"], interpolate=True, merge_key="extends")
 
 files = accumulate("services/api/prod.toml", base_dir=project_root)
 files = filter_paths(files, "{defaults,prod}.toml", filename_only=True)
@@ -27,6 +28,9 @@ config = load(files)
   including context dependencies. Only referenced context values resolve.
 - `shallow="PATTERN"` replaces matching key paths wholesale (`"*"`, `"db"`,
   `"db.*"`).
+- `merge_key="extends"` uses the object referenced by `extends = "${foo}"`
+  as defaults for its parent. Local fields win; the directive is removed.
+  Requires `interpolate=True` and honors `shallow` at destination paths.
 - `accumulate` collects same-format files along a relative target path, with
   the target last. `filter_paths` filters a list by glob without I/O.
 - Errors: `knf.ParseError` and `knf.InterpolationError` (both `ValueError`s),

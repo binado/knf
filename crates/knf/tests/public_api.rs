@@ -1,9 +1,9 @@
 //! What a downstream crate can name and compose without an IR.
 use knf::{
-    ConfigFormat, ConfigObject, ConfigValue, Cycle, Env, Format, InterpError, Layers, LoadError,
-    MergeError, MergeOptions, PathError, PathLeaf, Problem, ProcessEnv, RefPath, STDIN, Seg,
-    Syntax, interpolate, interpolate_with_context, json_or_string, load_layers, merge, merge_into,
-    render_path, resolve_format, toml_or_string,
+    ConfigFormat, ConfigObject, ConfigValue, Cycle, Env, Format, InterpError, InterpOptions,
+    Layers, LoadError, MergeError, MergeOptions, PathError, PathLeaf, Problem, ProcessEnv, RefPath,
+    STDIN, Seg, Syntax, interpolate, interpolate_with_context, interpolate_with_options,
+    json_or_string, load_layers, merge, merge_into, render_path, resolve_format, toml_or_string,
 };
 
 #[allow(dead_code)]
@@ -64,6 +64,38 @@ fn native_pipeline<V: ConfigFormat + std::fmt::Debug>(env: &dyn Env) {
         Some("5432")
     );
     assert!(out.as_object().unwrap().get("port").is_none());
+    let doc = "service.extends=${defaults}"
+        .parse::<PathLeaf<String>>()
+        .unwrap()
+        .into_layer::<V>()
+        .unwrap();
+    let context = "defaults.port=5432"
+        .parse::<PathLeaf<String>>()
+        .unwrap()
+        .into_layer::<V>()
+        .unwrap();
+    let out = interpolate_with_options(
+        doc,
+        Some(&context),
+        env,
+        &InterpOptions {
+            merge_key: Some("extends".into()),
+            shallow: None,
+        },
+    )
+    .unwrap();
+    let service = out
+        .as_object()
+        .unwrap()
+        .get("service")
+        .unwrap()
+        .as_object()
+        .unwrap();
+    assert!(service.get("extends").is_none());
+    assert_eq!(
+        service.get("port").unwrap().stringify().as_deref(),
+        Some("5432")
+    );
 }
 
 #[test]

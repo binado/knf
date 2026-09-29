@@ -1,6 +1,9 @@
 //! Interpolation is the identity on documents without `$`.
 
-use knf::{ConfigFormat, ConfigValue, Env, interpolate};
+use knf::{
+    ConfigFormat, ConfigValue, Env, InterpOptions, MergeOptions, interpolate,
+    interpolate_with_options, merge,
+};
 use proptest::prelude::*;
 
 /// An empty environment.
@@ -43,6 +46,28 @@ macro_rules! properties {
         }
 
         proptest! {
+            /// Inheritance follows the native merge contract, including
+            /// destination selectors, nested objects and wholesale arrays.
+            #[test]
+            fn inheritance_agrees_with_native_merge(
+                base in arb_doc(),
+                over in arb_doc(),
+                shallow in prop::option::of(prop::sample::select(vec!["derived", "derived.a", "derived.*", "*", "'derived.a'"])),
+            ) {
+                let wrap = |value| Value::object([("derived".to_owned(), value)].into_iter().collect::<Map>());
+                let selector = shallow.map(|pattern| pattern.parse().unwrap());
+                let expected = merge([wrap(base.clone()), wrap(over.clone())], &MergeOptions {
+                    shallow: selector.clone(), ..Default::default()
+                }).unwrap();
+                let mut local = over;
+                local.as_object_mut().unwrap().insert("extends".into(), Value::string("${base}".into()));
+                let context = Value::object([("base".to_owned(), base)].into_iter().collect::<Map>());
+                let out = interpolate_with_options(wrap(local), Some(&context), &NoEnv, &InterpOptions {
+                    merge_key: Some("extends".into()), shallow: selector,
+                }).unwrap();
+                prop_assert_eq!(out, expected);
+            }
+
             /// A document with no `$` is unchanged, even with `{}` and `:`.
             #[test]
             fn a_document_without_a_dollar_is_unchanged(doc in arb_doc()) {

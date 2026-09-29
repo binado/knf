@@ -2,7 +2,41 @@
 
 use crate::glob::KeyGlobPattern;
 use crate::path::render_keys;
-use crate::{ConfigObject, ConfigValue};
+use crate::{ConfigObject, ConfigValue, Seg};
+
+/// Inheritance uses full key segments too; array descendants have no selector.
+pub(crate) fn shallow_at(glob: Option<&KeyGlobPattern>, path: &[Seg]) -> bool {
+    let Some(glob) = glob else {
+        return false;
+    };
+    let Some(keys) = path
+        .iter()
+        .map(|seg| match seg {
+            Seg::Key(key) => Some(key.clone()),
+            Seg::Index(_) => None,
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    (1..=keys.len()).any(|end| glob.matches_keys(&keys[..end]))
+}
+
+/// Ordered object overlay shared by native layers and inherited projections.
+pub(crate) fn merge_fields<V, O: ConfigObject<V>, E>(
+    base: &mut O,
+    over: O,
+    mut merge: impl FnMut(&mut V, V, String) -> Result<(), E>,
+) -> Result<(), E> {
+    for (key, value) in over {
+        if let Some(slot) = base.get_mut(&key) {
+            merge(slot, value, key)?;
+        } else {
+            base.insert(key, value);
+        }
+    }
+    Ok(())
+}
 
 /// Merge options.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -99,23 +133,20 @@ fn merge_at<V: ConfigValue>(
     if let Some(base_map) = base.as_object_mut() {
         match over.into_object() {
             Ok(over_map) => {
-                for (k, v) in over_map {
-                    if let Some(slot) = base_map.get_mut(&k) {
-                        path.push(k);
-                        if opts
-                            .shallow
-                            .as_ref()
-                            .is_some_and(|glob| glob.matches_keys(path))
-                        {
-                            replace(slot, v, opts, path)?;
-                        } else {
-                            merge_at(slot, v, opts, path)?;
-                        }
-                        path.pop();
+                merge_fields(base_map, over_map, |slot, v, key| {
+                    path.push(key);
+                    if opts
+                        .shallow
+                        .as_ref()
+                        .is_some_and(|glob| glob.matches_keys(path))
+                    {
+                        replace(slot, v, opts, path)?;
                     } else {
-                        base_map.insert(k, v);
+                        merge_at(slot, v, opts, path)?;
                     }
-                }
+                    path.pop();
+                    Ok(())
+                })?;
                 return Ok(());
             }
             Err(over) => return replace(base, over, opts, path),

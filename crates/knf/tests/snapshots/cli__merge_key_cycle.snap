@@ -1,0 +1,6 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"cycle.json\", \"-i\", \"-m\", \"extends\"])"
+---
+error: reference cycle: `bar` -> `bar`
+help: a reference may not resolve, directly or indirectly, to itself
