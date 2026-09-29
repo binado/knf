@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use clap::builder::TypedValueParser;
 use knf::glob::KeyGlobPattern;
 use knf::{Format, PathLeaf};
 
@@ -134,6 +135,23 @@ $$ is a literal $.
     )]
     pub interpolate: bool,
 
+    /// Read an interpolation context without merging it into output
+    #[arg(
+        long = "with",
+        value_name = "FILE",
+        requires = "interpolate",
+        value_parser = context_parser(),
+        long_help = "\
+Read one context file for interpolation; requires --interpolate. Each complete
+reference path is looked up in the merged document first, then in the context.
+Context values and their dependencies resolve only when referenced. Selected
+containers keep their own children. The context uses the same format as inputs,
+including any -f override. Stdin is not accepted.
+
+  knf foo.toml bar.toml -i --with config.toml"
+    )]
+    pub with: Option<PathBuf>,
+
     /// Error when a layer changes the type of an existing key
     #[arg(long)]
     pub strict: bool,
@@ -141,6 +159,16 @@ $$ is a literal $.
     /// Disable pretty-printing
     #[arg(long)]
     pub compact: bool,
+}
+
+fn context_parser() -> impl TypedValueParser<Value = PathBuf> {
+    clap::builder::PathBufValueParser::new().try_map(|path: PathBuf| {
+        if path.as_os_str() == knf::STDIN {
+            Err(super::explain::context_stdin_error())
+        } else {
+            Ok(path)
+        }
+    })
 }
 
 #[cfg(test)]

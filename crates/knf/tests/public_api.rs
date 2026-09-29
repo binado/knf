@@ -2,8 +2,8 @@
 use knf::{
     ConfigFormat, ConfigObject, ConfigValue, Cycle, Env, Format, InterpError, Layers, LoadError,
     MergeError, MergeOptions, PathError, PathLeaf, Problem, ProcessEnv, RefPath, STDIN, Seg,
-    Syntax, interpolate, json_or_string, load_layers, merge, merge_into, render_path,
-    resolve_format, toml_or_string,
+    Syntax, interpolate, interpolate_with_context, json_or_string, load_layers, merge, merge_into,
+    render_path, resolve_format, toml_or_string,
 };
 
 #[allow(dead_code)]
@@ -43,6 +43,27 @@ fn native_pipeline<V: ConfigFormat + std::fmt::Debug>(env: &dyn Env) {
     );
     let emitted = knf::format::emit(merged, true).unwrap();
     let _: V = knf::format::parse(&emitted, &knf::format::SourceName::Stdin).unwrap();
+    let doc = "copy=${port}"
+        .parse::<PathLeaf<String>>()
+        .unwrap()
+        .into_layer::<V>()
+        .unwrap();
+    let context = "port=5432"
+        .parse::<PathLeaf<String>>()
+        .unwrap()
+        .into_layer::<V>()
+        .unwrap();
+    let out = interpolate_with_context(doc, &context, env).unwrap();
+    assert_eq!(
+        out.as_object()
+            .unwrap()
+            .get("copy")
+            .unwrap()
+            .stringify()
+            .as_deref(),
+        Some("5432")
+    );
+    assert!(out.as_object().unwrap().get("port").is_none());
 }
 
 #[test]

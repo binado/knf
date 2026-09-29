@@ -1,0 +1,8 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"a.json\", \"-i\", \"--with\", \"config.json\"])"
+---
+error: unresolved reference
+  --> settings.bad: `missing`
+help: `${key.path}` names a key in the merged document or --with context, `${env:NAME}` an environment variable
+help: drop --interpolate and --with to pass `${...}` through untouched

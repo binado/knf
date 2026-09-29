@@ -58,7 +58,7 @@ pub enum Problem {
 }
 
 impl Problem {
-    /// Where in the merged document the offending string lives.
+    /// Where in the merged document or context the offending string lives.
     pub fn path(&self) -> &[Seg] {
         match self {
             Self::Syntax { path, .. }

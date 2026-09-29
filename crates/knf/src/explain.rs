@@ -5,6 +5,10 @@ use anyhow::anyhow;
 use knf::fs::{AccumulateError, AccumulateTargetError};
 use knf::{InterpError, LoadError, MergeError, PathError, Problem};
 
+pub fn context_stdin_error() -> String {
+    "--with does not accept stdin".to_owned()
+}
+
 /// Preserve the command-line vocabulary for target validation.
 pub fn explain_accumulate_target(err: AccumulateTargetError) -> String {
     match err {
@@ -54,7 +58,7 @@ pub fn explain_pipeline(err: impl Into<anyhow::Error>) -> anyhow::Error {
         Err(err) => err,
     };
     match err.downcast::<InterpError>() {
-        Ok(err) => explain_interp(err),
+        Ok(err) => explain_interp(err, false),
         Err(err) => err,
     }
 }
@@ -87,7 +91,7 @@ pub fn name_the_inline_layer_flag(err: PathError) -> anyhow::Error {
 }
 
 /// Adds `--interpolate` help to interpolation errors.
-fn explain_interp(err: InterpError) -> anyhow::Error {
+pub fn explain_interp(err: InterpError, has_context: bool) -> anyhow::Error {
     let mut help = String::new();
     match &err {
         InterpError::Cycle(_) => {
@@ -104,9 +108,15 @@ fn explain_interp(err: InterpError) -> anyhow::Error {
                 );
             }
             if unresolved {
-                help.push_str(
+                if has_context {
+                    help.push_str(
+                        "\nhelp: `${key.path}` names a key in the merged document or --with context, `${env:NAME}` an environment variable",
+                    );
+                } else {
+                    help.push_str(
                     "\nhelp: `${key.path}` names a key in the merged document, `${env:NAME}` an environment variable",
-                );
+                    );
+                }
             }
             if has(|p| matches!(p, Problem::NotStringifiable { .. })) {
                 help.push_str(
@@ -114,7 +124,13 @@ fn explain_interp(err: InterpError) -> anyhow::Error {
                 );
             }
             if syntax || unresolved {
-                help.push_str("\nhelp: drop --interpolate to pass `${...}` through untouched");
+                if has_context {
+                    help.push_str(
+                        "\nhelp: drop --interpolate and --with to pass `${...}` through untouched",
+                    );
+                } else {
+                    help.push_str("\nhelp: drop --interpolate to pass `${...}` through untouched");
+                }
             }
         }
     }
