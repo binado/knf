@@ -3,6 +3,7 @@
 import datetime
 import json
 import math
+import subprocess
 
 import pytest
 
@@ -123,3 +124,14 @@ def test_output_interpolation_failure_does_not_fall_back(tmp_path):
     context = write(tmp_path, "context.json", '{"a":1}')
     with pytest.raises(InterpolationError, match="a: `missing`"):
         load([doc], interpolate=True, context=context)
+
+
+def test_wheel_cli_accepts_stdin_context_and_rejects_duplicate_stdin(tmp_path):
+    doc = write(tmp_path, "doc.json", '{"copy":"${port}"}')
+    args = ["knf", str(doc), "-i", "--with", "-", "-f", "json", "--compact"]
+    result = subprocess.run(args, input='{"port":5432}', capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"copy": 5432}
+    result = subprocess.run(args + ["-"], input='{"port":5432}', capture_output=True, text=True)
+    assert result.returncode == 2
+    assert "stdin cannot supply both" in result.stderr

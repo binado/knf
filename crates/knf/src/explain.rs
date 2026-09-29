@@ -5,8 +5,8 @@ use anyhow::anyhow;
 use knf::fs::{AccumulateError, AccumulateTargetError};
 use knf::{InterpError, LoadError, MergeError, PathError, Problem};
 
-pub fn context_stdin_error() -> String {
-    "--with does not accept stdin".to_owned()
+pub fn context_stdin_conflict() -> &'static str {
+    "stdin cannot supply both a merge layer and --with context"
 }
 
 /// Preserve the command-line vocabulary for target validation.

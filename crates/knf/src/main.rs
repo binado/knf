@@ -64,6 +64,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     } else if let Some(pattern) = &cli.glob_filename {
         files = knf::fs::filter_paths(&files, pattern, true);
     }
+    cli.validate_stdin(&files);
     if cli.list_files {
         let mut text = String::new();
         for path in &files {

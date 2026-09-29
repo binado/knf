@@ -127,9 +127,11 @@ context values resolve. A selected container keeps its own children.
 
 ```bash
 knf foo.toml bar.toml -i --with config.toml
+generate-config | knf foo.toml bar.toml -i --with - -f toml
 ```
 
-Context uses the same format as inputs, including `-f`, and cannot read stdin.
+Context uses the same format as inputs, including `-f`. `--with -` reads stdin
+and requires `-f`; stdin cannot also supply a merge layer.
 Filtering, accumulation and `--list-files` apply only to merge inputs.
 
 **`-f/--format json|toml`**: set the format for parsing, `-c` typing and output.

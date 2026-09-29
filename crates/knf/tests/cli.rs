@@ -190,6 +190,160 @@ fn context_argument_errors_are_usage_errors_before_io() {
 }
 
 #[test]
+fn context_stdin_supports_both_formats_and_preserves_native_values() {
+    let dir = tree(&[
+        (
+            "foo.toml",
+            "host = 'base'\nurl = '${service.url}'\nday = '${service.day}'\n",
+        ),
+        ("bar.toml", "host = 'prod'\n"),
+        (
+            "foo.json",
+            r#"{"host":"base","url":"${service.url}","big":"${big_value}","null":"${null_value}"}"#,
+        ),
+    ]);
+    let out = ok_stdout(
+        knf(&dir).args(["foo.toml", "bar.toml", "-i", "--with", "-", "-f", "toml"])
+            .write_stdin("host = 'shared'\nunused = '${missing}'\n[service]\nurl = 'https://${host}/api'\nday = 1979-05-27\n"),
+        &[],
+    );
+    let out: toml::Value = toml::from_str(&out).unwrap();
+    assert_eq!(out["url"].as_str(), Some("https://prod/api"));
+    assert!(out["day"].is_datetime());
+    assert!(!out.as_table().unwrap().contains_key("service"));
+    assert!(!out.as_table().unwrap().contains_key("unused"));
+    let out = ok_stdout(
+        knf(&dir).args(["foo.json", "-i", "--with=-", "-f", "json", "--compact"])
+            .write_stdin(r#"{"service":{"url":"https://${host}/api"},"big_value":18446744073709551615,"null_value":null}"#),
+        &[],
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&out).unwrap(),
+        serde_json::json!({"host":"base","url":"https://base/api","big":u64::MAX,"null":null})
+    );
+}
+
+#[test]
+fn context_stdin_supports_inline_or_empty_output() {
+    let dir = tree(&[]);
+    assert_toml_eq_json(
+        &ok_stdout(
+            knf(&dir)
+                .args(["-i", "--with", "-", "-f", "toml", "-c", "copy=${port}"])
+                .write_stdin("port = 5432\n"),
+            &[],
+        ),
+        r#"{"copy":5432}"#,
+    );
+    assert_eq!(
+        ok_stdout(
+            knf(&dir)
+                .args(["-i", "--with", "-", "-f", "json", "--compact"])
+                .write_stdin(r#"{"unused":"${missing}"}"#),
+            &[],
+        ),
+        "{}\n"
+    );
+}
+
+#[test]
+fn context_stdin_requires_format_before_document_io() {
+    let dir = tree(&[]);
+    let out = knf(&dir)
+        .args(["missing.toml", "-i", "--with", "-"])
+        .write_stdin("invalid TOML")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("--format"), "{stderr}");
+    assert!(!stderr.contains("reading"), "{stderr}");
+}
+
+#[test]
+fn context_stdin_conflicts_with_a_retained_stdin_layer_before_io() {
+    let dir = tree(&[]);
+    let out = knf(&dir)
+        .args(["missing.json", "-", "-i", "--with", "-", "-f", "json"])
+        .write_stdin("invalid JSON")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("stdin cannot supply both a merge layer and --with context"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("reading"), "{stderr}");
+}
+
+#[test]
+fn context_stdin_respects_filtered_sources_and_list_files_skips_reading_it() {
+    let dir = tree(&[("foo.json", r#"{"copy":"${value}"}"#)]);
+    assert_eq!(
+        ok_stdout(
+            knf(&dir)
+                .args([
+                    "-",
+                    "foo.json",
+                    "-g",
+                    "*.json",
+                    "-i",
+                    "--with",
+                    "-",
+                    "-f",
+                    "json",
+                    "--compact"
+                ])
+                .write_stdin(r#"{"value":42}"#),
+            &[],
+        ),
+        "{\"copy\":42}\n"
+    );
+    assert_eq!(
+        ok_stdout(
+            knf(&dir)
+                .args([
+                    "missing.json",
+                    "-i",
+                    "--with",
+                    "-",
+                    "-f",
+                    "json",
+                    "--list-files"
+                ])
+                .write_stdin("invalid JSON"),
+            &[],
+        ),
+        "missing.json\n"
+    );
+}
+
+#[test]
+fn context_file_still_supports_a_stdin_merge_layer() {
+    let dir = tree(&[("config.json", r#"{"value":42}"#)]);
+    assert_eq!(
+        ok_stdout(
+            knf(&dir)
+                .args([
+                    "-",
+                    "-i",
+                    "--with",
+                    "config.json",
+                    "-f",
+                    "json",
+                    "--compact"
+                ])
+                .write_stdin(r#"{"copy":"${value}"}"#),
+            &[],
+        ),
+        "{\"copy\":42}\n"
+    );
+}
+
+#[test]
 fn context_formats_are_validated_before_document_reads() {
     let dir = tree(&[]);
     let err = run_err(&dir, &["missing.json", "-i", "--with", "missing.toml"]);

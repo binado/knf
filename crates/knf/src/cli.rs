@@ -2,8 +2,7 @@
 
 use std::path::PathBuf;
 
-use clap::Parser;
-use clap::builder::TypedValueParser;
+use clap::{CommandFactory, Parser, error::ErrorKind};
 use knf::glob::KeyGlobPattern;
 use knf::{Format, PathLeaf};
 
@@ -140,15 +139,17 @@ $$ is a literal $.
         long = "with",
         value_name = "FILE",
         requires = "interpolate",
-        value_parser = context_parser(),
+        requires_if("-", "format"),
         long_help = "\
 Read one context file for interpolation; requires --interpolate. Each complete
 reference path is looked up in the merged document first, then in the context.
 Context values and their dependencies resolve only when referenced. Selected
 containers keep their own children. The context uses the same format as inputs,
-including any -f override. Stdin is not accepted.
+including any -f override. Use - to read context from stdin; requires -f.
+Stdin cannot supply both a merge layer and context.
 
-  knf foo.toml bar.toml -i --with config.toml"
+  knf foo.toml bar.toml -i --with config.toml
+  generate-config | knf foo.toml -i --with - -f toml"
     )]
     pub with: Option<PathBuf>,
 
@@ -161,14 +162,23 @@ including any -f override. Stdin is not accepted.
     pub compact: bool,
 }
 
-fn context_parser() -> impl TypedValueParser<Value = PathBuf> {
-    clap::builder::PathBufValueParser::new().try_map(|path: PathBuf| {
-        if path.as_os_str() == knf::STDIN {
-            Err(super::explain::context_stdin_error())
-        } else {
-            Ok(path)
+impl Cli {
+    /// Validate stdin sources after filtering, before reading any documents.
+    pub fn validate_stdin(&self, files: &[PathBuf]) {
+        if self
+            .with
+            .as_ref()
+            .is_some_and(|path| path.as_os_str() == knf::STDIN)
+            && files.iter().any(|path| path.as_os_str() == knf::STDIN)
+        {
+            Self::command()
+                .error(
+                    ErrorKind::ArgumentConflict,
+                    super::explain::context_stdin_conflict(),
+                )
+                .exit();
         }
-    })
+    }
 }
 
 #[cfg(test)]
