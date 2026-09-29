@@ -15,11 +15,6 @@ pub struct MergeOptions {
 }
 
 impl MergeOptions {
-    /// The default: deep merge, last layer wins, no type checking.
-    pub const LAST_WINS: Self = Self {
-        strict: false,
-        shallow: None,
-    };
     /// Error when a layer changes the kind of an existing key.
     pub const STRICT: Self = Self {
         strict: true,

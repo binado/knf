@@ -34,7 +34,7 @@ fn arb_doc() -> impl Strategy<Value = Value> {
 }
 
 fn merged(mut base: Value, over: Value) -> Value {
-    merge_into(&mut base, over, &MergeOptions::LAST_WINS).expect("non-strict merge cannot fail");
+    merge_into(&mut base, over, &MergeOptions::default()).expect("non-strict merge cannot fail");
     base
 }
 
