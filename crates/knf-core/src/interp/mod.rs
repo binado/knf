@@ -63,12 +63,7 @@ fn resolve_document<V: ConfigFormat>(
         visiting: Vec::new(),
         problems: Vec::new(),
     };
-    let resolved = resolver
-        .resolve(&Node {
-            source: Source::Document,
-            path: Vec::new(),
-        })
-        .map_err(InterpError::Cycle)?;
+    let resolved = resolver.resolve(&[]).map_err(InterpError::Cycle)?;
     if resolver.problems.is_empty() {
         Ok(resolved)
     } else {
@@ -76,85 +71,68 @@ fn resolve_document<V: ConfigFormat>(
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum Source {
-    Document,
-    Context,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct Node {
-    source: Source,
-    path: Vec<Seg>,
-}
-
-impl Node {
-    fn child(&self, seg: Seg) -> Self {
-        Self {
-            source: self.source,
-            path: child(&self.path, seg),
-        }
-    }
-}
-
-/// Memoized depth-first resolution, keyed on source and path.
+/// Output-first lookup fixes one source per path, so caches need only the path.
 struct Resolver<'a, V: ConfigFormat> {
     doc: &'a V,
     context: Option<&'a V>,
     env: &'a dyn Env,
-    memo: HashMap<Node, V>,
+    memo: HashMap<Vec<Seg>, V>,
     /// Paths being resolved, innermost last; also the cycle chain.
-    visiting: Vec<Node>,
+    visiting: Vec<Vec<Seg>>,
     problems: Vec<Problem>,
 }
 
 impl<'a, V: ConfigFormat> Resolver<'a, V> {
-    /// Resolves a node which the caller has established exists.
-    fn resolve(&mut self, node: &Node) -> Result<V, Cycle> {
-        if let Some(done) = self.memo.get(node) {
+    fn lookup(&self, path: &[Seg]) -> Option<&'a V> {
+        lookup(self.doc, path).or_else(|| self.context.and_then(|context| lookup(context, path)))
+    }
+
+    /// Resolves the node at `path`, which the caller has established exists.
+    fn resolve(&mut self, path: &[Seg]) -> Result<V, Cycle> {
+        if let Some(done) = self.memo.get(path) {
             return Ok(done.clone());
         }
-        if let Some(start) = self.visiting.iter().position(|seen| seen == node) {
-            let mut chain: Vec<_> = self.visiting[start..]
-                .iter()
-                .map(|n| n.path.clone())
-                .collect();
-            chain.push(node.path.clone());
+        if let Some(start) = self
+            .visiting
+            .iter()
+            .position(|seen| seen.as_slice() == path)
+        {
+            let mut chain = self.visiting[start..].to_vec();
+            chain.push(path.to_vec());
             return Err(Cycle::new(chain));
         }
 
-        let source = match node.source {
-            Source::Document => self.doc,
-            Source::Context => self.context.expect("context nodes require a context"),
-        };
-        let raw = lookup(source, &node.path).expect("resolve is only called on paths that exist");
+        let raw = self
+            .lookup(path)
+            .expect("resolve is only called on paths that exist");
 
-        self.visiting.push(node.clone());
-        let resolved = self.resolve_value(raw, node)?;
+        self.visiting.push(path.to_vec());
+        let resolved = self.resolve_value(raw, path)?;
         self.visiting.pop();
 
         // No reference can name the root, so don't cache it.
-        if !node.path.is_empty() {
-            self.memo.insert(node.clone(), resolved.clone());
+        if !path.is_empty() {
+            self.memo.insert(path.to_vec(), resolved.clone());
         }
         Ok(resolved)
     }
 
-    fn resolve_value(&mut self, raw: &'a V, node: &Node) -> Result<V, Cycle> {
+    fn resolve_value(&mut self, raw: &'a V, path: &[Seg]) -> Result<V, Cycle> {
         if let Some(text) = raw.as_str() {
-            return self.resolve_string(text, &node.path);
+            return self.resolve_string(text, path);
         }
+        // A context container is absent from doc, as are all its descendants.
         if let Some(items) = raw.as_array() {
             let mut out = Vec::with_capacity(items.len());
             for index in 0..items.len() {
-                out.push(self.resolve(&node.child(Seg::Index(index)))?);
+                out.push(self.resolve(&child(path, Seg::Index(index)))?);
             }
             return Ok(V::array(out));
         }
         if let Some(map) = raw.as_object() {
             let mut out = V::Object::new();
             for (key, _) in map.iter() {
-                let value = self.resolve(&node.child(Seg::Key(key.clone())))?;
+                let value = self.resolve(&child(path, Seg::Key(key.clone())))?;
                 out.insert(key.clone(), value);
             }
             return Ok(V::object(out));
@@ -250,9 +228,9 @@ impl<'a, V: ConfigFormat> Resolver<'a, V> {
         found
     }
 
-    /// The source node a reference names, recording a problem and returning
+    /// The path a reference names, recording a problem and returning
     /// `None` if it is malformed or names nothing.
-    fn target(&mut self, body: &str, path: &[Seg]) -> Option<Node> {
+    fn target(&mut self, body: &str, path: &[Seg]) -> Option<Vec<Seg>> {
         let target: Vec<Seg> = match body.parse::<RefPath>() {
             Ok(parsed) => parsed.into_segs(),
             Err(PathError::BadIndex { .. }) => {
@@ -278,24 +256,14 @@ impl<'a, V: ConfigFormat> Resolver<'a, V> {
                 unreachable!("parsing a reference body never reports these")
             }
         };
-        let source = if lookup(self.doc, &target).is_some() {
-            Source::Document
-        } else if self
-            .context
-            .is_some_and(|context| lookup(context, &target).is_some())
-        {
-            Source::Context
-        } else {
+        if self.lookup(&target).is_none() {
             self.problems.push(Problem::Unresolved {
                 path: path.to_vec(),
                 reference: body.to_string(),
             });
             return None;
-        };
-        Some(Node {
-            source,
-            path: target,
-        })
+        }
+        Some(target)
     }
 }
 
