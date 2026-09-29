@@ -14,7 +14,7 @@ use knf::fs::{AccumulateError, AccumulateTarget};
 use knf::glob::{GlobError, GlobPattern, KeyGlobError, KeyGlobPattern};
 use knf::{
     ConfigFormat, Format, InterpError, LoadError, MergeError, MergeOptions, ProcessEnv, Seg,
-    interpolate as interpolate_value, merge, render_path, resolve_format,
+    interpolate as interpolate_value, interpolate_with_context, merge, render_path, resolve_format,
 };
 use pyo3::PyTypeInfo;
 use pyo3::create_exception;
@@ -117,14 +117,25 @@ fn discovery_os_error(py: Python<'_>, path: Option<&Path>, source: io::Error) ->
 ///
 /// `files` merge left to right. `shallow` is a key-path glob whose matches
 /// replace wholesale. Interpolation runs once after merging.
+/// `context` is one filepath used only for interpolation, with output-first
+/// lookup; it requires `interpolate=True`.
 #[pyfunction]
-#[pyo3(signature = (files, *, interpolate = false, shallow = None))]
+#[pyo3(signature = (files, *, interpolate = false, shallow = None, context = None))]
 fn load<'py>(
     py: Python<'py>,
     files: Vec<PathBuf>,
     interpolate: bool,
     shallow: Option<&str>,
+    context: Option<PathBuf>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    if let Some(path) = &context {
+        if !interpolate {
+            return Err(PyValueError::new_err("context requires interpolate=True"));
+        }
+        if path.as_os_str() == knf::STDIN {
+            return Err(PyValueError::new_err("context does not accept stdin"));
+        }
+    }
     let shallow: Option<KeyGlobPattern> = shallow
         .map(str::parse)
         .transpose()
@@ -135,15 +146,21 @@ fn load<'py>(
     };
     let merged = py
         .detach(move || {
-            let format = resolve_format(&files, None).map_err(|err| {
+            let mut inputs = files.clone();
+            inputs.extend(context.iter().cloned());
+            let format = resolve_format(&inputs, None).map_err(|err| {
                 Failure::File(
                     err.path().unwrap_or(Path::new("")).to_path_buf(),
                     err.into(),
                 )
             })?;
             match format {
-                Format::Json => load_native(&files, interpolate, &opts).map(Document::Json),
-                Format::Toml => load_native(&files, interpolate, &opts).map(Document::Toml),
+                Format::Json => {
+                    load_native(&files, context.as_deref(), interpolate, &opts).map(Document::Json)
+                }
+                Format::Toml => {
+                    load_native(&files, context.as_deref(), interpolate, &opts).map(Document::Toml)
+                }
             }
         })
         .map_err(|failure| match failure {
@@ -165,21 +182,27 @@ enum Document {
 
 fn load_native<V: ConfigFormat>(
     files: &[PathBuf],
+    context_path: Option<&Path>,
     interpolate: bool,
     opts: &MergeOptions,
 ) -> Result<V, Failure> {
-    let mut layers = Vec::with_capacity(files.len());
-    for path in files {
+    let mut layers = Vec::with_capacity(files.len() + usize::from(context_path.is_some()));
+    for path in files.iter().map(PathBuf::as_path).chain(context_path) {
         let read = || -> anyhow::Result<V> {
             let text = std::fs::read_to_string(path)
                 .with_context(|| format!("reading `{}`", path.display()))?;
-            knf::format::parse(&text, &knf::format::SourceName::File(path.clone()))
+            knf::format::parse(&text, &knf::format::SourceName::File(path.to_path_buf()))
         };
-        layers.push(read().map_err(|err| Failure::File(path.clone(), err))?);
+        layers.push(read().map_err(|err| Failure::File(path.to_path_buf(), err))?);
     }
+    let context = context_path.map(|_| layers.pop().expect("context was loaded last"));
     let merged = merge(layers, opts).map_err(Failure::Merge)?;
     if interpolate {
-        interpolate_value(merged, &ProcessEnv).map_err(Failure::Interpolate)
+        match &context {
+            Some(context) => interpolate_with_context(merged, context, &ProcessEnv),
+            None => interpolate_value(merged, &ProcessEnv),
+        }
+        .map_err(Failure::Interpolate)
     } else {
         Ok(merged)
     }

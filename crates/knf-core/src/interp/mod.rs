@@ -33,8 +33,31 @@ pub trait Env {
 /// Reports all unresolved and malformed references together; a cycle is
 /// reported alone.
 pub fn interpolate<V: ConfigFormat>(doc: V, env: &dyn Env) -> Result<V, InterpError> {
+    resolve_document(doc, None, env)
+}
+
+/// Resolves references in `doc`, looking up each complete path in `doc` first,
+/// then in `context`. Context values are resolved only when referenced, using
+/// the same lookup order for their dependencies. Only `doc` is returned.
+///
+/// Existing values, including null, take precedence. Selected containers keep
+/// their own children; they are never combined with the other document.
+pub fn interpolate_with_context<V: ConfigFormat>(
+    doc: V,
+    context: &V,
+    env: &dyn Env,
+) -> Result<V, InterpError> {
+    resolve_document(doc, Some(context), env)
+}
+
+fn resolve_document<V: ConfigFormat>(
+    doc: V,
+    context: Option<&V>,
+    env: &dyn Env,
+) -> Result<V, InterpError> {
     let mut resolver = Resolver {
         doc: &doc,
+        context,
         env,
         memo: HashMap::new(),
         visiting: Vec::new(),
@@ -48,10 +71,10 @@ pub fn interpolate<V: ConfigFormat>(doc: V, env: &dyn Env) -> Result<V, InterpEr
     }
 }
 
-/// Memoized depth-first resolution, keyed on path, so each problem is reported
-/// once.
+/// Output-first lookup fixes one source per path, so caches need only the path.
 struct Resolver<'a, V: ConfigFormat> {
     doc: &'a V,
+    context: Option<&'a V>,
     env: &'a dyn Env,
     memo: HashMap<Vec<Seg>, V>,
     /// Paths being resolved, innermost last; also the cycle chain.
@@ -60,6 +83,10 @@ struct Resolver<'a, V: ConfigFormat> {
 }
 
 impl<'a, V: ConfigFormat> Resolver<'a, V> {
+    fn lookup(&self, path: &[Seg]) -> Option<&'a V> {
+        lookup(self.doc, path).or_else(|| self.context.and_then(|context| lookup(context, path)))
+    }
+
     /// Resolves the node at `path`, which the caller has established exists.
     fn resolve(&mut self, path: &[Seg]) -> Result<V, Cycle> {
         if let Some(done) = self.memo.get(path) {
@@ -75,7 +102,9 @@ impl<'a, V: ConfigFormat> Resolver<'a, V> {
             return Err(Cycle::new(chain));
         }
 
-        let raw = lookup(self.doc, path).expect("resolve is only called on paths that exist");
+        let raw = self
+            .lookup(path)
+            .expect("resolve is only called on paths that exist");
 
         self.visiting.push(path.to_vec());
         let resolved = self.resolve_value(raw, path)?;
@@ -92,6 +121,7 @@ impl<'a, V: ConfigFormat> Resolver<'a, V> {
         if let Some(text) = raw.as_str() {
             return self.resolve_string(text, path);
         }
+        // A context container is absent from doc, as are all its descendants.
         if let Some(items) = raw.as_array() {
             let mut out = Vec::with_capacity(items.len());
             for index in 0..items.len() {
@@ -198,7 +228,7 @@ impl<'a, V: ConfigFormat> Resolver<'a, V> {
         found
     }
 
-    /// The document path a reference names, recording a problem and returning
+    /// The path a reference names, recording a problem and returning
     /// `None` if it is malformed or names nothing.
     fn target(&mut self, body: &str, path: &[Seg]) -> Option<Vec<Seg>> {
         let target: Vec<Seg> = match body.parse::<RefPath>() {
@@ -226,7 +256,7 @@ impl<'a, V: ConfigFormat> Resolver<'a, V> {
                 unreachable!("parsing a reference body never reports these")
             }
         };
-        if lookup(self.doc, &target).is_none() {
+        if self.lookup(&target).is_none() {
             self.problems.push(Problem::Unresolved {
                 path: path.to_vec(),
                 reference: body.to_string(),

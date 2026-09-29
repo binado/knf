@@ -9,7 +9,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use knf::{
-    ConfigFormat, Layers, MergeOptions, ProcessEnv, format, interpolate, load_layers, merge,
+    ConfigFormat, Layers, MergeOptions, ProcessEnv, format, interpolate, interpolate_with_context,
+    load_layers, merge,
 };
 
 use cli::Cli;
@@ -63,6 +64,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     } else if let Some(pattern) = &cli.glob_filename {
         files = knf::fs::filter_paths(&files, pattern, true);
     }
+    cli.validate_stdin(&files);
     if cli.list_files {
         let mut text = String::new();
         for path in &files {
@@ -77,7 +79,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
 
 /// Dispatch once to a native pipeline; every later stage retains its type.
 fn run_pipeline(cli: &Cli, files: &[PathBuf], opts: &MergeOptions) -> anyhow::Result<()> {
-    let layers = load_layers(files, cli.format.map(Into::into)).map_err(explain_pipeline)?;
+    let mut inputs = files.to_vec();
+    inputs.extend(cli.with.iter().cloned());
+    let layers = load_layers(&inputs, cli.format.map(Into::into))
+        .map_err(|err| explain_pipeline(err, cli.with.as_deref()))?;
     match layers {
         Layers::Json(layers) => run_native(cli, layers, opts),
         Layers::Toml(layers) => run_native(cli, layers, opts),
@@ -89,6 +94,10 @@ fn run_native<V: ConfigFormat>(
     mut layers: Vec<V>,
     opts: &MergeOptions,
 ) -> anyhow::Result<()> {
+    let context = cli
+        .with
+        .as_ref()
+        .map(|_| layers.pop().expect("context was loaded last"));
     for leaf in &cli.set {
         layers.push(
             leaf.clone()
@@ -96,13 +105,17 @@ fn run_native<V: ConfigFormat>(
                 .map_err(name_the_inline_layer_flag)?,
         );
     }
-    let merged = merge(layers, opts).map_err(explain_pipeline)?;
+    let merged = merge(layers, opts).map_err(|err| explain_pipeline(err, None))?;
     let merged = if cli.interpolate {
-        interpolate(merged, &ProcessEnv).map_err(explain_pipeline)?
+        let resolved = match &context {
+            Some(context) => interpolate_with_context(merged, context, &ProcessEnv),
+            None => interpolate(merged, &ProcessEnv),
+        };
+        resolved.map_err(|err| explain::explain_interp(err, context.is_some()))?
     } else {
         merged
     };
-    let text = format::emit(merged, !cli.compact).map_err(explain_pipeline)?;
+    let text = format::emit(merged, !cli.compact).map_err(|err| explain_pipeline(err, None))?;
     write_stdout(&text)
 }
 

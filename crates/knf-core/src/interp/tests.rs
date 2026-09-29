@@ -62,6 +62,152 @@ macro_rules! common_tests {
             interp_env(doc, vars).expect_err("should fail").to_string()
         }
 
+        #[test]
+        fn context_falls_back_per_complete_path_without_merging() {
+            let doc = obj(vec![
+                ("db", obj(vec![("host", s("prod"))])),
+                ("port", s("${db.port}")),
+                ("copy", s("${db}")),
+                ("items", Value::array(vec![n(1)])),
+                ("last", s("${items[1]}")),
+                ("scalar", n(0)),
+                ("nested", s("${scalar.child}")),
+            ]);
+            let context = obj(vec![
+                ("db", obj(vec![("host", s("shared")), ("port", n(5432))])),
+                ("items", Value::array(vec![n(2), n(3)])),
+                ("scalar", obj(vec![("child", n(4))])),
+                ("unused", s("${missing}")),
+                ("cycle", s("${cycle}")),
+                ("malformed", s("${}")),
+            ]);
+            let out = interpolate_with_context(doc, &context, &StubEnv::default()).unwrap();
+            let map = out.as_object().unwrap();
+            assert_eq!(map["port"], n(5432));
+            assert_eq!(map["copy"], obj(vec![("host", s("prod"))]));
+            assert_eq!(map["last"], n(3));
+            assert_eq!(map["nested"], n(4));
+            assert!(map.get("unused").is_none());
+            assert!(map.get("cycle").is_none());
+        }
+
+        #[test]
+        fn context_dependencies_prefer_output_and_containers_keep_their_children() {
+            let doc = obj(vec![
+                ("host", s("prod")),
+                ("url", s("${service.url}")),
+                ("copy", s("${service}")),
+            ]);
+            let service = obj(vec![
+                ("host", s("own")),
+                ("url", s("https://${host}/api")),
+                ("ports", Value::array(vec![n(5432)])),
+            ]);
+            let context = obj(vec![("host", s("shared")), ("service", service)]);
+            let out = interpolate_with_context(doc, &context, &StubEnv::default()).unwrap();
+            let map = out.as_object().unwrap();
+            assert_eq!(map["url"], s("https://prod/api"));
+            assert_eq!(
+                map["copy"],
+                obj(vec![
+                    ("host", s("own")),
+                    ("url", s("https://prod/api")),
+                    ("ports", Value::array(vec![n(5432)])),
+                ])
+            );
+        }
+
+        #[test]
+        fn context_environment_is_terminal_and_escaping_is_preserved() {
+            let doc = obj(vec![("copy", s("${settings}"))]);
+            let context = obj(vec![(
+                "settings",
+                obj(vec![
+                    ("literal", s("$${missing}")),
+                    ("raw", s("${env:TEXT}")),
+                    ("port", s("${env:PORT}")),
+                ]),
+            )]);
+            let out = interpolate_with_context(
+                doc,
+                &context,
+                &StubEnv::new(&[("TEXT", "${missing}"), ("PORT", "8080")]),
+            )
+            .unwrap();
+            assert_eq!(
+                out,
+                obj(vec![(
+                    "copy",
+                    obj(vec![
+                        ("literal", s("${missing}")),
+                        ("raw", s("${missing}")),
+                        ("port", n(8080)),
+                    ])
+                )])
+            );
+        }
+
+        #[test]
+        fn context_does_not_hide_output_errors() {
+            let doc = obj(vec![("value", s("${missing}")), ("copy", s("${value}"))]);
+            let context = obj(vec![("value", n(42))]);
+            let err = interpolate_with_context(doc, &context, &StubEnv::default()).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "unresolved reference\n  --> value: `missing`"
+            );
+        }
+
+        #[test]
+        fn repeated_context_dependencies_report_one_problem_at_the_source_path() {
+            let doc = obj(vec![("a", s("${settings.bad}")), ("b", s("${settings}"))]);
+            let context = obj(vec![("settings", obj(vec![("bad", s("${missing}"))]))]);
+            let err = interpolate_with_context(doc, &context, &StubEnv::default()).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "unresolved reference\n  --> settings.bad: `missing`"
+            );
+            assert!(!err.to_string().ends_with('\n'));
+        }
+
+        #[test]
+        fn context_and_cross_source_cycles_are_detected() {
+            let doc = obj(vec![("copy", s("${a}"))]);
+            let context = obj(vec![("a", s("${b}")), ("b", s("${a}"))]);
+            let err = interpolate_with_context(doc, &context, &StubEnv::default()).unwrap_err();
+            assert_eq!(err.to_string(), "reference cycle: `a` -> `b` -> `a`");
+            let doc = obj(vec![("a", s("${b}"))]);
+            let context = obj(vec![("b", s("${a}"))]);
+            let err = interpolate_with_context(doc, &context, &StubEnv::default()).unwrap_err();
+            assert_eq!(err.to_string(), "reference cycle: `a` -> `b` -> `a`");
+        }
+
+        #[test]
+        fn context_container_beneath_an_output_scalar_keeps_its_source() {
+            let doc = obj(vec![("a", s("${a.child}")), ("again", s("${a.child}"))]);
+            let context = obj(vec![(
+                "a",
+                obj(vec![(
+                    "child",
+                    obj(vec![("value", n(7)), ("copy", s("${a.child.value}"))]),
+                )]),
+            )]);
+            let out = interpolate_with_context(doc, &context, &StubEnv::default()).unwrap();
+            let expected = obj(vec![("value", n(7)), ("copy", n(7))]);
+            assert_eq!(out, obj(vec![("a", expected.clone()), ("again", expected)]));
+        }
+
+        #[test]
+        fn embedded_context_containers_are_rejected() {
+            let doc = obj(vec![("copy", s("x${settings}"))]);
+            let context = obj(vec![("settings", obj(vec![("port", n(80))]))]);
+            let err = interpolate_with_context(doc, &context, &StubEnv::default()).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "reference cannot be rendered into a string\n  --> copy: `settings` is an object"
+            );
+        }
+
         // --- positions ------------------------------------------------------------
 
         /// A whole-string reference keeps its type.
@@ -544,6 +690,17 @@ mod json {
     type Map = serde_json::Map<String, Value>;
     common_tests!();
     #[test]
+    fn context_preserves_unsigned_integers_and_null_precedence() {
+        let doc = serde_json::json!({"value": null, "copy": "${value}", "big": "${big_value}", "nested": "${value.child}", "null": "${null_value}"});
+        let context =
+            serde_json::json!({"value": {"child": 4}, "big_value": u64::MAX, "null_value": null});
+        let out = interpolate_with_context(doc, &context, &StubEnv::default()).unwrap();
+        assert_eq!(
+            out,
+            serde_json::json!({"value": null, "copy": null, "big": u64::MAX, "nested": 4, "null": null})
+        );
+    }
+    #[test]
     fn an_embedded_null_reference_is_rejected() {
         let doc = obj(vec![("n", Value::Null), ("t", s("[${n}]"))]);
         assert_eq!(
@@ -566,6 +723,14 @@ mod toml {
     use ::toml::Value;
     type Map = ::toml::Table;
     common_tests!();
+    #[test]
+    fn context_preserves_native_datetimes_and_nonfinite_floats() {
+        let doc = Value::parse_document("date = '${day}'\nfloat = '${infinite}'\n").unwrap();
+        let context = Value::parse_document("day = 1979-05-27\ninfinite = inf\n").unwrap();
+        let out = interpolate_with_context(doc, &context, &StubEnv::default()).unwrap();
+        assert_eq!(out["date"], context["day"]);
+        assert_eq!(out["float"], context["infinite"]);
+    }
     #[test]
     fn a_datetime_splices_as_its_source_spelling() {
         let doc = obj(vec![

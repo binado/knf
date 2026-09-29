@@ -120,6 +120,20 @@ literal = "${NOT_A_REF}"
 A whole-string reference keeps the value's type; an embedded one becomes text.
 `$$` is a literal `$`.
 
+**`--with FILE`**: use one context file for interpolation without merging it
+into output; requires `-i`. Each complete reference path prefers the merged
+document, then context, including references inside context. Only referenced
+context values resolve. A selected container keeps its own children.
+
+```bash
+knf foo.toml bar.toml -i --with config.toml
+generate-config | knf foo.toml bar.toml -i --with - -f toml
+```
+
+Context uses the same format as inputs, including `-f`. `--with -` reads stdin
+and requires `-f`; stdin cannot also supply a merge layer.
+Filtering, accumulation and `--list-files` apply only to merge inputs.
+
 **`-f/--format json|toml`**: set the format for parsing, `-c` typing and output.
 Required for stdin; never converts between formats. Mixed input formats are an
 error.
@@ -133,6 +147,7 @@ from knf import accumulate, filter_paths, load
 
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
+config = load(["foo.toml", "bar.toml"], interpolate=True, context="config.toml")
 
 files = accumulate("services/api/prod.toml", base_dir=project_root)
 files = filter_paths(files, "{defaults,prod}.toml", filename_only=True)

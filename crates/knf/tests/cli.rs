@@ -71,6 +71,349 @@ fn with_env<'a>(cmd: &'a mut Command, vars: &[(&str, Option<&str>)]) -> &'a mut 
     cmd
 }
 
+#[test]
+fn context_supplies_values_without_merging_and_sees_final_overrides() {
+    let dir = tree(&[
+        (
+            "foo.toml",
+            "host = 'base'\nurl = '${service.url}'\nport = '${service.port}'\n",
+        ),
+        ("bar.toml", "host = 'prod'\n"),
+        (
+            "config.toml",
+            "host = 'shared'\nunused = '${missing}'\n[service]\nurl = 'https://${host}/api'\nport = 5432\n",
+        ),
+    ]);
+    let args = ["foo.toml", "bar.toml", "-i", "--with", "config.toml"];
+    assert_toml_eq_json(
+        &run(&dir, &args),
+        r#"{"host":"prod","url":"https://prod/api","port":5432}"#,
+    );
+    let mut args = args.to_vec();
+    args.extend(["-c", "host=inline"]);
+    assert_toml_eq_json(
+        &run(&dir, &args),
+        r#"{"host":"inline","url":"https://inline/api","port":5432}"#,
+    );
+}
+
+#[test]
+fn context_is_independent_of_accumulation_filtering_and_merge_options() {
+    let dir = tree(&[
+        ("foo/base.json", r#"{"db":{"host":"prod","port":1}}"#),
+        (
+            "foo/bar/target.json",
+            r#"{"db":{"host":"prod"},"port":"${db.port}"}"#,
+        ),
+        ("config.json", r#"{"db":{"host":false,"port":5432}}"#),
+    ]);
+    assert_eq!(
+        run(
+            &dir,
+            &[
+                "-a",
+                "foo/bar/target.json",
+                "-G",
+                "{base,target}.json",
+                "--shallow",
+                "db",
+                "--strict",
+                "-i",
+                "--with",
+                "config.json",
+                "--compact"
+            ]
+        ),
+        "{\"db\":{\"host\":\"prod\"},\"port\":5432}\n"
+    );
+}
+
+#[test]
+fn context_selects_format_for_inline_or_empty_output_and_respects_format_override() {
+    let dir = tree(&[
+        ("config.toml", "port = 5432\n"),
+        ("config.txt", "day = 1979-05-27\n"),
+    ]);
+    assert_toml_eq_json(
+        &run(&dir, &["-i", "--with", "config.toml", "-c", "copy=${port}"]),
+        r#"{"copy":5432}"#,
+    );
+    assert_toml_eq_json(&run(&dir, &["-i", "--with", "config.toml"]), "{}");
+    let out = run(
+        &dir,
+        &[
+            "-i",
+            "--with",
+            "config.txt",
+            "-f",
+            "toml",
+            "-c",
+            "copy=${day}",
+        ],
+    );
+    let out: toml::Value = toml::from_str(&out).unwrap();
+    assert!(out["copy"].is_datetime());
+    assert!(!out.as_table().unwrap().contains_key("day"));
+    assert!(run_err(&dir, &["-i", "--with", "config.toml", "-f", "json"]).contains("invalid JSON"));
+}
+
+#[test]
+fn context_list_files_skips_context_io_and_format_checks() {
+    let dir = tree(&[]);
+    assert_eq!(
+        run(
+            &dir,
+            &["a.json", "-i", "--with", "missing.toml", "--list-files"]
+        ),
+        "a.json\n"
+    );
+    assert_eq!(
+        run(&dir, &["-i", "--with", "missing.toml", "--list-files"]),
+        ""
+    );
+}
+
+#[test]
+fn context_argument_errors_are_usage_errors_before_io() {
+    let dir = tree(&[]);
+    for args in [
+        vec!["missing.json", "--with", "context.json"],
+        vec!["-i", "--with", "-"],
+        vec!["-i", "--with"],
+        vec!["-i", "--with", "a.json", "--with", "b.json"],
+    ] {
+        let out = knf(&dir).args(&args).output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        assert!(out.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&out.stderr).contains("reading"));
+    }
+}
+
+#[test]
+fn context_stdin_supports_both_formats_and_preserves_native_values() {
+    let dir = tree(&[
+        (
+            "foo.toml",
+            "host = 'base'\nurl = '${service.url}'\nday = '${service.day}'\n",
+        ),
+        ("bar.toml", "host = 'prod'\n"),
+        (
+            "foo.json",
+            r#"{"host":"base","url":"${service.url}","big":"${big_value}","null":"${null_value}"}"#,
+        ),
+    ]);
+    let out = ok_stdout(
+        knf(&dir).args(["foo.toml", "bar.toml", "-i", "--with", "-", "-f", "toml"])
+            .write_stdin("host = 'shared'\nunused = '${missing}'\n[service]\nurl = 'https://${host}/api'\nday = 1979-05-27\n"),
+        &[],
+    );
+    let out: toml::Value = toml::from_str(&out).unwrap();
+    assert_eq!(out["url"].as_str(), Some("https://prod/api"));
+    assert!(out["day"].is_datetime());
+    assert!(!out.as_table().unwrap().contains_key("service"));
+    assert!(!out.as_table().unwrap().contains_key("unused"));
+    let out = ok_stdout(
+        knf(&dir).args(["foo.json", "-i", "--with=-", "-f", "json", "--compact"])
+            .write_stdin(r#"{"service":{"url":"https://${host}/api"},"big_value":18446744073709551615,"null_value":null}"#),
+        &[],
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&out).unwrap(),
+        serde_json::json!({"host":"base","url":"https://base/api","big":u64::MAX,"null":null})
+    );
+}
+
+#[test]
+fn context_stdin_supports_inline_or_empty_output() {
+    let dir = tree(&[]);
+    assert_toml_eq_json(
+        &ok_stdout(
+            knf(&dir)
+                .args(["-i", "--with", "-", "-f", "toml", "-c", "copy=${port}"])
+                .write_stdin("port = 5432\n"),
+            &[],
+        ),
+        r#"{"copy":5432}"#,
+    );
+    assert_eq!(
+        ok_stdout(
+            knf(&dir)
+                .args(["-i", "--with", "-", "-f", "json", "--compact"])
+                .write_stdin(r#"{"unused":"${missing}"}"#),
+            &[],
+        ),
+        "{}\n"
+    );
+}
+
+#[test]
+fn context_stdin_requires_format_before_document_io() {
+    let dir = tree(&[]);
+    let out = knf(&dir)
+        .args(["missing.toml", "-i", "--with", "-"])
+        .write_stdin("invalid TOML")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("--format"), "{stderr}");
+    assert!(!stderr.contains("reading"), "{stderr}");
+}
+
+#[test]
+fn context_stdin_conflicts_with_a_retained_stdin_layer_before_io() {
+    let dir = tree(&[]);
+    let out = knf(&dir)
+        .args(["missing.json", "-", "-i", "--with", "-", "-f", "json"])
+        .write_stdin("invalid JSON")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("stdin cannot supply both a merge layer and --with context"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("reading"), "{stderr}");
+}
+
+#[test]
+fn context_stdin_respects_filtered_sources_and_list_files_skips_reading_it() {
+    let dir = tree(&[("foo.json", r#"{"copy":"${value}"}"#)]);
+    assert_eq!(
+        ok_stdout(
+            knf(&dir)
+                .args([
+                    "-",
+                    "foo.json",
+                    "-g",
+                    "*.json",
+                    "-i",
+                    "--with",
+                    "-",
+                    "-f",
+                    "json",
+                    "--compact"
+                ])
+                .write_stdin(r#"{"value":42}"#),
+            &[],
+        ),
+        "{\"copy\":42}\n"
+    );
+    assert_eq!(
+        ok_stdout(
+            knf(&dir)
+                .args([
+                    "missing.json",
+                    "-i",
+                    "--with",
+                    "-",
+                    "-f",
+                    "json",
+                    "--list-files"
+                ])
+                .write_stdin("invalid JSON"),
+            &[],
+        ),
+        "missing.json\n"
+    );
+}
+
+#[test]
+fn context_file_still_supports_a_stdin_merge_layer() {
+    let dir = tree(&[("config.json", r#"{"value":42}"#)]);
+    assert_eq!(
+        ok_stdout(
+            knf(&dir)
+                .args([
+                    "-",
+                    "-i",
+                    "--with",
+                    "config.json",
+                    "-f",
+                    "json",
+                    "--compact"
+                ])
+                .write_stdin(r#"{"copy":"${value}"}"#),
+            &[],
+        ),
+        "{\"copy\":42}\n"
+    );
+}
+
+#[test]
+fn context_formats_are_validated_before_document_reads() {
+    let dir = tree(&[]);
+    let err = run_err(&dir, &["missing.json", "-i", "--with", "missing.toml"]);
+    assert!(err.contains("inputs mix JSON and TOML"));
+    assert!(err.contains("inputs and the --with file must share one format"));
+    assert!(!err.contains("merge JSON layers and TOML layers separately"));
+    assert!(!err.contains("reading"));
+}
+
+#[test]
+fn context_files_are_parsed_and_validated_even_when_unused() {
+    let dir = tree(&[
+        ("a.json", "{}"),
+        ("bad.json", "{"),
+        ("array.json", "[]"),
+        ("unresolved.json", r#"{"unused":"${missing}"}"#),
+    ]);
+    for (file, expected) in [
+        ("bad.json", "invalid JSON"),
+        ("array.json", "expected an object"),
+        ("missing.json", "reading"),
+    ] {
+        let err = run_err(&dir, &["a.json", "-i", "--with", file]);
+        assert!(err.contains(file), "{err}");
+        assert!(err.contains(expected), "{err}");
+    }
+    std::fs::create_dir(dir.path().join("directory.json")).unwrap();
+    let err = run_err(&dir, &["a.json", "-i", "--with", "directory.json"]);
+    assert!(err.contains("is a directory"), "{err}");
+    assert!(err.contains("--with takes one file"), "{err}");
+    assert!(!err.contains("merges its files as layers"), "{err}");
+    assert_eq!(
+        run(
+            &dir,
+            &["a.json", "-i", "--with", "unresolved.json", "--compact"]
+        ),
+        "{}\n"
+    );
+}
+
+#[test]
+fn context_interpolation_diagnostics_name_context_paths_and_frontend_help() {
+    let dir = tree(&[
+        ("a.json", r#"{"copy":"${settings.bad}"}"#),
+        ("config.json", r#"{"settings":{"bad":"${missing}"}}"#),
+    ]);
+    insta::assert_snapshot!(
+        "context_unresolved",
+        run_err(&dir, &["a.json", "-i", "--with", "config.json"])
+    );
+}
+
+#[test]
+fn context_environment_uses_explicit_test_values() {
+    let dir = tree(&[
+        ("a.json", r#"{"copy":"${value}"}"#),
+        ("config.json", r#"{"value":"${env:KNF_CONTEXT_VALUE}"}"#),
+    ]);
+    assert_eq!(
+        ok_stdout(
+            with_env(
+                knf(&dir).args(["a.json", "-i", "--with", "config.json", "--compact"]),
+                &[("KNF_CONTEXT_VALUE", Some("8080"))]
+            ),
+            &[]
+        ),
+        "{\"copy\":8080}\n"
+    );
+}
+
 // --- accumulate ----------------------------------------------------------
 
 #[test]
@@ -1372,10 +1715,36 @@ fn directory_in_the_default_command_error() {
     insta::assert_snapshot!(run_err(&dir, &["config"]));
 }
 
+/// A directory merge input keeps the layer hint when `--with` names a file.
+#[test]
+fn directory_merge_input_keeps_layer_hint_with_context() {
+    let dir = tree(&[("config/base.toml", "a = 1\n"), ("context.toml", "b = 1\n")]);
+    let err = run_err(&dir, &["config", "-i", "--with", "context.toml"]);
+    assert!(
+        err.contains("`knf config/*.toml` merges its files as layers"),
+        "{err}"
+    );
+    assert!(!err.contains("--with takes one file"), "{err}");
+}
+
+/// A directory passed to `--with` is one file, not a layer glob.
+#[test]
+fn context_directory_error() {
+    let dir = tree(&[("a.json", "{}"), ("config/base.toml", "a = 1\n")]);
+    insta::assert_snapshot!(run_err(&dir, &["a.json", "-i", "--with", "config"]));
+}
+
 #[test]
 fn mixed_input_formats_error() {
     let dir = tree(&[("a.toml", "a = 1\n"), ("b.json", "{}")]);
     insta::assert_snapshot!(run_err(&dir, &["a.toml", "b.json"]));
+}
+
+/// Mixed formats with `--with` name the context file instead of merge layers.
+#[test]
+fn context_mixed_input_formats_error() {
+    let dir = tree(&[("a.toml", "a = 1\n"), ("b.json", "{}")]);
+    insta::assert_snapshot!(run_err(&dir, &["a.toml", "-i", "--with", "b.json"]));
 }
 
 /// Mixed formats fail before merge, even when the documents would conflict.
