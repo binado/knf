@@ -1,0 +1,6 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"a.toml\", \"-i\", \"--with\", \"b.json\"])"
+---
+error: inputs mix JSON and TOML formats; layers must use one format
+help: inputs and the --with file must share one format; pass -f json or -f toml

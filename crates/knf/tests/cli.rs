@@ -348,6 +348,8 @@ fn context_formats_are_validated_before_document_reads() {
     let dir = tree(&[]);
     let err = run_err(&dir, &["missing.json", "-i", "--with", "missing.toml"]);
     assert!(err.contains("inputs mix JSON and TOML"));
+    assert!(err.contains("inputs and the --with file must share one format"));
+    assert!(!err.contains("merge JSON layers and TOML layers separately"));
     assert!(!err.contains("reading"));
 }
 
@@ -369,9 +371,10 @@ fn context_files_are_parsed_and_validated_even_when_unused() {
         assert!(err.contains(expected), "{err}");
     }
     std::fs::create_dir(dir.path().join("directory.json")).unwrap();
-    assert!(
-        run_err(&dir, &["a.json", "-i", "--with", "directory.json"]).contains("is a directory")
-    );
+    let err = run_err(&dir, &["a.json", "-i", "--with", "directory.json"]);
+    assert!(err.contains("is a directory"), "{err}");
+    assert!(err.contains("--with takes one file"), "{err}");
+    assert!(!err.contains("merges its files as layers"), "{err}");
     assert_eq!(
         run(
             &dir,
@@ -1712,10 +1715,36 @@ fn directory_in_the_default_command_error() {
     insta::assert_snapshot!(run_err(&dir, &["config"]));
 }
 
+/// A directory merge input keeps the layer hint when `--with` names a file.
+#[test]
+fn directory_merge_input_keeps_layer_hint_with_context() {
+    let dir = tree(&[("config/base.toml", "a = 1\n"), ("context.toml", "b = 1\n")]);
+    let err = run_err(&dir, &["config", "-i", "--with", "context.toml"]);
+    assert!(
+        err.contains("`knf config/*.toml` merges its files as layers"),
+        "{err}"
+    );
+    assert!(!err.contains("--with takes one file"), "{err}");
+}
+
+/// A directory passed to `--with` is one file, not a layer glob.
+#[test]
+fn context_directory_error() {
+    let dir = tree(&[("a.json", "{}"), ("config/base.toml", "a = 1\n")]);
+    insta::assert_snapshot!(run_err(&dir, &["a.json", "-i", "--with", "config"]));
+}
+
 #[test]
 fn mixed_input_formats_error() {
     let dir = tree(&[("a.toml", "a = 1\n"), ("b.json", "{}")]);
     insta::assert_snapshot!(run_err(&dir, &["a.toml", "b.json"]));
+}
+
+/// Mixed formats with `--with` name the context file instead of merge layers.
+#[test]
+fn context_mixed_input_formats_error() {
+    let dir = tree(&[("a.toml", "a = 1\n"), ("b.json", "{}")]);
+    insta::assert_snapshot!(run_err(&dir, &["a.toml", "-i", "--with", "b.json"]));
 }
 
 /// Mixed formats fail before merge, even when the documents would conflict.

@@ -81,7 +81,8 @@ fn run(cli: Cli) -> anyhow::Result<()> {
 fn run_pipeline(cli: &Cli, files: &[PathBuf], opts: &MergeOptions) -> anyhow::Result<()> {
     let mut inputs = files.to_vec();
     inputs.extend(cli.with.iter().cloned());
-    let layers = load_layers(&inputs, cli.format.map(Into::into)).map_err(explain_pipeline)?;
+    let layers = load_layers(&inputs, cli.format.map(Into::into))
+        .map_err(|err| explain_pipeline(err, cli.with.as_deref()))?;
     match layers {
         Layers::Json(layers) => run_native(cli, layers, opts),
         Layers::Toml(layers) => run_native(cli, layers, opts),
@@ -104,7 +105,7 @@ fn run_native<V: ConfigFormat>(
                 .map_err(name_the_inline_layer_flag)?,
         );
     }
-    let merged = merge(layers, opts).map_err(explain_pipeline)?;
+    let merged = merge(layers, opts).map_err(|err| explain_pipeline(err, None))?;
     let merged = if cli.interpolate {
         let resolved = match &context {
             Some(context) => interpolate_with_context(merged, context, &ProcessEnv),
@@ -114,7 +115,7 @@ fn run_native<V: ConfigFormat>(
     } else {
         merged
     };
-    let text = format::emit(merged, !cli.compact).map_err(explain_pipeline)?;
+    let text = format::emit(merged, !cli.compact).map_err(|err| explain_pipeline(err, None))?;
     write_stdout(&text)
 }
 

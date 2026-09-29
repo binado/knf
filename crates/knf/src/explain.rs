@@ -1,6 +1,8 @@
 //! Adds `help:` lines naming CLI flags to library errors. The only place flag
 //! names appear in error messages.
 
+use std::path::Path;
+
 use anyhow::anyhow;
 use knf::fs::{AccumulateError, AccumulateTargetError};
 use knf::{InterpError, LoadError, MergeError, PathError, Problem};
@@ -43,12 +45,13 @@ pub fn explain_accumulate(err: AccumulateError) -> anyhow::Error {
 
 /// Adds CLI help to a pipeline error by downcasting it.
 ///
-/// If `knf-core` starts wrapping these errors, the downcasts silently miss; the
-/// stderr snapshot tests catch that.
-pub fn explain_pipeline(err: impl Into<anyhow::Error>) -> anyhow::Error {
+/// `context` is the `--with` path for load failures, and `None` for later
+/// stages. If `knf-core` starts wrapping these errors, the downcasts silently
+/// miss; the stderr snapshot tests catch that.
+pub fn explain_pipeline(err: impl Into<anyhow::Error>, context: Option<&Path>) -> anyhow::Error {
     let err = err.into();
     let err = match err.downcast::<LoadError>() {
-        Ok(err) => return explain_load(err),
+        Ok(err) => return explain_load(err, context),
         Err(err) => err,
     };
     let err = match err.downcast::<MergeError>() {
@@ -64,13 +67,23 @@ pub fn explain_pipeline(err: impl Into<anyhow::Error>) -> anyhow::Error {
 }
 
 /// Names the flag that resolves a format-selection error.
-fn explain_load(err: LoadError) -> anyhow::Error {
+///
+/// `context` is the `--with` path when one was supplied. Mixed formats then
+/// share one format with that file, and a directory at that path is not a
+/// merge layer.
+fn explain_load(err: LoadError, context: Option<&Path>) -> anyhow::Error {
     match &err {
         LoadError::StdinNeedsFormat | LoadError::UnknownExtension { .. } => {
             anyhow!("{err}: pass -f json or -f toml")
         }
+        LoadError::MixedFormats if context.is_some() => anyhow!(
+            "{err}\nhelp: inputs and the --with file must share one format; pass -f json or -f toml"
+        ),
         LoadError::MixedFormats => {
             anyhow!("{err}\nhelp: merge JSON layers and TOML layers separately")
+        }
+        LoadError::Directory { path } if context.is_some_and(|ctx| ctx == path) => {
+            anyhow!("{err}\nhelp: --with takes one file")
         }
         LoadError::Directory { path } => anyhow!(
             "{err}\nhelp: `knf {}/*.toml` merges its files as layers",
