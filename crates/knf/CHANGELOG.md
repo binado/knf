@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/binado/knf/compare/knf-cli-v0.5.1...knf-cli-v0.6.0) - 2026-09-30
+
+### Added
+
+- [**breaking**] remove --strict and make native merge infallible ([#58](https://github.com/binado/knf/pull/58))
+- [**breaking**] merge interpolation references as the values they name ([#57](https://github.com/binado/knf/pull/57))
+- add configurable object inheritance ([#55](https://github.com/binado/knf/pull/55))
+
+### Other
+
+- drop the error parameter from merge_fields ([#59](https://github.com/binado/knf/pull/59))
+- [**breaking**] drop MergeOptions::LAST_WINS ([#53](https://github.com/binado/knf/pull/53))
+
 ## [0.5.1](https://github.com/binado/knf/compare/knf-cli-v0.5.0...knf-cli-v0.5.1) - 2026-09-29
 
 ### Added
