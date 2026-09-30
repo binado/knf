@@ -22,19 +22,18 @@ pub(crate) fn shallow_at(glob: Option<&KeyGlobPattern>, path: &[Seg]) -> bool {
 }
 
 /// Ordered object overlay shared by native layers and inherited projections.
-pub(crate) fn merge_fields<V, O: ConfigObject<V>, E>(
+pub(crate) fn merge_fields<V, O: ConfigObject<V>>(
     base: &mut O,
     over: O,
-    mut merge: impl FnMut(&mut V, V, String) -> Result<(), E>,
-) -> Result<(), E> {
+    mut merge: impl FnMut(&mut V, V, String),
+) {
     for (key, value) in over {
         if let Some(slot) = base.get_mut(&key) {
-            merge(slot, value, key)?;
+            merge(slot, value, key);
         } else {
             base.insert(key, value);
         }
     }
-    Ok(())
 }
 
 /// Merge options.
@@ -87,7 +86,7 @@ fn merge_at<V: ConfigValue>(base: &mut V, over: V, opts: &MergeOptions, path: &m
     let over = match base.as_object_mut() {
         Some(base_map) => match over.into_object() {
             Ok(over_map) => {
-                let Ok(()) = merge_fields(base_map, over_map, |slot, v, key| {
+                merge_fields(base_map, over_map, |slot, v, key| {
                     path.push(key);
                     if opts
                         .shallow
@@ -99,7 +98,6 @@ fn merge_at<V: ConfigValue>(base: &mut V, over: V, opts: &MergeOptions, path: &m
                         merge_at(slot, v, opts, path);
                     }
                     path.pop();
-                    Ok::<(), std::convert::Infallible>(())
                 });
                 return;
             }

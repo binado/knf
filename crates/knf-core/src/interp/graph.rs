@@ -369,9 +369,8 @@ impl<V: ConfigFormat> Resolver<'_, V> {
         dest: &[Seg],
     ) -> Vec<(String, Id)> {
         let mut fields = base.to_vec();
-        let Ok(()) = merge_fields(&mut fields, over, |slot: &mut Id, value, key| {
+        merge_fields(&mut fields, over, |slot: &mut Id, value, key| {
             *slot = self.combine(*slot, value, child(dest, Seg::Key(key)));
-            Ok::<(), std::convert::Infallible>(())
         });
         fields
     }
