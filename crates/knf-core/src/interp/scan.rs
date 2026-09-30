@@ -19,9 +19,6 @@ pub enum Syntax {
     /// `${}` — a reference to nothing.
     #[error("empty reference `${{}}`")]
     EmptyRef,
-    /// `${a${b}}`: nesting is not supported.
-    #[error("nested `${{` in `${{{body}}}`")]
-    Nested { body: String },
     /// `${env:}`. Raised by the resolver.
     #[error("empty variable name in `${{env:}}`")]
     EmptyEnvName,
@@ -57,7 +54,7 @@ pub fn scan(s: &str) -> Vec<Piece<'_>> {
             }
             Some(b'{') => {
                 let body_start = at + 2;
-                let Some(rel_end) = s[body_start..].find('}') else {
+                let Some(rel_end) = closing_brace(&s[body_start..]) else {
                     push_literal(&mut pieces, &s[literal..at]);
                     pieces.push(Piece::Malformed {
                         spelling: &s[at..],
@@ -79,18 +76,6 @@ pub fn scan(s: &str) -> Vec<Piece<'_>> {
                     literal = cursor;
                     continue;
                 }
-                if body.contains("${") {
-                    push_literal(&mut pieces, &s[literal..at]);
-                    pieces.push(Piece::Malformed {
-                        spelling: &s[at..after],
-                        error: Syntax::Nested {
-                            body: body.to_string(),
-                        },
-                    });
-                    cursor = after;
-                    literal = cursor;
-                    continue;
-                }
                 push_literal(&mut pieces, &s[literal..at]);
                 pieces.push(Piece::Ref(body));
                 cursor = after;
@@ -102,6 +87,32 @@ pub fn scan(s: &str) -> Vec<Piece<'_>> {
     }
     push_literal(&mut pieces, &s[literal..]);
     pieces
+}
+
+/// The offset of the `}` closing a body that starts at `body[0]`, skipping
+/// nested `${...}` and `$$` pairs.
+fn closing_brace(body: &str) -> Option<usize> {
+    let bytes = body.as_bytes();
+    let mut depth = 1;
+    let mut i = 0;
+    while i < bytes.len() {
+        match (bytes[i], bytes.get(i + 1)) {
+            (b'$', Some(b'$')) => i += 2,
+            (b'$', Some(b'{')) => {
+                depth += 1;
+                i += 2;
+            }
+            (b'}', _) => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    None
 }
 
 fn push_literal<'a>(pieces: &mut Vec<Piece<'a>>, text: &'a str) {
@@ -192,17 +203,22 @@ mod tests {
         );
         assert_eq!(scan("${}"), [malformed("${}", Syntax::EmptyRef)]);
         assert_eq!(
-            scan("${a${b}}"),
-            [
-                malformed(
-                    "${a${b}",
-                    Syntax::Nested {
-                        body: "a${b".to_string()
-                    }
-                ),
-                lit("}")
-            ]
+            scan("${a${b}"),
+            [malformed("${a${b}", Syntax::Unterminated { offset: 0 })]
         );
+    }
+
+    #[test]
+    fn nested_references_keep_their_raw_body() {
+        assert_eq!(scan("${a${b}}"), [re("a${b}")]);
+        assert_eq!(scan("${a.${b}.c}"), [re("a.${b}.c")]);
+        assert_eq!(scan("${${${a}}}"), [re("${${a}}")]);
+        assert_eq!(scan("x${a.${b}}y"), [lit("x"), re("a.${b}"), lit("y")]);
+    }
+
+    #[test]
+    fn an_escaped_open_inside_a_body_does_not_nest() {
+        assert_eq!(scan("${a$${b}"), [re("a$${b")]);
     }
 
     #[test]

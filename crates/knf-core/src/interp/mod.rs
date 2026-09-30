@@ -4,6 +4,9 @@
 //! embedded one (`"x/${p}"`) stringifies, and containers are an error there.
 //! `$$` is a literal `$`. The environment is injected through [`Env`].
 //!
+//! A reference body is itself interpolated first, so `${a.${b}}` reads the
+//! path `a` followed by whatever `b` holds; inner values must be scalars.
+//!
 //! Layers fold as expressions, so a whole-string reference merges exactly as
 //! the value it names would. References bind to the final document.
 
@@ -230,6 +233,10 @@ impl<V: ConfigFormat> Resolver<'_, V> {
 
     /// Embedded position: the referent is rendered as text.
     fn splice(&mut self, body: &str, path: &[Seg]) -> Result<String, Cycle> {
+        let Some(expanded) = self.expand(body, path)? else {
+            return Ok(Spelled(body).to_string());
+        };
+        let body = expanded.as_str();
         if let Some(name) = body.strip_prefix(ENV) {
             return Ok(match self.env_value(name, body, path) {
                 Some(found) => found,
@@ -251,6 +258,28 @@ impl<V: ConfigFormat> Resolver<'_, V> {
                 Spelled(body).to_string()
             }
         })
+    }
+
+    /// A reference body with its inner references spliced in as text, or
+    /// `None` if that recorded a problem. The result is not scanned again.
+    pub(super) fn expand(&mut self, body: &str, path: &[Seg]) -> Result<Option<String>, Cycle> {
+        let pieces = scan(body);
+        if pieces.is_empty() {
+            return Ok(Some(body.to_string()));
+        }
+        let before = self.problems.len();
+        let mut out = String::new();
+        for piece in pieces {
+            match piece {
+                Piece::Literal(literal) => out.push_str(literal),
+                Piece::Ref(inner) => out.push_str(&self.splice(inner, path)?),
+                Piece::Malformed { error, .. } => self.problems.push(Problem::Syntax {
+                    path: path.to_vec(),
+                    error,
+                }),
+            }
+        }
+        Ok((self.problems.len() == before).then_some(out))
     }
 
     /// The variable, recording a problem and returning `None` if the name is

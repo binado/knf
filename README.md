@@ -113,6 +113,13 @@ literal = "${NOT_A_REF}"
 A whole-string reference keeps the value's type; an embedded one becomes text.
 `$$` is a literal `$`.
 
+A reference body is interpolated first, so it can select a subtree; inner
+values must be scalars:
+
+```toml
+db = "${databases.${env:STAGE}}"   # STAGE=prod reads databases.prod
+```
+
 References bind to the final document, and a whole-string reference merges
 exactly as the value it names:
 

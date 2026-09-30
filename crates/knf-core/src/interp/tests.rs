@@ -826,7 +826,7 @@ macro_rules! common_tests {
                 ("b", s("${}")),
                 ("c", s("${env:}")),
                 ("d", s("${x..y}")),
-                ("e", s("${p${q}}")),
+                ("e", s("${p${}}")),
             ]);
             assert_eq!(
                 err(doc),
@@ -835,7 +835,7 @@ macro_rules! common_tests {
          \x20 --> b: empty reference `${}`\n\
          \x20 --> c: empty variable name in `${env:}`\n\
          \x20 --> d: empty segment in reference `${x..y}`\n\
-         \x20 --> e: nested `${` in `${p${q}`"
+         \x20 --> e: empty reference `${}`"
             );
         }
 
@@ -1028,6 +1028,160 @@ macro_rules! common_tests {
             let map = out.as_object().expect("an object");
             assert_eq!(map["v"], s("elem"));
         }
+
+        fn regions() -> Value {
+            obj(vec![(
+                "regions",
+                obj(vec![
+                    ("eu", obj(vec![("endpoint", s("eu.example"))])),
+                    ("us", obj(vec![("endpoint", s("us.example"))])),
+                ]),
+            )])
+        }
+
+        fn with(base: Value, extra: Vec<(&str, Value)>) -> Value {
+            let mut map = base.as_object().unwrap().clone();
+            for (key, value) in extra {
+                map.insert(key.to_string(), value);
+            }
+            Value::object(map)
+        }
+
+        #[test]
+        fn a_nested_reference_selects_by_key() {
+            let doc = with(
+                regions(),
+                vec![
+                    ("region", s("eu")),
+                    ("e", s("${regions.${region}.endpoint}")),
+                    ("url", s("https://${regions.${region}.endpoint}/")),
+                ],
+            );
+            let out = interp(doc).unwrap();
+            let map = out.as_object().unwrap();
+            assert_eq!(map["e"], s("eu.example"));
+            assert_eq!(map["url"], s("https://eu.example/"));
+        }
+
+        #[test]
+        fn a_nested_reference_selects_by_environment() {
+            let doc = with(
+                obj(vec![(
+                    "databases",
+                    obj(vec![("prod", obj(vec![("host", s("p"))]))]),
+                )]),
+                vec![("db", s("${databases.${env:STAGE}}"))],
+            );
+            let out = interp_env(doc, &[("STAGE", "prod")]).unwrap();
+            assert_eq!(out.as_object().unwrap()["db"], obj(vec![("host", s("p"))]));
+        }
+
+        #[test]
+        fn a_nested_environment_name_is_expanded() {
+            let doc = obj(vec![("name", s("PORT")), ("p", s("${env:${name}}"))]);
+            let out = interp_env(doc, &[("PORT", "80")]).unwrap();
+            assert_eq!(out.as_object().unwrap()["p"], n(80));
+        }
+
+        #[test]
+        fn a_spliced_value_may_cover_several_segments() {
+            let doc = with(
+                regions(),
+                vec![("r", s("regions.eu")), ("e", s("${${r}.endpoint}"))],
+            );
+            let out = interp(doc).unwrap();
+            assert_eq!(out.as_object().unwrap()["e"], s("eu.example"));
+        }
+
+        #[test]
+        fn a_nested_whole_string_reference_merges_as_its_referent() {
+            let doc = with(
+                regions(),
+                vec![
+                    ("region", s("eu")),
+                    ("pick", s("${regions.${region}}")),
+                ],
+            );
+            let over = obj(vec![("pick", obj(vec![("extra", n(1))]))]);
+            let out = merge_interpolate([doc, over], None, &StubEnv::default(), &InterpOptions::default()).unwrap();
+            assert_eq!(
+                out.as_object().unwrap()["pick"],
+                obj(vec![("endpoint", s("eu.example")), ("extra", n(1))])
+            );
+        }
+
+        #[test]
+        fn an_inner_reference_binds_to_the_final_document() {
+            let base = with(regions(), vec![("region", s("eu")), ("e", s("${regions.${region}.endpoint}"))]);
+            let over = obj(vec![("region", s("us"))]);
+            let out = merge_interpolate([base, over], None, &StubEnv::default(), &InterpOptions::default()).unwrap();
+            assert_eq!(out.as_object().unwrap()["e"], s("us.example"));
+        }
+
+        #[test]
+        fn a_container_or_null_in_a_hole_is_not_stringifiable() {
+            let doc = obj(vec![("o", obj(vec![])), ("t", s("${a.${o}}"))]);
+            assert_eq!(
+                err(doc),
+                "reference cannot be rendered into a string\n  --> t: `o` is an object"
+            );
+        }
+
+        #[test]
+        fn an_unresolved_inner_reference_is_reported_once() {
+            for text in ["${a.${missing}}", "x ${a.${missing}}"] {
+                assert_eq!(
+                    err(obj(vec![("t", s(text))])),
+                    "unresolved reference\n  --> t: `missing`"
+                );
+            }
+        }
+
+        #[test]
+        fn the_expanded_body_reports_the_path_looked_up() {
+            let doc = obj(vec![("k", s("x")), ("t", s("${a.${k}}"))]);
+            assert_eq!(err(doc), "unresolved reference\n  --> t: `a.x`");
+        }
+
+        #[test]
+        fn an_escaped_dollar_in_a_nested_body_is_a_literal_key() {
+            let doc = obj(vec![
+                ("a$b", s("dollar")),
+                ("a${b", s("brace")),
+                ("x", s("${a$$b}")),
+                ("y", s("${a$${b}")),
+            ]);
+            let out = interp(doc).unwrap();
+            let map = out.as_object().unwrap();
+            assert_eq!(map["x"], s("dollar"));
+            assert_eq!(map["y"], s("brace"));
+        }
+
+        #[test]
+        fn a_nested_self_reference_is_a_cycle() {
+            let doc = obj(vec![("a", s("${${a}}"))]);
+            assert!(err(doc).starts_with("reference cycle"));
+        }
+
+        #[test]
+        fn a_merge_directive_may_have_a_nested_body() {
+            let doc = obj(vec![
+                ("kind", s("small")),
+                (
+                    "bases",
+                    obj(vec![("small", obj(vec![("a", n(1)), ("b", n(2))]))]),
+                ),
+                (
+                    "svc",
+                    obj(vec![("extends", s("${bases.${kind}}")), ("b", n(3))]),
+                ),
+            ]);
+            let out = inherit(doc, None, None).unwrap();
+            assert_eq!(
+                out.as_object().unwrap()["svc"],
+                obj(vec![("a", n(1)), ("b", n(3))])
+            );
+        }
     };
 }
 
@@ -1036,6 +1190,15 @@ mod json {
     use serde_json::Value;
     type Map = serde_json::Map<String, Value>;
     common_tests!();
+
+    #[test]
+    fn a_null_in_a_nested_hole_is_not_stringifiable() {
+        let doc = obj(vec![("z", Value::Null), ("t", s("${a.${z}}"))]);
+        assert_eq!(
+            err(doc),
+            "reference cannot be rendered into a string\n  --> t: `z` is a null"
+        );
+    }
     #[test]
     fn inheritance_preserves_unsigned_values_and_null_overwrites() {
         let doc = serde_json::json!({"bar":{"extends":"${base}","nested":null}});

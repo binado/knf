@@ -1,0 +1,8 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"a.json\", \"-i\"])"
+---
+error: unresolved reference
+  --> db: `databases.qa`
+help: `${key.path}` names a key in the merged document, `${env:NAME}` an environment variable
+help: drop --interpolate to pass `${...}` through untouched
