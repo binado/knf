@@ -1,15 +1,14 @@
 //! What a downstream crate can name and compose without an IR.
 use knf::{
     ConfigFormat, ConfigObject, ConfigValue, Cycle, Env, Format, InterpError, InterpOptions,
-    Layers, LoadError, MergeError, MergeOptions, PathError, PathLeaf, Problem, ProcessEnv, RefPath,
-    STDIN, Seg, Syntax, interpolate, interpolate_with_context, json_or_string, load_layers, merge,
+    Layers, LoadError, MergeOptions, PathError, PathLeaf, Problem, ProcessEnv, RefPath, STDIN, Seg,
+    Syntax, interpolate, interpolate_with_context, json_or_string, load_layers, merge,
     merge_interpolate, merge_into, render_path, resolve_format, toml_or_string,
 };
 
 #[allow(dead_code)]
 struct PublicErrors {
     load: LoadError,
-    merge: MergeError,
     path: PathError,
     interpolation: InterpError,
     cycle: Cycle,
@@ -29,13 +28,13 @@ fn native_pipeline<V: ConfigFormat + std::fmt::Debug>(env: &dyn Env) {
     assert!(object.get_mut("port").is_some());
     assert_eq!(object.iter().count(), 1);
     let layer = V::object(object);
-    let mut merged = merge([layer], &MergeOptions::default()).unwrap();
+    let mut merged = merge([layer], &MergeOptions::default());
     let overlay = "copy=${port}"
         .parse::<PathLeaf<String>>()
         .unwrap()
         .into_layer::<V>()
         .unwrap();
-    merge_into(&mut merged, overlay, &MergeOptions::default()).unwrap();
+    merge_into(&mut merged, overlay, &MergeOptions::default());
     let merged = interpolate(merged, env).unwrap();
     assert_eq!(
         kind(merged.as_object().unwrap().get("copy").unwrap()),

@@ -192,15 +192,6 @@ impl fmt::Display for RefPath {
     }
 }
 
-/// Renders a key path for display. An empty path is the document root.
-pub(crate) fn render_keys(path: &[String]) -> String {
-    if path.is_empty() {
-        "<root>".to_string()
-    } else {
-        path.join(".")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

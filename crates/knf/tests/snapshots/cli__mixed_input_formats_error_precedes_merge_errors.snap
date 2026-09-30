@@ -1,7 +1,0 @@
----
-source: crates/knf/tests/cli.rs
-assertion_line: 1271
-expression: "run_err(&dir, &[\"a.json\", \"b.toml\", \"--strict\"])"
----
-error: inputs mix JSON and TOML formats; layers must use one format
-help: merge JSON layers and TOML layers separately

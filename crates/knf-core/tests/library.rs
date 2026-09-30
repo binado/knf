@@ -23,7 +23,7 @@ fn merge_files<P: AsRef<Path>>(paths: &[P], opts: &MergeOptions) -> anyhow::Resu
     let Layers::Json(layers) = knf::load_layers(paths, None)? else {
         panic!("JSON fixtures")
     };
-    Ok(knf::merge(layers, opts)?)
+    Ok(knf::merge(layers, opts))
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn shallow_terminal_overlays_and_interpolation_compose() {
         panic!("JSON")
     };
     layers.push(overlay);
-    let merged = knf::merge(layers, &MergeOptions::shallow_root()).expect("shallow merge succeeds");
+    let merged = knf::merge(layers, &MergeOptions::shallow_root());
     let merged = knf::interpolate(merged, &knf::ProcessEnv).expect("document references resolve");
 
     assert_eq!(
@@ -73,25 +73,9 @@ fn shallow_terminal_overlays_and_interpolation_compose() {
 }
 
 #[test]
-fn strict_overlay_errors_name_the_key_path() {
-    let dir = tree(&[("base.json", r#"{"port":80}"#)]);
-    let paths = [dir.path().join("base.json")];
-    let overlay = overlay(json!({"port": "wrong kind"}));
-
-    let Layers::Json(mut layers) = knf::load_layers(&paths, None).expect("layers load") else {
-        panic!("JSON")
-    };
-    layers.push(overlay);
-    let err = knf::merge(layers, &MergeOptions::STRICT).expect_err("strict overlay must fail");
-
-    assert_eq!(err.path(), ["port"]);
-}
-
-#[test]
 fn selected_values_keep_their_native_scalar_representations() {
     let opts = MergeOptions {
         shallow: Some("payload.*".parse().unwrap()),
-        ..Default::default()
     };
     let json = knf::merge(
         [
@@ -99,8 +83,7 @@ fn selected_values_keep_their_native_scalar_representations() {
             json!({"payload": {"n": u64::MAX, "nil": null}}),
         ],
         &opts,
-    )
-    .unwrap();
+    );
     assert_eq!(json["payload"]["n"].as_u64(), Some(u64::MAX));
     assert!(json["payload"]["nil"].is_null());
 
@@ -109,7 +92,7 @@ fn selected_values_keep_their_native_scalar_representations() {
         "[payload]\nstamp = 1980-01-01T00:00:00.987654321Z\nx = inf\n",
     ]
     .map(|text| toml::from_str::<toml::Value>(text).unwrap());
-    let toml = knf::merge(layers, &opts).unwrap();
+    let toml = knf::merge(layers, &opts);
     assert_eq!(
         toml["payload"]["stamp"].as_datetime().unwrap().to_string(),
         "1980-01-01T00:00:00.987654321Z"
@@ -127,7 +110,7 @@ fn input_format_can_override_paths_without_extensions() {
     else {
         panic!("JSON")
     };
-    let merged = knf::merge(layers, &MergeOptions::default()).expect("merge succeeds");
+    let merged = knf::merge(layers, &MergeOptions::default());
 
     assert_eq!(merged, json!({"a": 1, "b": 2}));
 }
@@ -236,13 +219,13 @@ fn native_toml_preserves_special_values_and_precision() {
     else {
         panic!("TOML")
     };
-    let mut merged = knf::merge(layers, &MergeOptions::default()).unwrap();
+    let mut merged = knf::merge(layers, &MergeOptions::default());
     let overlay = "copy=${date}"
         .parse::<knf::PathLeaf<String>>()
         .unwrap()
         .into_layer::<toml::Value>()
         .unwrap();
-    knf::merge_into(&mut merged, overlay, &MergeOptions::default()).unwrap();
+    knf::merge_into(&mut merged, overlay, &MergeOptions::default());
     let merged = knf::interpolate(merged, &EmptyEnv).unwrap();
     assert_eq!(merged["date"], merged["copy"]);
     let emitted = knf::format::emit(merged, true).unwrap();
@@ -272,8 +255,7 @@ fn explicit_format_overrides_extensions_without_converting_values() {
     .unwrap() else {
         panic!("JSON")
     };
-    let emitted =
-        knf::format::emit(knf::merge(layers, &MergeOptions::default()).unwrap(), false).unwrap();
+    let emitted = knf::format::emit(knf::merge(layers, &MergeOptions::default()), false).unwrap();
     assert_eq!(
         emitted,
         "{\"null\":null,\"id\":18446744073709551615,\"a\":1}\n"

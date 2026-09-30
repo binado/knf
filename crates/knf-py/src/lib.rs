@@ -13,8 +13,8 @@ mod cli_bin;
 use knf::fs::{AccumulateError, AccumulateTarget};
 use knf::glob::{GlobError, GlobPattern, KeyGlobError, KeyGlobPattern};
 use knf::{
-    ConfigFormat, Format, InterpError, InterpOptions, LoadError, MergeError, MergeOptions,
-    ProcessEnv, Seg, merge, merge_interpolate, render_path, resolve_format,
+    ConfigFormat, Format, InterpError, InterpOptions, LoadError, MergeOptions, ProcessEnv, Seg,
+    merge, merge_interpolate, render_path, resolve_format,
 };
 use pyo3::PyTypeInfo;
 use pyo3::create_exception;
@@ -147,10 +147,7 @@ fn load<'py>(
         .map(str::parse)
         .transpose()
         .map_err(|err: KeyGlobError| PyValueError::new_err(err.to_string()))?;
-    let opts = MergeOptions {
-        shallow,
-        ..Default::default()
-    };
+    let opts = MergeOptions { shallow };
     let interp_options = InterpOptions {
         merge_key,
         shallow: opts.shallow.clone(),
@@ -186,7 +183,6 @@ fn load<'py>(
         })
         .map_err(|failure| match failure {
             Failure::File(path, err) => file_error(py, &path, err),
-            Failure::Merge(err) => PyValueError::new_err(err.to_string()),
             Failure::Interpolate(err) => InterpolationError::new_err(err.to_string()),
         })?;
     match merged {
@@ -222,13 +218,12 @@ fn load_native<V: ConfigFormat>(
         merge_interpolate(layers, context.as_ref(), &ProcessEnv, interp_options)
             .map_err(Failure::Interpolate)
     } else {
-        merge(layers, opts).map_err(Failure::Merge)
+        Ok(merge(layers, opts))
     }
 }
 
 enum Failure {
     File(PathBuf, anyhow::Error),
-    Merge(MergeError),
     Interpolate(InterpError),
 }
 

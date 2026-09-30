@@ -50,7 +50,6 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         leaf.validate_keys().map_err(name_the_inline_layer_flag)?;
     }
     let opts = MergeOptions {
-        strict: cli.strict,
         shallow: cli.shallow.clone(),
     };
 
@@ -115,7 +114,7 @@ fn run_native<V: ConfigFormat>(
             explain::explain_interp(err, context.is_some(), cli.merge_key.is_some())
         })?
     } else {
-        merge(layers, opts).map_err(|err| explain_pipeline(err, None))?
+        merge(layers, opts)
     };
     let text = format::emit(merged, !cli.compact).map_err(|err| explain_pipeline(err, None))?;
     write_stdout(&text)

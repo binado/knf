@@ -179,10 +179,6 @@ Stdin cannot supply both a merge layer and context.
     )]
     pub with: Option<PathBuf>,
 
-    /// Error when a layer changes the type of an existing key
-    #[arg(long, conflicts_with = "interpolate")]
-    pub strict: bool,
-
     /// Disable pretty-printing
     #[arg(long)]
     pub compact: bool,

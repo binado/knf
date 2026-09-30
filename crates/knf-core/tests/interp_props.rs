@@ -58,8 +58,8 @@ macro_rules! properties {
                 let wrap = |value| Value::object([("derived".to_owned(), value)].into_iter().collect::<Map>());
                 let selector = shallow.map(|pattern| pattern.parse().unwrap());
                 let expected = merge([wrap(base.clone()), wrap(over.clone())], &MergeOptions {
-                    shallow: selector.clone(), ..Default::default()
-                }).unwrap();
+                    shallow: selector.clone(),
+                });
                 let mut local = over;
                 local.as_object_mut().unwrap().insert("extends".into(), Value::string("${base}".into()));
                 let context = Value::object([("base".to_owned(), base)].into_iter().collect::<Map>());
@@ -77,7 +77,7 @@ macro_rules! properties {
                 shallow in prop::option::of(prop::sample::select(vec!["a", "a.b", "a.*", "*", "{a,b}.c"])),
             ) {
                 let selector: Option<knf::glob::KeyGlobPattern> = shallow.map(|pattern| pattern.parse().unwrap());
-                let expected = merge(layers.clone(), &MergeOptions { shallow: selector.clone(), ..Default::default() }).unwrap();
+                let expected = merge(layers.clone(), &MergeOptions { shallow: selector.clone() });
                 let out = merge_interpolate(layers, None, &NoEnv, &InterpOptions { merge_key: None, shallow: selector }).unwrap();
                 prop_assert_eq!(out, expected);
             }
