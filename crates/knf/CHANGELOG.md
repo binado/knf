@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/binado/knf/compare/knf-cli-v0.6.0...knf-cli-v0.7.0) - 2026-09-30
+
+### Added
+
+- *(interp)* [**breaking**] interpolate reference bodies ([#61](https://github.com/binado/knf/pull/61))
+
 ## [0.6.0](https://github.com/binado/knf/compare/knf-cli-v0.5.1...knf-cli-v0.6.0) - 2026-09-30
 
 ### Added
