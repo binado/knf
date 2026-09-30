@@ -23,7 +23,10 @@ use anyhow::Context;
 pub use env::ProcessEnv;
 pub use format::{ConfigFormat, Format};
 pub use inline::{PathLeaf, json_or_string, toml_or_string};
-pub use interp::{Cycle, Env, InterpError, Problem, Syntax, interpolate, interpolate_with_context};
+pub use interp::{
+    Cycle, Env, InterpError, InterpOptions, Problem, Syntax, interpolate, interpolate_with_context,
+    interpolate_with_options,
+};
 pub use merge::{MergeError, MergeOptions, merge, merge_into};
 pub use path::{PathError, RefPath, Seg, render_path};
 pub use value::{ConfigObject, ConfigValue};

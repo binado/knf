@@ -45,6 +45,10 @@ impl fmt::Display for InterpError {
 /// One thing wrong with one reference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Problem {
+    /// The selected inheritance field must be one whole-string reference.
+    MergeReference { path: Vec<Seg> },
+    /// An inheritance reference resolved to a non-object value.
+    MergeObject { path: Vec<Seg>, kind: &'static str },
     /// A reference that is not spelled like one.
     Syntax { path: Vec<Seg>, error: Syntax },
     /// A missing key or unset environment variable.
@@ -63,6 +67,8 @@ impl Problem {
         match self {
             Self::Syntax { path, .. }
             | Self::Unresolved { path, .. }
+            | Self::MergeReference { path }
+            | Self::MergeObject { path, .. }
             | Self::NotStringifiable { path, .. } => path,
         }
     }
@@ -72,6 +78,7 @@ impl Problem {
             Self::Syntax { .. } => Group::Syntax,
             Self::Unresolved { .. } => Group::Unresolved,
             Self::NotStringifiable { .. } => Group::NotStringifiable,
+            Self::MergeReference { .. } | Self::MergeObject { .. } => Group::Inheritance,
         }
     }
 
@@ -79,6 +86,10 @@ impl Problem {
         match self {
             Self::Syntax { error, .. } => error.to_string(),
             Self::Unresolved { reference, .. } => format!("`{reference}`"),
+            Self::MergeReference { .. } => {
+                "expected one whole-string reference to an object".into()
+            }
+            Self::MergeObject { kind, .. } => format!("expected an object, found {kind}"),
             Self::NotStringifiable {
                 reference, kind, ..
             } => format!("`{reference}` is {} {kind}", article(kind)),
@@ -97,6 +108,7 @@ fn article(kind: &str) -> &'static str {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Group {
+    Inheritance,
     Syntax,
     Unresolved,
     NotStringifiable,
@@ -104,13 +116,19 @@ enum Group {
 
 impl Group {
     /// Report order, most fundamental first.
-    const ALL: [Self; 3] = [Self::Syntax, Self::Unresolved, Self::NotStringifiable];
+    const ALL: [Self; 4] = [
+        Self::Syntax,
+        Self::Unresolved,
+        Self::NotStringifiable,
+        Self::Inheritance,
+    ];
 
     fn header(self) -> &'static str {
         match self {
             Self::Syntax => "invalid reference",
             Self::Unresolved => "unresolved reference",
             Self::NotStringifiable => "reference cannot be rendered into a string",
+            Self::Inheritance => "invalid object inheritance",
         }
     }
 }

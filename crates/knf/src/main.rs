@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use knf::{
-    ConfigFormat, Layers, MergeOptions, ProcessEnv, format, interpolate, interpolate_with_context,
-    load_layers, merge,
+    ConfigFormat, InterpOptions, Layers, MergeOptions, ProcessEnv, format,
+    interpolate_with_options, load_layers, merge,
 };
 
 use cli::Cli;
@@ -107,11 +107,13 @@ fn run_native<V: ConfigFormat>(
     }
     let merged = merge(layers, opts).map_err(|err| explain_pipeline(err, None))?;
     let merged = if cli.interpolate {
-        let resolved = match &context {
-            Some(context) => interpolate_with_context(merged, context, &ProcessEnv),
-            None => interpolate(merged, &ProcessEnv),
+        let options = InterpOptions {
+            merge_key: cli.merge_key.clone(),
+            shallow: cli.shallow.clone(),
         };
-        resolved.map_err(|err| explain::explain_interp(err, context.is_some()))?
+        interpolate_with_options(merged, context.as_ref(), &ProcessEnv, &options).map_err(
+            |err| explain::explain_interp(err, context.is_some(), cli.merge_key.is_some()),
+        )?
     } else {
         merged
     };

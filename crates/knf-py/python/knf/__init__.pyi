@@ -40,6 +40,7 @@ def load(
     interpolate: bool = False,
     shallow: Optional[str] = None,
     context: Optional[Union[str, os.PathLike[str]]] = None,
+    merge_key: Optional[str] = None,
 ) -> dict[str, Any]:
     """Load and merge homogeneous JSON or TOML files into one ``dict``.
 
@@ -50,13 +51,16 @@ def load(
     ``interpolate=True``. Complete paths prefer the merged document, then
     context, including references inside context. Unused context references
     are not resolved. All files must share one format.
+    ``merge_key`` selects a literal key containing one whole-string object
+    reference. Its fields supply defaults; local fields win and the directive
+    is removed. Requires ``interpolate=True`` and honors ``shallow``.
 
     Raises:
         FileNotFoundError, PermissionError, IsADirectoryError: As ``open()``
             would, with ``.filename`` set.
         ParseError: A file is not a valid JSON or TOML document.
-        TypeError: Context is not a string or path-like filepath.
+        TypeError: Context is not a filepath or merge_key is not a string.
         InterpolationError: A reference is invalid, unresolved, or cyclic.
         ValueError: Invalid glob, unknown extension, mixed formats, invalid
-            context arguments, or an unrepresentable datetime.
+            context or merge_key arguments, or an unrepresentable datetime.
     """

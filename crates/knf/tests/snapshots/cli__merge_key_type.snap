@@ -1,0 +1,7 @@
+---
+source: crates/knf/tests/cli.rs
+expression: "run_err(&dir, &[\"bad.json\", \"-i\", \"-m\", \"extends\"])"
+---
+error: invalid object inheritance
+  --> bar.extends: expected an object, found number
+help: --merge-key selects a literal key whose value must be one whole-string reference to an object/table

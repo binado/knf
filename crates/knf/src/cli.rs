@@ -134,6 +134,30 @@ $$ is a literal $.
     )]
     pub interpolate: bool,
 
+    /// Merge an object reference under this literal key into its parent
+    #[arg(
+        short = 'm',
+        long = "merge-key",
+        value_name = "KEY",
+        requires = "interpolate",
+        long_help = "\
+Treat KEY as an inheritance directive; requires --interpolate. Its value must
+be one whole-string reference resolving to an object/table. Merge that base
+with local fields, which win, and remove the directive. Runs after input layers
+merge. Honors --shallow at destination paths.
+
+Inherited fields can be referenced by their destination paths. References
+remain absolute. Only surviving inherited values resolve; environment values
+remain terminal. KEY is literal, not a path or glob. One base per object.
+
+  [bar]
+  extends = \"${foo}\"
+  c = 4
+
+  knf config.toml -i -m extends"
+    )]
+    pub merge_key: Option<String>,
+
     /// Read an interpolation context without merging it into output
     #[arg(
         long = "with",

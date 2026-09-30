@@ -47,11 +47,30 @@ macro_rules! common_tests {
 
         /// Interpolate with no environment at all.
         fn interp(doc: Value) -> Result<Value, InterpError> {
-            interpolate(doc, &StubEnv::default())
+            unchanged_with_unused_marker(doc, None, &StubEnv::default())
         }
 
         fn interp_env(doc: Value, vars: &[(&str, &str)]) -> Result<Value, InterpError> {
-            interpolate(doc, &StubEnv::new(vars))
+            unchanged_with_unused_marker(doc, None, &StubEnv::new(vars))
+        }
+
+        fn interpolate_with_context(doc: Value, context: &Value, env: &dyn Env) -> Result<Value, InterpError> {
+            unchanged_with_unused_marker(doc, Some(context), env)
+        }
+
+        // Every existing resolution case also exercises the inheritance view
+        // with an unused marker, guarding its lookup and diagnostic semantics.
+        fn unchanged_with_unused_marker(doc: Value, context: Option<&Value>, env: &dyn Env) -> Result<Value, InterpError> {
+            let old = interpolate_with_options(doc.clone(), context, env, &InterpOptions::default());
+            let new = interpolate_with_options(doc, context, env, &InterpOptions {
+                merge_key: Some("__unused_marker".into()), ..Default::default()
+            });
+            match (&old, &new) {
+                (Ok(old), Ok(new)) => assert_eq!(old, new),
+                (Err(old), Err(new)) => assert_eq!(old.to_string(), new.to_string()),
+                other => panic!("unused marker changed interpolation: {other:?}"),
+            }
+            old
         }
 
         fn err(doc: Value) -> String {
@@ -60,6 +79,180 @@ macro_rules! common_tests {
 
         fn err_env(doc: Value, vars: &[(&str, &str)]) -> String {
             interp_env(doc, vars).expect_err("should fail").to_string()
+        }
+
+        fn inherit(doc: Value, context: Option<&Value>, shallow: Option<&str>) -> Result<Value, InterpError> {
+            interpolate_with_options(doc, context, &StubEnv::default(), &InterpOptions {
+                merge_key: Some("extends".into()),
+                shallow: shallow.map(|pattern| pattern.parse().unwrap()),
+            })
+        }
+
+        #[test]
+        fn inheritance_copies_defaults_and_exposes_destination_paths_in_any_order() {
+            for local in [
+                vec![("c", s("${bar.a}")), ("extends", s("${foo}"))],
+                vec![("extends", s("${foo}")), ("c", s("${bar.a}"))],
+            ] {
+                let doc = obj(vec![
+                    ("bar", obj(local)),
+                    ("foo", obj(vec![("a", n(1)), ("b", n(2)), ("c", n(3))])),
+                    ("read", s("${bar.b}")),
+                    ("copy", s("${bar}")),
+                ]);
+                let out = inherit(doc, None, None).unwrap();
+                let expected = obj(vec![("a", n(1)), ("b", n(2)), ("c", n(1))]);
+                assert_eq!(out.as_object().unwrap()["bar"], expected);
+                assert_eq!(out.as_object().unwrap()["copy"], expected);
+                assert_eq!(out.as_object().unwrap()["read"], n(2));
+            }
+        }
+
+        #[test]
+        fn inheritance_is_lazy_for_overridden_context_fields_and_keeps_absolute_references() {
+            let context = obj(vec![
+                ("unused", obj(vec![("extends", n(42))])),
+                ("base", obj(vec![
+                    ("bad", s("${missing}")),
+                    ("c", n(3)),
+                    ("absolute", s("${base.c}")),
+                    ("db", obj(vec![("host", s("shared")), ("port", n(80))])),
+                    ("items", Value::array(vec![n(1), n(2)])),
+                ])),
+            ]);
+            let doc = obj(vec![("bar", obj(vec![
+                ("extends", s("${base}")), ("bad", s("fixed")), ("c", n(4)),
+                ("db", obj(vec![("port", n(90))])),
+                ("items", Value::array(vec![n(3)])),
+            ]))]);
+            let out = inherit(doc, Some(&context), None).unwrap();
+            assert_eq!(out, obj(vec![("bar", obj(vec![
+                ("bad", s("fixed")), ("c", n(4)), ("absolute", n(3)),
+                ("db", obj(vec![("host", s("shared")), ("port", n(90))])),
+                ("items", Value::array(vec![n(3)])),
+            ]))]));
+        }
+
+        #[test]
+        fn inheritance_shallow_selectors_use_destination_paths_and_stop_at_ancestors() {
+            let context = obj(vec![("base", obj(vec![
+                ("a", n(1)), ("db", obj(vec![("host", s("shared")), ("port", n(80))])),
+            ]))]);
+            let doc = obj(vec![("bar", obj(vec![
+                ("extends", s("${base}")), ("db", obj(vec![("port", n(90))])),
+            ]))]);
+            let out = inherit(doc.clone(), Some(&context), Some("bar.db")).unwrap();
+            assert_eq!(out, obj(vec![("bar", obj(vec![
+                ("a", n(1)), ("db", obj(vec![("port", n(90))])),
+            ]))]));
+            for glob in ["bar", "*"] {
+                let out = inherit(doc.clone(), Some(&context), Some(glob)).unwrap();
+                assert_eq!(out, obj(vec![("bar", obj(vec![("db", obj(vec![("port", n(90))]))]))]));
+            }
+            let out = inherit(doc, Some(&context), Some("base.db")).unwrap();
+            assert_eq!(out.as_object().unwrap()["bar"].as_object().unwrap()["db"],
+                obj(vec![("host", s("shared")), ("port", n(90))]));
+        }
+
+        #[test]
+        fn inheritance_chains_aliases_indexed_bases_and_array_contained_objects() {
+            let context = obj(vec![
+                ("bases", Value::array(vec![obj(vec![("a", n(1)), ("c", n(3))])])),
+                ("alias", s("${bases[0]}")),
+                ("middle", obj(vec![("extends", s("${alias}")), ("b", n(2))])),
+            ]);
+            let doc = obj(vec![("items", Value::array(vec![obj(vec![
+                ("extends", s("${middle}")), ("c", s("${items[0].a}")),
+            ])])), ("read", s("${items[0].b}"))]);
+            let out = inherit(doc, Some(&context), Some("items.c")).unwrap();
+            assert_eq!(out, obj(vec![
+                ("items", Value::array(vec![obj(vec![("a", n(1)), ("b", n(2)), ("c", n(1))])])),
+                ("read", n(2)),
+            ]));
+        }
+
+        #[test]
+        fn inherited_environment_values_and_escaping_are_not_rescanned() {
+            let base_text = if Value::FORMAT == crate::Format::Json {
+                r#"{"extends":"${missing}","raw":"${missing}","nested":{"extends":"${missing}"},"a":1}"#
+            } else {
+                r#"{extends="${missing}", raw="${missing}", nested={extends="${missing}"}, a=1}"#
+            };
+            let env = StubEnv::new(&[("BASE", base_text), ("TEXT", "${missing}")]);
+            let context = obj(vec![
+                ("alias", s("${env:BASE}")),
+                ("base", obj(vec![("literal", s("$${missing}")), ("raw", s("${env:TEXT}"))])),
+            ]);
+            let doc = obj(vec![
+                ("bar", obj(vec![("extends", s("${alias}")), ("a", n(2))])),
+                ("copy", obj(vec![("extends", s("${base}"))])),
+            ]);
+            let out = interpolate_with_options(doc, Some(&context), &env, &InterpOptions {
+                merge_key: Some("extends".into()), ..Default::default()
+            }).unwrap();
+            assert_eq!(out.as_object().unwrap()["bar"], obj(vec![
+                ("extends", s("${missing}")), ("raw", s("${missing}")),
+                ("nested", obj(vec![("extends", s("${missing}"))])), ("a", n(2)),
+            ]));
+            assert_eq!(out.as_object().unwrap()["copy"], obj(vec![
+                ("literal", s("${missing}")), ("raw", s("${missing}")),
+            ]));
+        }
+
+        #[test]
+        fn inheritance_reports_invalid_shapes_and_types_at_the_directive() {
+            for directive in [n(1), obj(vec![]), Value::array(vec![s("${base}")]), s("base"), s("x${base}"), s("$${base}")] {
+                let doc = obj(vec![("bar", obj(vec![("extends", directive)]))]);
+                let err = inherit(doc, None, None).unwrap_err().to_string();
+                assert_eq!(err, "invalid object inheritance\n  --> bar.extends: expected one whole-string reference to an object");
+                assert!(!err.ends_with('\n'));
+            }
+            let doc = obj(vec![("base", n(1)), ("bar", obj(vec![("extends", s("${base}"))]))]);
+            assert_eq!(inherit(doc, None, None).unwrap_err().to_string(),
+                "invalid object inheritance\n  --> bar.extends: expected an object, found number");
+            let doc = obj(vec![("bar", obj(vec![("extends", s("${missing}"))]))]);
+            assert_eq!(inherit(doc, None, None).unwrap_err().to_string(),
+                "unresolved reference\n  --> bar.extends: `missing`");
+        }
+
+        #[test]
+        fn inheritance_cycles_and_value_cycles_cross_sources() {
+            for doc in [
+                obj(vec![("a", obj(vec![("inner", obj(vec![("extends", s("${a}"))]))]))]),
+                obj(vec![
+                    ("a", obj(vec![("extends", s("${b}"))])),
+                    ("b", obj(vec![("inner", obj(vec![("extends", s("${a}"))]))])),
+                ]),
+                obj(vec![("a", obj(vec![("extends", s("${a}"))]))]),
+                obj(vec![("a", obj(vec![("extends", s("${b}"))])), ("b", obj(vec![("extends", s("${a}"))]))]),
+                obj(vec![("a", obj(vec![("extends", s("${b}"))])), ("b", s("${c}")), ("c", s("${b}"))]),
+                obj(vec![("a", obj(vec![("extends", s("${b}"))])), ("b", obj(vec![("x", s("${a.x}"))]))]),
+            ] {
+                assert!(matches!(inherit(doc, None, None), Err(InterpError::Cycle(_))));
+            }
+            let doc = obj(vec![("a", obj(vec![("extends", s("${b}"))]))]);
+            let context = obj(vec![("b", obj(vec![("extends", s("${a}"))]))]);
+            assert!(matches!(inherit(doc, Some(&context), None), Err(InterpError::Cycle(_))));
+        }
+
+        #[test]
+        fn unused_merge_key_preserves_existing_context_lookup_and_errors() {
+            let context = obj(vec![
+                ("base", obj(vec![("a", s("${host}")), ("bad", s("${missing}"))])),
+                ("db", obj(vec![("host", s("shared")), ("port", n(80))])),
+            ]);
+            for doc in [
+                obj(vec![("host", s("prod")), ("db", obj(vec![("host", s("local"))])), ("port", s("${db.port}"))]),
+                obj(vec![("host", s("prod")), ("copy", s("${base}"))]),
+            ] {
+                let old = interpolate_with_context(doc.clone(), &context, &StubEnv::default());
+                let new = inherit(doc, Some(&context), None);
+                match (old, new) {
+                    (Ok(old), Ok(new)) => assert_eq!(old, new),
+                    (Err(old), Err(new)) => assert_eq!(old.to_string(), new.to_string()),
+                    other => panic!("results differ: {other:?}"),
+                }
+            }
         }
 
         #[test]
@@ -690,6 +883,16 @@ mod json {
     type Map = serde_json::Map<String, Value>;
     common_tests!();
     #[test]
+    fn inheritance_preserves_unsigned_values_and_null_overwrites() {
+        let doc = serde_json::json!({"bar":{"extends":"${base}","nested":null}});
+        let context = serde_json::json!({"base":{"big":u64::MAX,"null":null,"nested":{"a":1}}});
+        let out = inherit(doc, Some(&context), None).unwrap();
+        assert_eq!(
+            out,
+            serde_json::json!({"bar":{"big":u64::MAX,"null":null,"nested":null}})
+        );
+    }
+    #[test]
     fn context_preserves_unsigned_integers_and_null_precedence() {
         let doc = serde_json::json!({"value": null, "copy": "${value}", "big": "${big_value}", "nested": "${value.child}", "null": "${null_value}"});
         let context =
@@ -723,6 +926,18 @@ mod toml {
     use ::toml::Value;
     type Map = ::toml::Table;
     common_tests!();
+    #[test]
+    fn inheritance_preserves_native_datetime_and_nonfinite_values() {
+        let doc = Value::parse_document("[bar]\nextends='${base}'\n").unwrap();
+        let context = Value::parse_document(
+            "[base]\nat=1979-05-27T07:32:00.123456789+05:45\ninfinite=inf\nnan=nan\n",
+        )
+        .unwrap();
+        let out = inherit(doc, Some(&context), None).unwrap();
+        assert_eq!(out["bar"]["at"], context["base"]["at"]);
+        assert_eq!(out["bar"]["infinite"], context["base"]["infinite"]);
+        assert!(out["bar"]["nan"].as_float().unwrap().is_nan());
+    }
     #[test]
     fn context_preserves_native_datetimes_and_nonfinite_floats() {
         let doc = Value::parse_document("date = '${day}'\nfloat = '${infinite}'\n").unwrap();

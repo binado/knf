@@ -134,6 +134,30 @@ Context uses the same format as inputs, including `-f`. `--with -` reads stdin
 and requires `-f`; stdin cannot also supply a merge layer.
 Filtering, accumulation and `--list-files` apply only to merge inputs.
 
+**`-m/--merge-key KEY`**: use one whole-string object reference as defaults for
+its parent; requires `-i`. Local fields win and the directive is removed.
+
+```toml
+[foo]
+a = 1
+b = 2
+c = 3
+
+[bar]
+extends = "${foo}"
+c = 4
+```
+
+```bash
+knf config.toml -i -m extends # bar becomes {a=1, b=2, c=4}
+```
+
+Runs after layer merging and honors `--shallow` at destination key paths.
+Inherited fields can be referenced as `${bar.a}`; references remain absolute.
+Context bases and chained inheritance work. Environment bases must parse as
+objects/tables, and their contents remain terminal. Without `-m`, `KEY` is
+ordinary data.
+
 **`-f/--format json|toml`**: set the format for parsing, `-c` typing and output.
 Required for stdin; never converts between formats. Mixed input formats are an
 error.
@@ -148,6 +172,7 @@ from knf import accumulate, filter_paths, load
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
 config = load(["foo.toml", "bar.toml"], interpolate=True, context="config.toml")
+config = load(["config.toml"], interpolate=True, merge_key="extends")
 
 files = accumulate("services/api/prod.toml", base_dir=project_root)
 files = filter_paths(files, "{defaults,prod}.toml", filename_only=True)
