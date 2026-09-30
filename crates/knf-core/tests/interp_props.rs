@@ -1,8 +1,9 @@
-//! Interpolation is the identity on documents without `$`.
+//! Reference-aware merging agrees with native merge, and a reference merges
+//! exactly as the value it names.
 
 use knf::{
-    ConfigFormat, ConfigValue, Env, InterpOptions, MergeOptions, interpolate,
-    interpolate_with_options, merge,
+    ConfigFormat, ConfigValue, Env, InterpOptions, MergeOptions, interpolate, merge,
+    merge_interpolate,
 };
 use proptest::prelude::*;
 
@@ -62,9 +63,44 @@ macro_rules! properties {
                 let mut local = over;
                 local.as_object_mut().unwrap().insert("extends".into(), Value::string("${base}".into()));
                 let context = Value::object([("base".to_owned(), base)].into_iter().collect::<Map>());
-                let out = interpolate_with_options(wrap(local), Some(&context), &NoEnv, &InterpOptions {
+                let out = merge_interpolate([wrap(local)], Some(&context), &NoEnv, &InterpOptions {
                     merge_key: Some("extends".into()), shallow: selector,
                 }).unwrap();
+                prop_assert_eq!(out, expected);
+            }
+
+            /// Without references, layers fold exactly like native merge,
+            /// including its non-associative replacements.
+            #[test]
+            fn layers_without_references_fold_like_native_merge(
+                layers in prop::collection::vec(arb_doc(), 0..4),
+                shallow in prop::option::of(prop::sample::select(vec!["a", "a.b", "a.*", "*", "{a,b}.c"])),
+            ) {
+                let selector: Option<knf::glob::KeyGlobPattern> = shallow.map(|pattern| pattern.parse().unwrap());
+                let expected = merge(layers.clone(), &MergeOptions { shallow: selector.clone(), ..Default::default() }).unwrap();
+                let out = merge_interpolate(layers, None, &NoEnv, &InterpOptions { merge_key: None, shallow: selector }).unwrap();
+                prop_assert_eq!(out, expected);
+            }
+
+            /// Replacing a value with a reference to it never changes a merge,
+            /// on either side and for every kind.
+            #[test]
+            fn a_reference_merges_exactly_like_its_referent(
+                left in arb_value(),
+                right in arb_value(),
+                reference_right in any::<bool>(),
+                shallow in prop::option::of(prop::sample::select(vec!["derived", "derived.a", "derived.*", "*"])),
+            ) {
+                let wrap = |value| Value::object([("derived".to_owned(), value)].into_iter().collect::<Map>());
+                let options = InterpOptions { merge_key: None, shallow: shallow.map(|pattern| pattern.parse().unwrap()) };
+                let expected = merge_interpolate([wrap(left.clone()), wrap(right.clone())], None, &NoEnv, &options).unwrap();
+                let (referent, layers) = if reference_right {
+                    (right, [wrap(left), wrap(Value::string("${referent}".into()))])
+                } else {
+                    (left, [wrap(Value::string("${referent}".into())), wrap(right)])
+                };
+                let context = Value::object([("referent".to_owned(), referent)].into_iter().collect::<Map>());
+                let out = merge_interpolate(layers, Some(&context), &NoEnv, &options).unwrap();
                 prop_assert_eq!(out, expected);
             }
 

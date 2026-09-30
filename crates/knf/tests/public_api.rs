@@ -2,8 +2,8 @@
 use knf::{
     ConfigFormat, ConfigObject, ConfigValue, Cycle, Env, Format, InterpError, InterpOptions,
     Layers, LoadError, MergeError, MergeOptions, PathError, PathLeaf, Problem, ProcessEnv, RefPath,
-    STDIN, Seg, Syntax, interpolate, interpolate_with_context, interpolate_with_options,
-    json_or_string, load_layers, merge, merge_into, render_path, resolve_format, toml_or_string,
+    STDIN, Seg, Syntax, interpolate, interpolate_with_context, json_or_string, load_layers, merge,
+    merge_interpolate, merge_into, render_path, resolve_format, toml_or_string,
 };
 
 #[allow(dead_code)]
@@ -74,8 +74,8 @@ fn native_pipeline<V: ConfigFormat + std::fmt::Debug>(env: &dyn Env) {
         .unwrap()
         .into_layer::<V>()
         .unwrap();
-    let out = interpolate_with_options(
-        doc,
+    let out = merge_interpolate(
+        [doc],
         Some(&context),
         env,
         &InterpOptions {

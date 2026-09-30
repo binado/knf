@@ -46,7 +46,8 @@ def load(
 
     ``files`` merge left to right. ``shallow`` is a key-path glob whose matches
     replace wholesale (``"*"``, ``"foo"``, ``"foo.*"``). ``interpolate=True``
-    resolves ``${key.path}`` and ``${env:NAME}`` after merging.
+    resolves ``${key.path}`` and ``${env:NAME}`` against the final document;
+    a whole-string reference merges exactly as the value it names.
     ``context`` is one filepath used only for interpolation; requires
     ``interpolate=True``. Complete paths prefer the merged document, then
     context, including references inside context. Unused context references

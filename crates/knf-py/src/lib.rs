@@ -14,7 +14,7 @@ use knf::fs::{AccumulateError, AccumulateTarget};
 use knf::glob::{GlobError, GlobPattern, KeyGlobError, KeyGlobPattern};
 use knf::{
     ConfigFormat, Format, InterpError, InterpOptions, LoadError, MergeError, MergeOptions,
-    ProcessEnv, Seg, interpolate_with_options, merge, render_path, resolve_format,
+    ProcessEnv, Seg, merge, merge_interpolate, render_path, resolve_format,
 };
 use pyo3::PyTypeInfo;
 use pyo3::create_exception;
@@ -116,7 +116,8 @@ fn discovery_os_error(py: Python<'_>, path: Option<&Path>, source: io::Error) ->
 /// Load and merge homogeneous JSON or TOML files into one `dict`.
 ///
 /// `files` merge left to right. `shallow` is a key-path glob whose matches
-/// replace wholesale. Interpolation runs once after merging.
+/// replace wholesale. With `interpolate`, references bind to the final
+/// document and a whole-string reference merges as the value it names.
 /// `context` is one filepath used only for interpolation, with output-first
 /// lookup; it requires `interpolate=True`.
 /// `merge_key` selects a literal inheritance key containing one whole-string
@@ -217,12 +218,11 @@ fn load_native<V: ConfigFormat>(
         layers.push(read().map_err(|err| Failure::File(path.to_path_buf(), err))?);
     }
     let context = context_path.map(|_| layers.pop().expect("context was loaded last"));
-    let merged = merge(layers, opts).map_err(Failure::Merge)?;
     if interpolate {
-        interpolate_with_options(merged, context.as_ref(), &ProcessEnv, interp_options)
+        merge_interpolate(layers, context.as_ref(), &ProcessEnv, interp_options)
             .map_err(Failure::Interpolate)
     } else {
-        Ok(merged)
+        merge(layers, opts).map_err(Failure::Merge)
     }
 }
 

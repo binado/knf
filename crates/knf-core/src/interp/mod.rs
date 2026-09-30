@@ -1,22 +1,25 @@
-//! `${key.path}` and `${env:VAR}` resolution over the merged native values.
+//! `${key.path}` and `${env:VAR}` resolution over native layers.
 //!
 //! A whole-string reference (`"${p}"`) takes the referent's value and type; an
 //! embedded one (`"x/${p}"`) stringifies, and containers are an error there.
 //! `$$` is a literal `$`. The environment is injected through [`Env`].
+//!
+//! Layers fold as expressions, so a whole-string reference merges exactly as
+//! the value it names would. References bind to the final document.
 
 mod error;
-mod inherit;
+mod graph;
 mod scan;
 
 use std::collections::HashMap;
 
 use crate::glob::KeyGlobPattern;
-use crate::path::lookup;
 use crate::{ConfigFormat, ConfigObject, PathError, RefPath, Seg};
 
 pub use error::{Cycle, InterpError, Problem};
 pub use scan::Syntax;
 
+use graph::{Expr, Id, Node, Shape};
 use scan::{Piece, Spelled, scan};
 
 /// The environment namespace, matched as a literal prefix so `${a:b}` is the
@@ -30,43 +33,76 @@ pub trait Env {
     fn lookup(&self, name: &str) -> Option<String>;
 }
 
-/// Options for interpolation and opt-in object inheritance.
+/// Options for reference-aware merging and opt-in object inheritance.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InterpOptions {
     /// Literal key whose whole-string reference supplies an object's defaults.
     /// `None` leaves every key as ordinary data.
     pub merge_key: Option<String>,
-    /// Destination key paths to replace wholesale during inheritance.
-    /// Matching ancestors stop merging; paths containing indices do not match.
+    /// Destination key paths to replace wholesale, in layer and inheritance
+    /// merges. Matching ancestors stop merging; paths with indices never match.
     pub shallow: Option<KeyGlobPattern>,
 }
 
-/// Resolve references and optionally merge referenced objects into their parents.
+/// Left-folds `layers` like [`merge`](crate::merge), then resolves references
+/// against the result, looking up each complete path in it first, then in
+/// `context`. Only the merged document is returned.
 ///
-/// Inheritance runs after layer merging, before resolving surviving values.
-/// Local fields override the base; arrays and null replace wholesale. Context
-/// lookup is output-first and lazy. Environment values remain terminal.
+/// A whole-string reference merges as the value it names: an object merges
+/// with an object on the other side; anything else replaces. `shallow` paths
+/// replace wholesale. An operand that is replaced is never resolved, but a
+/// reference whose kind decides a merge must resolve.
 ///
-/// The selected marker must contain one whole-string reference to an object
-/// and is removed from the result. References remain absolute, including in
-/// inherited fields; destination paths can address those fields. Context
-/// expressions discarded by overrides are never resolved. Invalid directives
-/// and reference problems are reported together; cycles are reported alone.
-pub fn interpolate_with_options<V: ConfigFormat>(
-    doc: V,
+/// With `merge_key`, an object's marker must hold one whole-string reference
+/// to an object, which supplies defaults beneath the object's own fields. The
+/// marker is removed from the result.
+///
+/// Context values are resolved only when referenced. Environment values are
+/// terminal. Invalid directives and reference problems are reported together;
+/// cycles are reported alone.
+pub fn merge_interpolate<V: ConfigFormat>(
+    layers: impl IntoIterator<Item = V>,
     context: Option<&V>,
     env: &dyn Env,
     options: &InterpOptions,
 ) -> Result<V, InterpError> {
-    resolve_document(doc, context, env, options)
+    let mut resolver = Resolver {
+        env,
+        merge_key: options.merge_key.as_deref(),
+        shallow: options.shallow.as_ref(),
+        nodes: Vec::new(),
+        doc: 0,
+        context: None,
+        merges: HashMap::new(),
+        shapes: HashMap::new(),
+        raws: HashMap::new(),
+        targets: HashMap::new(),
+        shaping: Vec::new(),
+        values: HashMap::new(),
+        visiting: Vec::new(),
+        problems: Vec::new(),
+    };
+    let mut doc = resolver.add(Expr::Object(Vec::new()), Vec::new());
+    for layer in layers {
+        let layer = resolver.build(layer, Vec::new());
+        doc = resolver.combine(doc, layer, Vec::new());
+    }
+    resolver.doc = doc;
+    resolver.context = context.map(|context| resolver.build(context.clone(), Vec::new()));
+    let resolved = resolver.eval(doc).map_err(InterpError::Cycle)?;
+    if resolver.problems.is_empty() {
+        Ok(resolved)
+    } else {
+        Err(InterpError::Problems(resolver.problems))
+    }
 }
 
-/// Resolves every reference in `doc`. Call once, on the merged document.
+/// Resolves every reference in `doc`.
 ///
 /// Reports all unresolved and malformed references together; a cycle is
 /// reported alone.
 pub fn interpolate<V: ConfigFormat>(doc: V, env: &dyn Env) -> Result<V, InterpError> {
-    interpolate_with_options(doc, None, env, &InterpOptions::default())
+    merge_interpolate([doc], None, env, &InterpOptions::default())
 }
 
 /// Resolves references in `doc`, looking up each complete path in `doc` first,
@@ -80,192 +116,87 @@ pub fn interpolate_with_context<V: ConfigFormat>(
     context: &V,
     env: &dyn Env,
 ) -> Result<V, InterpError> {
-    interpolate_with_options(doc, Some(context), env, &InterpOptions::default())
+    merge_interpolate([doc], Some(context), env, &InterpOptions::default())
 }
 
-fn resolve_document<V: ConfigFormat>(
-    doc: V,
-    context: Option<&V>,
-    env: &dyn Env,
-    options: &InterpOptions,
-) -> Result<V, InterpError> {
-    let mut resolver = Resolver {
-        doc: &doc,
-        context,
-        env,
-        memo: HashMap::new(),
-        source_memo: HashMap::new(),
-        visiting: Vec::new(),
-        containers: Vec::new(),
-        problems: Vec::new(),
-        projection: options
-            .merge_key
-            .as_deref()
-            .map(|key| inherit::Projection::new(&doc, context, env, key, options.shallow.as_ref())),
-    };
-    let resolved = resolver.resolve(&[]).map_err(InterpError::Cycle)?;
-    if let Some(projection) = resolver.projection {
-        for problem in projection.problems {
-            if !resolver.problems.contains(&problem) {
-                resolver.problems.push(problem);
-            }
-        }
-    }
-    if resolver.problems.is_empty() {
-        Ok(resolved)
-    } else {
-        Err(InterpError::Problems(resolver.problems))
-    }
-}
-
-/// Output-first lookup fixes one source per path, so caches need only the path.
+/// The expression graph and every cache over it. Node ids are stable, so
+/// each cache is keyed by id alone.
 struct Resolver<'a, V: ConfigFormat> {
-    doc: &'a V,
-    context: Option<&'a V>,
     env: &'a dyn Env,
-    memo: HashMap<Vec<Seg>, V>,
-    // Inherited expressions keep their source and must be evaluated only once.
-    source_memo: HashMap<inherit::Source, V>,
-    /// Paths being resolved, innermost last; also the cycle chain.
-    visiting: Vec<Vec<Seg>>,
-    /// Inherited containers can repeat their source at ever-longer destinations.
-    containers: Vec<(inherit::Source, Vec<Seg>)>,
+    merge_key: Option<&'a str>,
+    shallow: Option<&'a KeyGlobPattern>,
+    nodes: Vec<Node<V>>,
+    doc: Id,
+    context: Option<Id>,
+    merges: HashMap<(Id, Id, Vec<Seg>), Id>,
+    shapes: HashMap<Id, Shape>,
+    raws: HashMap<Id, Shape>,
+    targets: HashMap<Id, Option<Id>>,
+    /// Nodes whose structure or target is being decided, innermost last.
+    shaping: Vec<Id>,
+    values: HashMap<Id, V>,
+    /// Nodes being evaluated, innermost last; also the cycle chain.
+    visiting: Vec<Id>,
     problems: Vec<Problem>,
-    projection: Option<inherit::Projection<'a, V>>,
 }
 
-impl<'a, V: ConfigFormat> Resolver<'a, V> {
-    fn lookup(&self, path: &[Seg]) -> Option<&'a V> {
-        lookup(self.doc, path).or_else(|| self.context.and_then(|context| lookup(context, path)))
-    }
-
-    /// Resolves the node at `path`, which the caller has established exists.
-    fn resolve(&mut self, path: &[Seg]) -> Result<V, Cycle> {
-        if let Some(projection) = &mut self.projection {
-            let node = projection.lookup(path)?.expect("reference exists");
-            return self.resolve_node(node, path);
-        }
-        if let Some(done) = self.memo.get(path) {
+impl<V: ConfigFormat> Resolver<'_, V> {
+    fn eval(&mut self, id: Id) -> Result<V, Cycle> {
+        if let Some(done) = self.values.get(&id) {
             return Ok(done.clone());
         }
-        if let Some(start) = self
-            .visiting
-            .iter()
-            .position(|seen| seen.as_slice() == path)
-        {
-            let mut chain = self.visiting[start..].to_vec();
-            chain.push(path.to_vec());
-            return Err(Cycle::new(chain));
-        }
-
-        let raw = self
-            .lookup(path)
-            .expect("resolve is only called on paths that exist");
-
-        self.visiting.push(path.to_vec());
-        let resolved = self.resolve_value(raw, path)?;
-        self.visiting.pop();
-
-        // No reference can name the root, so don't cache it.
-        if !path.is_empty() {
-            self.memo.insert(path.to_vec(), resolved.clone());
-        }
-        Ok(resolved)
-    }
-
-    fn resolve_node(&mut self, node: inherit::Node<V>, path: &[Seg]) -> Result<V, Cycle> {
-        if let Some(done) = self.memo.get(path) {
-            return Ok(done.clone());
-        }
-        if let Some(start) = self.visiting.iter().position(|seen| seen == path) {
-            let mut chain = self.visiting[start..].to_vec();
-            chain.push(path.to_vec());
-            return Err(Cycle::new(chain));
-        }
-        self.visiting.push(path.to_vec());
-        let mut node = self
-            .projection
-            .as_mut()
-            .expect("inheritance enabled")
-            .expand(node, path)?;
-        let container = !node.terminal && (node.fields.is_some() || node.raw.as_array().is_some());
-        if container {
-            if let Some(start) = self
-                .containers
+        if let Some(start) = self.visiting.iter().position(|&seen| seen == id) {
+            let mut chain: Vec<_> = self.visiting[start..]
                 .iter()
-                .position(|(source, _)| source == &node.source)
-            {
-                let mut chain: Vec<_> = self.containers[start..]
-                    .iter()
-                    .map(|(_, path)| path.clone())
-                    .collect();
-                chain.push(path.to_vec());
-                return Err(Cycle::new(chain));
-            }
-            self.containers.push((node.source.clone(), path.to_vec()));
+                .map(|&seen| self.nodes[seen].path.clone())
+                .collect();
+            chain.push(self.nodes[id].path.clone());
+            return Err(Cycle::new(chain));
         }
-        let resolved = if let Some(fields) = node.fields.take() {
-            let mut out = V::Object::new();
-            for (key, node) in fields {
-                let value = self.resolve_node(node, &child(path, Seg::Key(key.clone())))?;
-                out.insert(key, value);
+        self.visiting.push(id);
+        let value = match &self.nodes[id].expr {
+            Expr::Terminal(value) => value.clone(),
+            Expr::Value(value) => match value.as_str() {
+                Some(text) => {
+                    let text = text.to_owned();
+                    self.resolve_string(id, &text)?
+                }
+                None => value.clone(),
+            },
+            Expr::Array(items) => {
+                let items = items.clone();
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.eval(item)?);
+                }
+                V::array(out)
             }
-            V::object(out)
-        } else if node.terminal {
-            node.raw
-        } else if let Some(items) = node.raw.as_array() {
-            let mut out = Vec::with_capacity(items.len());
-            for (index, value) in items.iter().enumerate() {
-                let seg = Seg::Index(index);
-                let item = node.descendant(value.clone(), seg.clone());
-                out.push(self.resolve_node(item, &child(path, seg))?);
-            }
-            V::array(out)
-        } else if let Some(text) = node.raw.as_str() {
-            if let Some(done) = self.source_memo.get(&node.source) {
-                done.clone()
-            } else {
-                let value = self.resolve_string(text, &node.source.path)?;
-                self.source_memo.insert(node.source, value.clone());
-                value
-            }
-        } else {
-            node.raw
+            Expr::Object(_) | Expr::Merge { .. } => match self.shape(id)? {
+                Shape::Object(fields) => {
+                    let mut out = V::Object::new();
+                    for (key, field) in fields.iter() {
+                        out.insert(key.clone(), self.eval(*field)?);
+                    }
+                    V::object(out)
+                }
+                // Only a merge resolves to a non-object: its right operand.
+                _ => {
+                    let Expr::Merge { over, .. } = self.nodes[id].expr else {
+                        unreachable!("an object node always shapes as an object")
+                    };
+                    self.visiting.pop();
+                    let value = self.eval(over)?;
+                    self.values.insert(id, value.clone());
+                    return Ok(value);
+                }
+            },
         };
         self.visiting.pop();
-        if container {
-            self.containers.pop();
-        }
-        if !path.is_empty() {
-            self.memo.insert(path.to_vec(), resolved.clone());
-        }
-        Ok(resolved)
+        self.values.insert(id, value.clone());
+        Ok(value)
     }
 
-    fn resolve_value(&mut self, raw: &'a V, path: &[Seg]) -> Result<V, Cycle> {
-        if let Some(text) = raw.as_str() {
-            return self.resolve_string(text, path);
-        }
-        // A context container is absent from doc, as are all its descendants.
-        if let Some(items) = raw.as_array() {
-            let mut out = Vec::with_capacity(items.len());
-            for index in 0..items.len() {
-                out.push(self.resolve(&child(path, Seg::Index(index)))?);
-            }
-            return Ok(V::array(out));
-        }
-        if let Some(map) = raw.as_object() {
-            let mut out = V::Object::new();
-            for (key, _) in map.iter() {
-                let value = self.resolve(&child(path, Seg::Key(key.clone())))?;
-                out.insert(key.clone(), value);
-            }
-            return Ok(V::object(out));
-        }
-        Ok(raw.clone())
-    }
-
-    fn resolve_string(&mut self, text: &str, path: &[Seg]) -> Result<V, Cycle> {
+    fn resolve_string(&mut self, id: Id, text: &str) -> Result<V, Cycle> {
         let pieces = scan(text);
 
         // No `$` anywhere.
@@ -273,17 +204,21 @@ impl<'a, V: ConfigFormat> Resolver<'a, V> {
             return Ok(V::string(text.to_string()));
         }
         if let [Piece::Ref(body)] = pieces.as_slice() {
-            return self.substitute(body, path);
+            return Ok(match self.resolve_ref(id)? {
+                Some(target) => self.eval(target)?,
+                None => V::string(Spelled(body).to_string()),
+            });
         }
 
+        let path = self.nodes[id].path.clone();
         let mut out = String::new();
         for piece in pieces {
             match piece {
                 Piece::Literal(literal) => out.push_str(literal),
-                Piece::Ref(body) => out.push_str(&self.splice(body, path)?),
+                Piece::Ref(body) => out.push_str(&self.splice(body, &path)?),
                 Piece::Malformed { spelling, error } => {
                     self.problems.push(Problem::Syntax {
-                        path: path.to_vec(),
+                        path: path.clone(),
                         error,
                     });
                     out.push_str(spelling);
@@ -291,21 +226,6 @@ impl<'a, V: ConfigFormat> Resolver<'a, V> {
             }
         }
         Ok(V::string(out))
-    }
-
-    /// Whole-string position: takes the referent's value and type.
-    fn substitute(&mut self, body: &str, path: &[Seg]) -> Result<V, Cycle> {
-        if let Some(name) = body.strip_prefix(ENV) {
-            return Ok(match self.env_value(name, body, path) {
-                // Environment values are terminal: never re-scanned.
-                Some(found) => V::parse_inline(found),
-                None => V::string(Spelled(body).to_string()),
-            });
-        }
-        match self.target(body, path)? {
-            Some(target) => self.resolve(&target),
-            None => Ok(V::string(Spelled(body).to_string())),
-        }
     }
 
     /// Embedded position: the referent is rendered as text.
@@ -319,7 +239,7 @@ impl<'a, V: ConfigFormat> Resolver<'a, V> {
         let Some(target) = self.target(body, path)? else {
             return Ok(Spelled(body).to_string());
         };
-        let value = self.resolve(&target)?;
+        let value = self.eval(target)?;
         Ok(match value.stringify() {
             Some(text) => text,
             None => {
@@ -353,25 +273,20 @@ impl<'a, V: ConfigFormat> Resolver<'a, V> {
         found
     }
 
-    /// The path a reference names, recording a problem and returning
-    /// `None` if it is malformed or names nothing.
-    fn target(&mut self, body: &str, path: &[Seg]) -> Result<Option<Vec<Seg>>, Cycle> {
+    /// The node a reference names, recording a problem and returning `None`
+    /// if it is malformed or names nothing.
+    fn target(&mut self, body: &str, path: &[Seg]) -> Result<Option<Id>, Cycle> {
         let Some(target) = parse_target(body, path, &mut self.problems) else {
             return Ok(None);
         };
-        let exists = if let Some(projection) = &mut self.projection {
-            projection.lookup(&target)?.is_some()
-        } else {
-            self.lookup(&target).is_some()
-        };
-        if !exists {
+        let found = self.lookup(&target)?;
+        if found.is_none() {
             self.problems.push(Problem::Unresolved {
                 path: path.to_vec(),
                 reference: body.to_string(),
             });
-            return Ok(None);
         }
-        Ok(Some(target))
+        Ok(found)
     }
 }
 

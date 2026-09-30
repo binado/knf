@@ -39,7 +39,7 @@ Layers merge left to right; the output uses the input format.
 
 ## CLI
 
-**`--strict`**: error when a layer changes a key's type.
+**`--strict`**: error when a layer changes a key's type. Not available with `-i`.
 
 ```console
 $ knf a.json b.json --strict
@@ -120,6 +120,31 @@ literal = "${NOT_A_REF}"
 A whole-string reference keeps the value's type; an embedded one becomes text.
 `$$` is a literal `$`.
 
+References bind to the final document, and a whole-string reference merges
+exactly as the value it names:
+
+```toml
+# base.toml                     # override.toml
+[bar]                           [foo.b]
+a = 1                           a = 4
+d = 1
+
+[foo]
+b = "${bar}"
+```
+
+```console
+$ knf base.toml override.toml -i
+...
+[foo.b]
+a = 4
+d = 1
+```
+
+A later layer changing `bar.d` changes `foo.b.d` too. `--shallow 'foo.b'`
+replaces instead. A value that is replaced is never resolved, but a reference
+whose type decides a merge must resolve.
+
 **`--with FILE`**: use one context file for interpolation without merging it
 into output; requires `-i`. Each complete reference path prefers the merged
 document, then context, including references inside context. Only referenced
@@ -152,7 +177,8 @@ c = 4
 knf config.toml -i -m extends # bar becomes {a=1, b=2, c=4}
 ```
 
-Runs after layer merging and honors `--shallow` at destination key paths.
+The last layer's directive wins; honors `--shallow` at destination key paths.
+Use it to inherit and override in one file.
 Inherited fields can be referenced as `${bar.a}`; references remain absolute.
 Context bases and chained inheritance work. Environment bases must parse as
 objects/tables, and their contents remain terminal. Without `-m`, `KEY` is
