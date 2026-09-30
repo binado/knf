@@ -19,7 +19,7 @@ cargo test -p knf-cli --test cli <name> # run a single CLI integration test
 
 ## Crates
 
-- `knf-core/`: The library (crate name `knf`). Pipeline: `load_layers` → `merge` → `interpolate`. No `clap`.
+- `knf-core/`: The library (crate name `knf`). Pipeline: `load_layers` → `merge`, or `load_layers` → `merge_interpolate` with interpolation. No `clap`.
 - `knf/`: The CLI binary (`knf-cli`). Argv parsing and stderr formatting. No `pyo3`.
 - `knf-py/`: Python bindings (`pyknf` wheel, module `knf._knf`). Tested via `just test-py`.
 
@@ -39,7 +39,7 @@ No cargo features; no new dependencies without deliberate reason. Reusable logic
 - **Merge fold:** Strictly left-fold over a flat layer list (merge is not associative).
 - **Arrays & Null:** Arrays replace wholesale (never merged by index or concatenated). Null is an ordinary value that overwrites, not a delete.
 - **Deep by default:** Default merge is deep (`jq *`); `--shallow PATTERN` replaces matching full key paths wholesale. `*` is `jq +` at the root; `foo.*` is shallow inside `foo`, while `foo` replaces it entirely. Dots separate keys; single-quoted spans are literal. Matching ancestors stop traversal.
-- **Interpolation:** Opt-in, runs once over the merged document. Env values are terminal; container references are whole-string only.
+- **Interpolation:** Opt-in. Layers fold as an expression graph (`interp/graph.rs`): a whole-string reference merges exactly as the value it names, and references bind to the final document. Replaced operands never resolve; a reference whose kind decides a merge must. Markers fold last-wins and apply once. Native `merge` is the path without interpolation; `--strict` conflicts with `-i`. Env values are terminal; container references are whole-string only.
 - **Native representation:** JSON nulls/unsigned integers and TOML datetimes/non-finite floats stay native. Inline and whole-string environment values parse in the selected format with original-text string fallback.
 - **Input/Output:** Every input is a top-level object/table. Inferred mixed formats fail before document I/O; `-f` overrides parsing for every input and selects that same output format. An empty input list defaults to JSON.
 - **Python datetimes:** Return datetime/date/time objects with fixed offsets when present; truncate nanoseconds to microseconds, and report unrepresentable datetime values with key paths.

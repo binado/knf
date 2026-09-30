@@ -127,7 +127,9 @@ separate keys; single-quoted spans are literal.
 Resolve ${key.path} and ${env:VAR} references in the merged document.
 
 A whole-string reference keeps the value's type; an embedded one becomes text.
-$$ is a literal $.
+$$ is a literal $. References bind to the final document, and a whole-string
+reference merges exactly as the value it names: an object referent merges with
+an object from another layer. --shallow forces replacement.
 
   data_dir = \"${root}/data\"
   port     = \"${env:PORT}\""
@@ -143,8 +145,8 @@ $$ is a literal $.
         long_help = "\
 Treat KEY as an inheritance directive; requires --interpolate. Its value must
 be one whole-string reference resolving to an object/table. Merge that base
-with local fields, which win, and remove the directive. Runs after input layers
-merge. Honors --shallow at destination paths.
+with local fields, which win, and remove the directive. The last layer's
+directive wins. Honors --shallow at destination paths.
 
 Inherited fields can be referenced by their destination paths. References
 remain absolute. Only surviving inherited values resolve; environment values
@@ -178,7 +180,7 @@ Stdin cannot supply both a merge layer and context.
     pub with: Option<PathBuf>,
 
     /// Error when a layer changes the type of an existing key
-    #[arg(long)]
+    #[arg(long, conflicts_with = "interpolate")]
     pub strict: bool,
 
     /// Disable pretty-printing

@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use knf::{
-    ConfigFormat, InterpOptions, Layers, MergeOptions, ProcessEnv, format,
-    interpolate_with_options, load_layers, merge,
+    ConfigFormat, InterpOptions, Layers, MergeOptions, ProcessEnv, format, load_layers, merge,
+    merge_interpolate,
 };
 
 use cli::Cli;
@@ -105,17 +105,17 @@ fn run_native<V: ConfigFormat>(
                 .map_err(name_the_inline_layer_flag)?,
         );
     }
-    let merged = merge(layers, opts).map_err(|err| explain_pipeline(err, None))?;
+    // References merge as the values they name, so they fold with the layers.
     let merged = if cli.interpolate {
         let options = InterpOptions {
             merge_key: cli.merge_key.clone(),
             shallow: cli.shallow.clone(),
         };
-        interpolate_with_options(merged, context.as_ref(), &ProcessEnv, &options).map_err(
-            |err| explain::explain_interp(err, context.is_some(), cli.merge_key.is_some()),
-        )?
+        merge_interpolate(layers, context.as_ref(), &ProcessEnv, &options).map_err(|err| {
+            explain::explain_interp(err, context.is_some(), cli.merge_key.is_some())
+        })?
     } else {
-        merged
+        merge(layers, opts).map_err(|err| explain_pipeline(err, None))?
     };
     let text = format::emit(merged, !cli.compact).map_err(|err| explain_pipeline(err, None))?;
     write_stdout(&text)

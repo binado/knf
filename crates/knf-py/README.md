@@ -22,7 +22,9 @@ config = load(files)
 
 - `load` merges left to right: objects recurse; arrays, scalars and `None`
   replace. All files must share one format. An empty list returns `{}`.
-- `interpolate=True` resolves `${key.path}` and `${env:NAME}` after merging.
+- `interpolate=True` resolves `${key.path}` and `${env:NAME}` against the
+  final document. A whole-string reference merges as the value it names, so
+  an object referent merges with an object from another file.
 - `context="config.toml"` supplies one same-format filepath without merging it;
   requires `interpolate=True`. Complete paths prefer output, then context,
   including context dependencies. Only referenced context values resolve.

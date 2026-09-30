@@ -241,7 +241,6 @@ fn context_is_independent_of_accumulation_filtering_and_merge_options() {
                 "{base,target}.json",
                 "--shallow",
                 "db",
-                "--strict",
                 "-i",
                 "--with",
                 "config.json",
@@ -689,7 +688,6 @@ fn accumulate_listing_does_not_parse_or_resolve_files() {
                 "foo/target.toml",
                 "--list-files",
                 "--interpolate",
-                "--strict",
                 "-f",
                 "json"
             ]
@@ -1718,18 +1716,44 @@ fn set_layers_interpolate_too() {
     );
 }
 
-/// `--strict` checks types before interpolation.
+/// Strict kinds are undefined for references merged as their referents.
 #[test]
-fn strict_sees_types_as_written_not_as_resolved() {
+fn strict_conflicts_with_interpolate_before_reading() {
+    let dir = tree(&[]);
+    for args in [
+        ["missing.json", "--strict", "-i"],
+        ["missing.json", "-i", "--strict"],
+    ] {
+        let out = knf(&dir).args(args).output().expect("spawn");
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        let stderr = String::from_utf8(out.stderr).expect("utf-8");
+        assert!(stderr.contains("cannot be used with"), "{args:?}: {stderr}");
+    }
+}
+
+/// A whole-string reference merges as its referent, against the final layers.
+#[test]
+fn a_referenced_table_merges_with_a_later_table() {
     let dir = tree(&[
-        ("a.json", r#"{"p":8080,"port":80}"#),
-        ("b.json", r#"{"port":"${p}"}"#),
+        (
+            "base.toml",
+            "[bar]\na = 1\nd = 1\n\n[foo]\nb = \"${bar}\"\n",
+        ),
+        ("over.toml", "[foo.b]\na = 4\n"),
+        ("late.toml", "[bar]\nd = 9\n"),
     ]);
-    let err = run_err(&dir, &["a.json", "b.json", "--strict", "--interpolate"]);
-    assert!(
-        err.contains("type conflict at `port`: number would be replaced by string"),
-        "{err}"
+    let merged = |extra: &[&str]| {
+        let mut args = vec!["base.toml", "over.toml"];
+        args.extend_from_slice(extra);
+        run(&dir, &args)
+    };
+    let table = |d: &str| format!("[bar]\na = 1\nd = {d}\n\n[foo.b]\na = 4\n");
+    assert_eq!(merged(&["-i"]), format!("{}d = 1\n", table("1")));
+    assert_eq!(
+        merged(&["late.toml", "-i"]),
+        format!("{}d = 9\n", table("9"))
     );
+    assert_eq!(merged(&["-i", "--shallow", "foo.b"]), table("1"));
 }
 
 #[test]

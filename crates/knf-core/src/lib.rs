@@ -1,8 +1,9 @@
 //! Load, merge and interpolate homogeneous JSON or TOML configuration layers.
 //!
 //! [`load_layers`] returns native [`Layers`]. Match its variant, then call
-//! [`merge`], optionally [`interpolate`], and [`format::emit`] on that same
-//! value type. No stage converts JSON to TOML or TOML to JSON.
+//! [`merge`], or [`merge_interpolate`] to resolve references while merging,
+//! and [`format::emit`] on that same value type. No stage converts JSON to
+//! TOML or TOML to JSON.
 
 pub mod format;
 pub mod fs;
@@ -25,7 +26,7 @@ pub use format::{ConfigFormat, Format};
 pub use inline::{PathLeaf, json_or_string, toml_or_string};
 pub use interp::{
     Cycle, Env, InterpError, InterpOptions, Problem, Syntax, interpolate, interpolate_with_context,
-    interpolate_with_options,
+    merge_interpolate,
 };
 pub use merge::{MergeError, MergeOptions, merge, merge_into};
 pub use path::{PathError, RefPath, Seg, render_path};

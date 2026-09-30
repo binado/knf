@@ -81,6 +81,10 @@ macro_rules! common_tests {
             interp_env(doc, vars).expect_err("should fail").to_string()
         }
 
+        fn interpolate_with_options(doc: Value, context: Option<&Value>, env: &dyn Env, options: &InterpOptions) -> Result<Value, InterpError> {
+            merge_interpolate([doc], context, env, options)
+        }
+
         fn inherit(doc: Value, context: Option<&Value>, shallow: Option<&str>) -> Result<Value, InterpError> {
             interpolate_with_options(doc, context, &StubEnv::default(), &InterpOptions {
                 merge_key: Some("extends".into()),
@@ -399,6 +403,156 @@ macro_rules! common_tests {
                 err.to_string(),
                 "reference cannot be rendered into a string\n  --> copy: `settings` is an object"
             );
+        }
+
+        // --- reference-aware merging ----------------------------------------------
+
+        fn fold(layers: Vec<Value>) -> Result<Value, InterpError> {
+            fold_with(layers, None, None, &StubEnv::default())
+        }
+
+        fn fold_with(layers: Vec<Value>, context: Option<&Value>, shallow: Option<&str>, env: &dyn Env) -> Result<Value, InterpError> {
+            merge_interpolate(layers, context, env, &InterpOptions {
+                merge_key: Some("extends".into()),
+                shallow: shallow.map(|pattern| pattern.parse().unwrap()),
+            })
+        }
+
+        #[test]
+        fn a_reference_merges_with_a_later_object_against_the_final_document() {
+            let base = obj(vec![
+                ("bar", obj(vec![("a", n(1)), ("d", n(1))])),
+                ("foo", obj(vec![("b", s("${bar}"))])),
+            ]);
+            let over = obj(vec![("foo", obj(vec![("b", obj(vec![("a", n(4))]))]))]);
+            let out = fold(vec![base.clone(), over.clone()]).unwrap();
+            assert_eq!(out["foo"]["b"], obj(vec![("a", n(4)), ("d", n(1))]));
+            let late = obj(vec![("bar", obj(vec![("d", n(9))]))]);
+            let out = fold(vec![base, over, late]).unwrap();
+            assert_eq!(out["foo"]["b"], obj(vec![("a", n(4)), ("d", n(9))]));
+        }
+
+        #[test]
+        fn an_object_merges_with_a_later_reference_and_two_references_merge() {
+            let out = fold(vec![
+                obj(vec![("foo", obj(vec![("x", n(1)), ("y", n(1))])), ("a", obj(vec![("p", n(1))])), ("c", s("${a}"))]),
+                obj(vec![("foo", s("${bar}")), ("bar", obj(vec![("y", n(2)), ("z", n(2))])), ("b", obj(vec![("q", n(2))])), ("c", s("${b}"))]),
+            ]).unwrap();
+            assert_eq!(out["foo"], obj(vec![("x", n(1)), ("y", n(2)), ("z", n(2))]));
+            assert_eq!(out["c"], obj(vec![("p", n(1)), ("q", n(2))]));
+        }
+
+        #[test]
+        fn non_object_referents_replace_on_either_side() {
+            for referent in [n(1), s("text"), Value::array(vec![n(1)])] {
+                let out = fold(vec![
+                    obj(vec![("r", referent.clone()), ("left", s("${r}")), ("right", obj(vec![("x", n(1))]))]),
+                    obj(vec![("left", obj(vec![("y", n(2))])), ("right", s("${r}"))]),
+                ]).unwrap();
+                assert_eq!(out["left"], obj(vec![("y", n(2))]));
+                assert_eq!(out["right"], referent);
+            }
+        }
+
+        #[test]
+        fn a_replaced_operand_is_never_resolved_but_a_deciding_reference_must_resolve() {
+            let replaced = fold(vec![
+                obj(vec![("a", s("${missing}")), ("b", s("${env:UNSET}")), ("c", s("x${missing}"))]),
+                obj(vec![("a", n(1)), ("b", Value::array(vec![])), ("c", obj(vec![("k", n(1))]))]),
+            ]).unwrap();
+            assert_eq!(replaced["c"], obj(vec![("k", n(1))]));
+            let err = fold(vec![
+                obj(vec![("a", s("${missing}")), ("b", s("${env:UNSET}")), ("c", s("${gone}")), ("d", s("${}"))]),
+                obj(vec![("a", obj(vec![("k", n(1))])), ("b", obj(vec![])), ("c", n(2)), ("d", obj(vec![]))]),
+            ]).unwrap_err();
+            assert_eq!(err.to_string(), "unresolved reference\n  --> a: `missing`\n  --> b: `env:UNSET`");
+        }
+
+        #[test]
+        fn shallow_destinations_replace_without_resolving_the_earlier_value() {
+            let layers = vec![
+                obj(vec![("bar", obj(vec![("db", obj(vec![("host", s("h")), ("port", n(1))]))])), ("foo", s("${bar}")), ("gone", s("${missing}"))]),
+                obj(vec![("foo", obj(vec![("db", obj(vec![("port", n(2))]))])), ("gone", obj(vec![]))]),
+            ];
+            let deep = fold_with(layers.clone(), None, Some("gone"), &StubEnv::default()).unwrap();
+            assert_eq!(deep["foo"], obj(vec![("db", obj(vec![("host", s("h")), ("port", n(2))]))]));
+            for glob in ["foo.db", "{foo.db,gone}", "*"] {
+                let out = fold_with(layers.clone(), None, Some(glob), &StubEnv::default());
+                let out = match out {
+                    Ok(out) => out,
+                    Err(err) => { assert_eq!(glob, "foo.db", "{err}"); continue; }
+                };
+                assert_eq!(out["foo"], obj(vec![("db", obj(vec![("port", n(2))]))]), "{glob}");
+            }
+        }
+
+        #[test]
+        fn references_read_through_deferred_merges_and_aliases() {
+            let out = fold(vec![
+                obj(vec![
+                    ("bar", obj(vec![("a", n(1)), ("d", n(1))])),
+                    ("foo", obj(vec![("b", s("${bar}"))])),
+                    ("read", s("${foo.b.d}")),
+                    ("copy", s("${foo.b}")),
+                    ("alias", s("${bar}")),
+                    ("through", s("${alias.a}")),
+                ]),
+                obj(vec![("foo", obj(vec![("b", obj(vec![("a", n(4))])), ("c", s("${foo.b.a}"))]))]),
+            ]).unwrap();
+            assert_eq!(out["read"], n(1));
+            assert_eq!(out["copy"], obj(vec![("a", n(4)), ("d", n(1))]));
+            assert_eq!(out["through"], n(1));
+            assert_eq!(out["foo"]["c"], n(4));
+        }
+
+        #[test]
+        fn a_merged_reference_that_expands_into_itself_is_a_cycle() {
+            for layers in [
+                vec![obj(vec![("foo", obj(vec![("x", n(1))]))]), obj(vec![("foo", s("${bar}")), ("bar", obj(vec![("child", s("${foo}"))]))])],
+                vec![obj(vec![("a", obj(vec![("x", n(1))]))]), obj(vec![("a", s("${b}")), ("b", s("${a}"))])],
+            ] {
+                assert!(matches!(fold(layers), Err(InterpError::Cycle(_))));
+            }
+        }
+
+        #[test]
+        fn environment_objects_merge_with_overrides_and_stay_terminal() {
+            let text = if Value::FORMAT == crate::Format::Json {
+                r#"{"raw":"${missing}","extends":"${missing}","port":1}"#
+            } else {
+                r#"{raw="${missing}", extends="${missing}", port=1}"#
+            };
+            let env = StubEnv::new(&[("CONF", text)]);
+            let out = fold_with(vec![
+                obj(vec![("conf", s("${env:CONF}"))]),
+                obj(vec![("conf", obj(vec![("port", n(2))]))]),
+            ], None, None, &env).unwrap();
+            assert_eq!(out["conf"], obj(vec![("raw", s("${missing}")), ("extends", s("${missing}")), ("port", n(2))]));
+        }
+
+        #[test]
+        fn markers_stay_last_wins_and_combine_with_reference_merges() {
+            let out = fold(vec![
+                obj(vec![
+                    ("one", obj(vec![("a", n(1))])),
+                    ("two", obj(vec![("b", n(2))])),
+                    ("item", obj(vec![("extends", s("${one}")), ("c", n(3))])),
+                    ("copy", s("${item}")),
+                ]),
+                obj(vec![("item", obj(vec![("extends", s("${two}"))])), ("copy", obj(vec![("e", n(5))]))]),
+            ]).unwrap();
+            assert_eq!(out["item"], obj(vec![("b", n(2)), ("c", n(3))]));
+            assert_eq!(out["copy"], obj(vec![("b", n(2)), ("c", n(3)), ("e", n(5))]));
+        }
+
+        #[test]
+        fn context_referents_merge_with_later_layers() {
+            let context = obj(vec![("shared", obj(vec![("a", n(1)), ("b", n(1))]))]);
+            let out = fold_with(vec![
+                obj(vec![("foo", s("${shared}"))]),
+                obj(vec![("foo", obj(vec![("a", n(2))]))]),
+            ], Some(&context), None, &StubEnv::default()).unwrap();
+            assert_eq!(out, obj(vec![("foo", obj(vec![("a", n(2)), ("b", n(1))]))]));
         }
 
         // --- positions ------------------------------------------------------------

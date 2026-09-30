@@ -7,8 +7,6 @@
 use std::fmt;
 use std::str::FromStr;
 
-use crate::{ConfigObject, ConfigValue};
-
 /// Why a path expression was rejected. Carries only the path text.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PathError {
@@ -203,23 +201,9 @@ pub(crate) fn render_keys(path: &[String]) -> String {
     }
 }
 
-/// The node at `path`, or `None` if nothing lives there.
-pub(crate) fn lookup<'a, V: ConfigValue>(root: &'a V, path: &[Seg]) -> Option<&'a V> {
-    let mut value = root;
-    for seg in path {
-        value = match seg {
-            Seg::Key(k) => value.as_object()?.get(k)?,
-            Seg::Index(i) => value.as_array()?.get(*i)?,
-        };
-    }
-    Some(value)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
-    type Map = serde_json::Map<String, Value>;
 
     #[test]
     fn render_path_mixes_keys_and_indices() {
@@ -345,39 +329,5 @@ mod tests {
     fn equals_is_an_ordinary_key_character() {
         let parsed: RefPath = "a=b".parse().unwrap();
         assert_eq!(parsed.try_into_keys().unwrap(), ["a=b"]);
-    }
-
-    fn doc() -> Value {
-        let mut inner = Map::new();
-        inner.insert("host".into(), Value::String("h".into()));
-        let mut root = Map::new();
-        root.insert("db".into(), Value::Object(inner));
-        root.insert("tags".into(), Value::Array(vec![Value::Number(1.into())]));
-        Value::Object(root)
-    }
-
-    #[test]
-    fn lookup_walks_objects_and_arrays() {
-        let doc = doc();
-        assert_eq!(lookup(&doc, &[]), Some(&doc));
-        assert_eq!(
-            lookup(&doc, &[Seg::Key("db".into()), Seg::Key("host".into())]),
-            Some(&Value::String("h".into()))
-        );
-        assert_eq!(
-            lookup(&doc, &[Seg::Key("tags".into()), Seg::Index(0)]),
-            Some(&Value::Number(1.into()))
-        );
-    }
-
-    #[test]
-    fn lookup_misses_are_none() {
-        let doc = doc();
-        assert_eq!(lookup(&doc, &[Seg::Key("nope".into())]), None);
-        assert_eq!(lookup(&doc, &[Seg::Key("db".into()), Seg::Index(0)]), None);
-        assert_eq!(
-            lookup(&doc, &[Seg::Key("tags".into()), Seg::Index(9)]),
-            None
-        );
     }
 }
