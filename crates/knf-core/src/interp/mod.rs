@@ -14,7 +14,7 @@ mod error;
 mod graph;
 mod scan;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::glob::KeyGlobPattern;
 use crate::{ConfigFormat, ConfigObject, PathError, RefPath, Seg};
@@ -82,6 +82,7 @@ pub fn merge_interpolate<V: ConfigFormat>(
         targets: HashMap::new(),
         shaping: Vec::new(),
         values: HashMap::new(),
+        failed: HashSet::new(),
         visiting: Vec::new(),
         problems: Vec::new(),
     };
@@ -138,6 +139,8 @@ struct Resolver<'a, V: ConfigFormat> {
     /// Nodes whose structure or target is being decided, innermost last.
     shaping: Vec<Id>,
     values: HashMap<Id, V>,
+    /// Evaluated nodes whose evaluation recorded a problem.
+    failed: HashSet<Id>,
     /// Nodes being evaluated, innermost last; also the cycle chain.
     visiting: Vec<Id>,
     problems: Vec<Problem>,
@@ -157,6 +160,7 @@ impl<V: ConfigFormat> Resolver<'_, V> {
             return Err(Cycle::new(chain));
         }
         self.visiting.push(id);
+        let problems = self.problems.len();
         let value = match &self.nodes[id].expr {
             Expr::Terminal(value) => value.clone(),
             Expr::Value(value) => match value.as_str() {
@@ -189,12 +193,18 @@ impl<V: ConfigFormat> Resolver<'_, V> {
                     };
                     self.visiting.pop();
                     let value = self.eval(over)?;
+                    if self.failed.contains(&over) {
+                        self.failed.insert(id);
+                    }
                     self.values.insert(id, value.clone());
                     return Ok(value);
                 }
             },
         };
         self.visiting.pop();
+        if self.problems.len() > problems {
+            self.failed.insert(id);
+        }
         self.values.insert(id, value.clone());
         Ok(value)
     }
@@ -218,7 +228,10 @@ impl<V: ConfigFormat> Resolver<'_, V> {
         for piece in pieces {
             match piece {
                 Piece::Literal(literal) => out.push_str(literal),
-                Piece::Ref(body) => out.push_str(&self.splice(body, &path)?),
+                Piece::Ref(body) => match self.splice(body, &path)? {
+                    Some(text) => out.push_str(&text),
+                    None => out.push_str(&Spelled(body).to_string()),
+                },
                 Piece::Malformed { spelling, error } => {
                     self.problems.push(Problem::Syntax {
                         path: path.clone(),
@@ -231,55 +244,62 @@ impl<V: ConfigFormat> Resolver<'_, V> {
         Ok(V::string(out))
     }
 
-    /// Embedded position: the referent is rendered as text.
-    fn splice(&mut self, body: &str, path: &[Seg]) -> Result<String, Cycle> {
+    /// Embedded position: the referent is rendered as text. `None` if a
+    /// problem was recorded, now or when the referent was first evaluated.
+    fn splice(&mut self, body: &str, path: &[Seg]) -> Result<Option<String>, Cycle> {
         let Some(expanded) = self.expand(body, path)? else {
-            return Ok(Spelled(body).to_string());
+            return Ok(None);
         };
         let body = expanded.as_str();
         if let Some(name) = body.strip_prefix(ENV) {
-            return Ok(match self.env_value(name, body, path) {
-                Some(found) => found,
-                None => Spelled(body).to_string(),
-            });
+            return Ok(self.env_value(name, body, path));
         }
         let Some(target) = self.target(body, path)? else {
-            return Ok(Spelled(body).to_string());
+            return Ok(None);
         };
         let value = self.eval(target)?;
+        if self.failed.contains(&target) {
+            return Ok(None);
+        }
         Ok(match value.stringify() {
-            Some(text) => text,
+            Some(text) => Some(text),
             None => {
                 self.problems.push(Problem::NotStringifiable {
                     path: path.to_vec(),
                     reference: body.to_string(),
                     kind: value.kind(),
                 });
-                Spelled(body).to_string()
+                None
             }
         })
     }
 
     /// A reference body with its inner references spliced in as text, or
-    /// `None` if that recorded a problem. The result is not scanned again.
+    /// `None` if any of them failed. The result is not scanned again.
     pub(super) fn expand(&mut self, body: &str, path: &[Seg]) -> Result<Option<String>, Cycle> {
         let pieces = scan(body);
         if pieces.is_empty() {
             return Ok(Some(body.to_string()));
         }
-        let before = self.problems.len();
+        let mut ok = true;
         let mut out = String::new();
         for piece in pieces {
             match piece {
                 Piece::Literal(literal) => out.push_str(literal),
-                Piece::Ref(inner) => out.push_str(&self.splice(inner, path)?),
-                Piece::Malformed { error, .. } => self.problems.push(Problem::Syntax {
-                    path: path.to_vec(),
-                    error,
-                }),
+                Piece::Ref(inner) => match self.splice(inner, path)? {
+                    Some(text) => out.push_str(&text),
+                    None => ok = false,
+                },
+                Piece::Malformed { error, .. } => {
+                    self.problems.push(Problem::Syntax {
+                        path: path.to_vec(),
+                        error,
+                    });
+                    ok = false;
+                }
             }
         }
-        Ok((self.problems.len() == before).then_some(out))
+        Ok(ok.then_some(out))
     }
 
     /// The variable, recording a problem and returning `None` if the name is

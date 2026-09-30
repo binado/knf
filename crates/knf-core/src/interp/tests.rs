@@ -1158,6 +1158,28 @@ macro_rules! common_tests {
         }
 
         #[test]
+        fn a_failed_inner_reference_is_reported_once_whatever_the_order() {
+            for entries in [
+                vec![("selector", s("${missing}")), ("result", s("${root.${selector}}"))],
+                vec![("result", s("${root.${selector}}")), ("selector", s("${missing}"))],
+            ] {
+                assert_eq!(
+                    err(obj(entries)),
+                    "unresolved reference\n  --> selector: `missing`"
+                );
+            }
+        }
+
+        #[test]
+        fn excessive_nesting_is_a_syntax_problem() {
+            let text = format!("{}a{}", "${".repeat(11), "}".repeat(11));
+            assert_eq!(
+                err(obj(vec![("t", s(&text))])),
+                "invalid reference\n  --> t: references nested deeper than 10 levels at offset 0"
+            );
+        }
+
+        #[test]
         fn a_nested_self_reference_is_a_cycle() {
             let doc = obj(vec![("a", s("${${a}}"))]);
             assert!(err(doc).starts_with("reference cycle"));

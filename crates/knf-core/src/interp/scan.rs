@@ -16,6 +16,9 @@ pub enum Syntax {
     /// `${` with no `}` after it.
     #[error("unterminated `${{` at offset {offset}")]
     Unterminated { offset: usize },
+    /// References nested deeper than [`MAX_NESTING`].
+    #[error("references nested deeper than {MAX_NESTING} levels at offset {offset}")]
+    TooDeep { offset: usize },
     /// `${}` — a reference to nothing.
     #[error("empty reference `${{}}`")]
     EmptyRef,
@@ -29,6 +32,9 @@ pub enum Syntax {
     #[error("malformed index in reference `${{{body}}}`")]
     BadIndex { body: String },
 }
+
+/// The deepest `${` nesting a reference may have; `${a}` is one level.
+pub const MAX_NESTING: usize = 10;
 
 /// Splits `s` into literals and reference bodies.
 ///
@@ -54,7 +60,7 @@ pub fn scan(s: &str) -> Vec<Piece<'_>> {
             }
             Some(b'{') => {
                 let body_start = at + 2;
-                let Some(rel_end) = closing_brace(&s[body_start..]) else {
+                let Some((rel_end, depth)) = closing_brace(&s[body_start..]) else {
                     push_literal(&mut pieces, &s[literal..at]);
                     pieces.push(Piece::Malformed {
                         spelling: &s[at..],
@@ -66,6 +72,16 @@ pub fn scan(s: &str) -> Vec<Piece<'_>> {
                 };
                 let body = &s[body_start..body_start + rel_end];
                 let after = body_start + rel_end + 1;
+                if depth > MAX_NESTING {
+                    push_literal(&mut pieces, &s[literal..at]);
+                    pieces.push(Piece::Malformed {
+                        spelling: &s[at..after],
+                        error: Syntax::TooDeep { offset: at },
+                    });
+                    cursor = after;
+                    literal = cursor;
+                    continue;
+                }
                 if body.is_empty() {
                     push_literal(&mut pieces, &s[literal..at]);
                     pieces.push(Piece::Malformed {
@@ -89,23 +105,25 @@ pub fn scan(s: &str) -> Vec<Piece<'_>> {
     pieces
 }
 
-/// The offset of the `}` closing a body that starts at `body[0]`, skipping
-/// nested `${...}` and `$$` pairs.
-fn closing_brace(body: &str) -> Option<usize> {
+/// The offset of the `}` closing a body that starts at `body[0]`, and the
+/// deepest nesting seen, skipping nested `${...}` and `$$` pairs.
+fn closing_brace(body: &str) -> Option<(usize, usize)> {
     let bytes = body.as_bytes();
     let mut depth = 1;
+    let mut deepest = 1;
     let mut i = 0;
     while i < bytes.len() {
         match (bytes[i], bytes.get(i + 1)) {
             (b'$', Some(b'$')) => i += 2,
             (b'$', Some(b'{')) => {
                 depth += 1;
+                deepest = deepest.max(depth);
                 i += 2;
             }
             (b'}', _) => {
                 depth -= 1;
                 if depth == 0 {
-                    return Some(i);
+                    return Some((i, deepest));
                 }
                 i += 1;
             }
@@ -214,6 +232,21 @@ mod tests {
         assert_eq!(scan("${a.${b}.c}"), [re("a.${b}.c")]);
         assert_eq!(scan("${${${a}}}"), [re("${${a}}")]);
         assert_eq!(scan("x${a.${b}}y"), [lit("x"), re("a.${b}"), lit("y")]);
+    }
+
+    #[test]
+    fn nesting_is_limited() {
+        let deep = |n: usize| format!("{}a{}", "${".repeat(n), "}".repeat(n));
+        assert_eq!(scan(&deep(MAX_NESTING)).len(), 1);
+        assert!(matches!(
+            scan(&deep(MAX_NESTING)).as_slice(),
+            [Piece::Ref(_)]
+        ));
+        let too_deep = deep(MAX_NESTING + 1);
+        assert_eq!(
+            scan(&too_deep),
+            [malformed(&too_deep, Syntax::TooDeep { offset: 0 })]
+        );
     }
 
     #[test]
