@@ -34,22 +34,20 @@ fn arb_doc() -> impl Strategy<Value = Value> {
 }
 
 fn merged(mut base: Value, over: Value) -> Value {
-    merge_into(&mut base, over, &MergeOptions::default()).expect("non-strict merge cannot fail");
+    merge_into(&mut base, over, &MergeOptions::default());
     base
 }
 
 fn shallow(mut base: Value, over: Value) -> Value {
-    merge_into(&mut base, over, &MergeOptions::shallow_root())
-        .expect("non-strict merge cannot fail");
+    merge_into(&mut base, over, &MergeOptions::shallow_root());
     base
 }
 
 fn shallow_at(mut base: Value, over: Value, path: &[&str]) -> Value {
     let opts = MergeOptions {
         shallow: Some(format!("{}.*", path.join(".")).parse().unwrap()),
-        ..MergeOptions::default()
     };
-    merge_into(&mut base, over, &opts).expect("non-strict merge cannot fail");
+    merge_into(&mut base, over, &opts);
     base
 }
 
@@ -77,19 +75,10 @@ proptest! {
         prop_assert_eq!(merged(once.clone(), b), once);
     }
 
-    /// Strict mode only rejects; when it succeeds it matches the default merge.
-    #[test]
-    fn strict_agrees_with_default_when_it_succeeds(a in arb_doc(), b in arb_doc()) {
-        let mut strict = a.clone();
-        if merge_into(&mut strict, b.clone(), &MergeOptions::STRICT).is_ok() {
-            prop_assert_eq!(strict, merged(a, b));
-        }
-    }
-
     /// One layer is unchanged under shallow merge.
     #[test]
     fn a_single_layer_is_identity_under_shallow(a in arb_doc()) {
-        let got = merge([a.clone()], &MergeOptions::shallow_root()).expect("non-strict");
+        let got = merge([a.clone()], &MergeOptions::shallow_root());
         prop_assert_eq!(got, a);
     }
 

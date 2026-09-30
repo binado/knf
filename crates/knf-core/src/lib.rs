@@ -28,7 +28,7 @@ pub use interp::{
     Cycle, Env, InterpError, InterpOptions, Problem, Syntax, interpolate, interpolate_with_context,
     merge_interpolate,
 };
-pub use merge::{MergeError, MergeOptions, merge, merge_into};
+pub use merge::{MergeOptions, merge, merge_into};
 pub use path::{PathError, RefPath, Seg, render_path};
 pub use value::{ConfigObject, ConfigValue};
 

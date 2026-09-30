@@ -624,7 +624,6 @@ fn accumulate_uses_the_existing_merge_and_interpolation_pipeline() {
         ),
     ]);
     for flags in [
-        vec!["--strict"],
         vec!["--shallow=*"],
         vec!["--shallow=db.*"],
         vec!["-c", "db.port=8080"],
@@ -642,14 +641,6 @@ fn accumulate_uses_the_existing_merge_and_interpolation_pipeline() {
             &["-a", "foo/bar/target.toml", "--interpolate", "--compact"],
         ),
         "{\"db\":{\"host\":\"target\",\"port\":80},\"url\":\"target\"}\n",
-    );
-    let dir = tree(&[
-        ("foo/base.json", r#"{"branch":{}}"#),
-        ("foo/target.json", r#"{"branch":false}"#),
-    ]);
-    assert_eq!(
-        run_err(&dir, &["-a", "foo/target.json", "--strict"]),
-        run_err(&dir, &["foo/base.json", "foo/target.json", "--strict"])
     );
 }
 
@@ -1158,19 +1149,6 @@ fn a_different_format_option_changes_parsing_not_output_conversion() {
 }
 
 #[test]
-fn strict_catches_a_string_over_a_native_toml_datetime() {
-    let dir = tree(&[
-        ("f.toml", DATED),
-        ("g.toml", "date = '1979-05-27T07:32:00Z'"),
-    ]);
-    let err = run_err(&dir, &["f.toml", "g.toml", "--strict"]);
-    assert!(
-        err.contains("type conflict at `date`: datetime would be replaced by string"),
-        "{err}"
-    );
-}
-
-#[test]
 fn explicit_format_overrides_extensions_for_every_layer() {
     let dir = tree(&[("a.toml", r#"{"a":1}"#), ("b.json", r#"{"b":2}"#)]);
     assert_eq!(
@@ -1545,7 +1523,11 @@ fn toml_inline_literals_accept_surrounding_whitespace() {
 #[test]
 fn removed_options_are_usage_errors() {
     let dir = tree(&[]);
-    for args in [["--input-format", "json"], ["--null-as", "none"]] {
+    for args in [
+        ["--input-format", "json"],
+        ["--null-as", "none"],
+        ["--strict", "a.json"],
+    ] {
         let out = knf(&dir).args(args).output().unwrap();
         assert_eq!(out.status.code(), Some(2));
         assert!(
@@ -1716,21 +1698,6 @@ fn set_layers_interpolate_too() {
     );
 }
 
-/// Strict kinds are undefined for references merged as their referents.
-#[test]
-fn strict_conflicts_with_interpolate_before_reading() {
-    let dir = tree(&[]);
-    for args in [
-        ["missing.json", "--strict", "-i"],
-        ["missing.json", "-i", "--strict"],
-    ] {
-        let out = knf(&dir).args(args).output().expect("spawn");
-        assert_eq!(out.status.code(), Some(2), "{args:?}");
-        let stderr = String::from_utf8(out.stderr).expect("utf-8");
-        assert!(stderr.contains("cannot be used with"), "{args:?}: {stderr}");
-    }
-}
-
 /// A whole-string reference merges as its referent, against the final layers.
 #[test]
 fn a_referenced_table_merges_with_a_later_table() {
@@ -1895,16 +1862,6 @@ fn context_mixed_input_formats_error() {
     insta::assert_snapshot!(run_err(&dir, &["a.toml", "-i", "--with", "b.json"]));
 }
 
-/// Mixed formats fail before merge, even when the documents would conflict.
-#[test]
-fn mixed_input_formats_error_precedes_merge_errors() {
-    let dir = tree(&[
-        ("a.json", r#"{"port":80}"#),
-        ("b.toml", "port = \"eighty\"\n"),
-    ]);
-    insta::assert_snapshot!(run_err(&dir, &["a.json", "b.toml", "--strict"]));
-}
-
 /// Mixed formats fail before interpolation.
 #[test]
 fn mixed_input_formats_error_precedes_interpolation_errors() {
@@ -1935,13 +1892,4 @@ fn shallow_invalid_glob_errors_before_file_io() {
     let err = String::from_utf8(output.stderr).unwrap();
     assert!(!err.contains("No such file"), "{err}");
     insta::assert_snapshot!(err);
-}
-
-#[test]
-fn strict_type_conflict_error() {
-    let dir = tree(&[
-        ("a.json", r#"{"server":{"port":80}}"#),
-        ("b.json", r#"{"server":5}"#),
-    ]);
-    insta::assert_snapshot!(run_err(&dir, &["a.json", "b.json", "--strict"]));
 }

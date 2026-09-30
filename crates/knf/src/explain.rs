@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::anyhow;
 use knf::fs::{AccumulateError, AccumulateTargetError};
-use knf::{InterpError, LoadError, MergeError, PathError, Problem};
+use knf::{InterpError, LoadError, PathError, Problem};
 
 pub fn context_stdin_conflict() -> &'static str {
     "stdin cannot supply both a merge layer and --with context"
@@ -52,12 +52,6 @@ pub fn explain_pipeline(err: impl Into<anyhow::Error>, context: Option<&Path>) -
     let err = err.into();
     let err = match err.downcast::<LoadError>() {
         Ok(err) => return explain_load(err, context),
-        Err(err) => err,
-    };
-    let err = match err.downcast::<MergeError>() {
-        // A type conflict is fixed in the documents, not on the command line.
-        // Match variants exhaustively so new merge failures require a decision.
-        Ok(err @ MergeError::TypeConflict { .. }) => return err.into(),
         Err(err) => err,
     };
     match err.downcast::<InterpError>() {

@@ -39,13 +39,6 @@ Layers merge left to right; the output uses the input format.
 
 ## CLI
 
-**`--strict`**: error when a layer changes a key's type. Not available with `-i`.
-
-```console
-$ knf a.json b.json --strict
-error: type conflict at `server`: object would be replaced by number
-```
-
 **`-g/--glob`, `-G/--glob-filename`**: keep only inputs whose full path (or
 filename) matches the pattern.
 
