@@ -1649,6 +1649,29 @@ fn whole_string_references_keep_the_referents_type() {
     );
 }
 
+/// A reference body is interpolated first, so the environment can pick a subtree.
+#[test]
+fn nested_references_select_a_subtree_from_the_environment() {
+    let dir = tree(&[(
+        "f.toml",
+        "db = \"${databases.${env:KNF_TEST_STAGE}}\"\n\
+         [databases.dev]\nhost = \"localhost\"\n\
+         [databases.prod]\nhost = \"db.example\"\n",
+    )]);
+    let args = ["f.toml", "--interpolate"];
+    let out = ok_stdout(
+        with_env(&mut knf(&dir), &[("KNF_TEST_STAGE", Some("prod"))]).args(args),
+        &args,
+    );
+    assert!(out.contains("[db]\nhost = \"db.example\""), "{out}");
+}
+
+#[test]
+fn an_unresolved_nested_reference_names_the_looked_up_path() {
+    let dir = tree(&[("a.json", r#"{"stage":"qa","db":"${databases.${stage}}"}"#)]);
+    insta::assert_snapshot!("nested_unresolved", run_err(&dir, &["a.json", "-i"]));
+}
+
 /// References can read array elements.
 #[test]
 fn references_read_array_elements() {

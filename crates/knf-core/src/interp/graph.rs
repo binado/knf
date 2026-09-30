@@ -191,11 +191,16 @@ impl<V: ConfigFormat> Resolver<'_, V> {
             .to_owned();
         let path = self.nodes[id].path.clone();
         self.enter(id)?;
-        let target = if let Some(name) = body.strip_prefix(ENV) {
-            self.env_value(name, &body, &path)
-                .map(|found| self.add(Expr::Terminal(V::parse_inline(found)), path.clone()))
-        } else {
-            self.target(&body, &path)?
+        let target = match self.expand(&body, &path)? {
+            None => None,
+            Some(body) => {
+                if let Some(name) = body.strip_prefix(ENV) {
+                    self.env_value(name, &body, &path)
+                        .map(|found| self.add(Expr::Terminal(V::parse_inline(found)), path.clone()))
+                } else {
+                    self.target(&body, &path)?
+                }
+            }
         };
         self.shaping.pop();
         self.targets.insert(id, target);
