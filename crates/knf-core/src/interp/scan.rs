@@ -16,7 +16,7 @@ pub enum Syntax {
     /// `${` with no `}` after it.
     #[error("unterminated `${{` at offset {offset}")]
     Unterminated { offset: usize },
-    /// References nested deeper than [`MAX_NESTING`].
+    /// References nested deeper than 10 levels.
     #[error("references nested deeper than {MAX_NESTING} levels at offset {offset}")]
     TooDeep { offset: usize },
     /// `${}` — a reference to nothing.
