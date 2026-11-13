@@ -24,6 +24,8 @@ use pyo3::exceptions::{
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyList, PyString};
 
+mod writer;
+
 create_exception!(
     knf,
     ParseError,
@@ -303,6 +305,7 @@ fn cli(py: Python<'_>) -> PyResult<()> {
 #[pymodule]
 fn _knf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load, m)?)?;
+    m.add_function(wrap_pyfunction!(writer::dumps_toml, m)?)?;
     m.add_function(wrap_pyfunction!(accumulate, m)?)?;
     m.add_function(wrap_pyfunction!(filter_paths, m)?)?;
     m.add_function(wrap_pyfunction!(cli, m)?)?;

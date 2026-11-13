@@ -1,7 +1,20 @@
 import os
 from pathlib import Path
 from collections.abc import Sequence
-from typing import Any, Optional, Union
+from typing import Any, Optional, TextIO, Union
+
+def dumps_toml(data: dict[str, Any], *, pretty: bool = True) -> str:
+    """Serialize a dict as TOML with a trailing newline.
+
+    Supports str, bool, signed 64-bit int, float, list, tuple, dict with string
+    keys, and datetime/date/time. None is unsupported. Datetime offsets must be
+    whole minutes; times must be naive. Preserves dict insertion order.
+    Raises TypeError for unsupported types and ValueError for invalid values,
+    cycles, or nesting deeper than 128 containers, with key paths.
+    """
+
+def dump_toml(data: dict[str, Any], fp: TextIO, *, pretty: bool = True) -> None:
+    """Serialize with dumps_toml, then write to a text stream (UTF-8 for files)."""
 
 class ParseError(ValueError):
     """A file is not valid JSON or TOML, or is not an object at the top level."""

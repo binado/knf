@@ -16,6 +16,19 @@ existing list without filesystem access. Both return ``pathlib.Path`` objects
 that can be passed directly to ``load``.
 """
 
-from ._knf import InterpolationError, ParseError, accumulate, filter_paths, load
+from ._knf import InterpolationError, ParseError, accumulate, dumps_toml, filter_paths, load
 
-__all__ = ["InterpolationError", "ParseError", "accumulate", "filter_paths", "load"]
+
+def dump_toml(data, fp, *, pretty=True):
+    """Write a dict as TOML to a text stream, using :func:`dumps_toml`.
+
+    Open files with ``encoding="utf-8"``. Serialization completes before writing;
+    stream errors propagate unchanged. Returns None.
+    """
+    fp.write(dumps_toml(data, pretty=pretty))
+
+
+__all__ = [
+    "InterpolationError", "ParseError", "accumulate", "dump_toml", "dumps_toml",
+    "filter_paths", "load",
+]

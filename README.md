@@ -193,7 +193,7 @@ error.
 ## Python API
 
 ```python
-from knf import accumulate, filter_paths, load
+from knf import accumulate, dump_toml, dumps_toml, filter_paths, load
 
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
@@ -203,12 +203,20 @@ config = load(["config.toml"], interpolate=True, merge_key="extends")
 files = accumulate("services/api/prod.toml", base_dir=project_root)
 files = filter_paths(files, "{defaults,prod}.toml", filename_only=True)
 config = load(files)
+
+text = dumps_toml(config)
+with open("merged.toml", "w", encoding="utf-8") as fp:
+    dump_toml(config, fp)
 ```
 
 `load` returns a `dict` and follows the same rules as the CLI. Invalid input
 raises `knf.ParseError` or `knf.InterpolationError` (both `ValueError`s); I/O
 failures raise the usual `OSError` subclasses. TOML datetimes become `datetime`
 objects.
+
+`dumps_toml` returns TOML text; `dump_toml` writes it to a text stream. Both
+accept `pretty=False` and support Python dates and times. TOML cannot represent
+`None`, integers outside signed 64-bit range, or times with UTC offsets.
 
 ## License
 
