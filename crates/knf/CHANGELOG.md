@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/binado/knf/compare/knf-cli-v0.7.0...knf-cli-v0.7.1) - 2026-11-13
+
+### Added
+
+- *(python)* expose TOML serialization helpers ([#63](https://github.com/binado/knf/pull/63))
+
 ## [0.7.0](https://github.com/binado/knf/compare/knf-cli-v0.6.0...knf-cli-v0.7.0) - 2026-09-30
 
 ### Added
