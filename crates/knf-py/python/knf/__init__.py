@@ -13,9 +13,19 @@ The same Rust pipeline the ``knf`` command line runs, called natively::
 
 ``accumulate`` discovers ordered input paths; ``filter_paths`` selects from an
 existing list without filesystem access. Both return ``pathlib.Path`` objects
-that can be passed directly to ``load``.
+that can be passed directly to ``load``. ``dumps_toml`` and ``dump_toml``
+serialize a dict back to TOML.
 """
 
-from ._knf import InterpolationError, ParseError, accumulate, filter_paths, load
+from ._knf import InterpolationError, ParseError, accumulate, dumps_toml, filter_paths, load
 
-__all__ = ["InterpolationError", "ParseError", "accumulate", "filter_paths", "load"]
+
+def dump_toml(data, fp, *, pretty=True):
+    """Serialize with :func:`dumps_toml`, then write to the text stream ``fp``."""
+    fp.write(dumps_toml(data, pretty=pretty))
+
+
+__all__ = [
+    "InterpolationError", "ParseError", "accumulate", "dump_toml", "dumps_toml",
+    "filter_paths", "load",
+]

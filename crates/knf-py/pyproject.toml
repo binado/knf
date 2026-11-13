@@ -9,8 +9,8 @@ name = "pyknf"
 dynamic = ["version"]
 description = "Merge layered JSON and TOML configuration files into a dict"
 readme = "README.md"
-# abi3-py39: one wheel per platform serves every CPython from 3.9 on.
-requires-python = ">=3.9"
+# abi3-py311: one wheel per platform serves every CPython from 3.11 on.
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 keywords = ["configuration", "json", "toml", "merge"]

@@ -24,6 +24,8 @@ use pyo3::exceptions::{
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyList, PyString};
 
+mod writer;
+
 create_exception!(
     knf,
     ParseError,
@@ -303,6 +305,7 @@ fn cli(py: Python<'_>) -> PyResult<()> {
 #[pymodule]
 fn _knf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load, m)?)?;
+    m.add_function(wrap_pyfunction!(writer::dumps_toml, m)?)?;
     m.add_function(wrap_pyfunction!(accumulate, m)?)?;
     m.add_function(wrap_pyfunction!(filter_paths, m)?)?;
     m.add_function(wrap_pyfunction!(cli, m)?)?;
@@ -395,7 +398,7 @@ fn toml_to_py<'py>(
 }
 
 fn datetime_to_py(py: Python<'_>, value: toml::value::Datetime) -> PyResult<Bound<'_, PyAny>> {
-    // Construct through the standard library for abi3/Python 3.9 compatibility.
+    // Construct through the standard library for abi3 compatibility.
     // Pass native components directly; never serialize and reparse a document.
     let module = py.import("datetime")?;
     match (value.date, value.time) {
