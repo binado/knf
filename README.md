@@ -11,7 +11,7 @@ pip install pyknf
 ```
 
 Installs the `knf` module and the `knf` executable. Wheels for Linux, macOS and
-Windows (x86-64 and ARM64); CPython 3.9+.
+Windows (x86-64 and ARM64); CPython 3.11+.
 
 ### Rust
 
@@ -215,8 +215,8 @@ failures raise the usual `OSError` subclasses. TOML datetimes become `datetime`
 objects.
 
 `dumps_toml` returns TOML text; `dump_toml` writes it to a text stream. Both
-accept `pretty=False` and support Python dates and times. TOML cannot represent
-`None`, integers outside signed 64-bit range, or times with UTC offsets.
+accept `pretty=False` for compact output. TOML cannot represent `None`, integers
+outside signed 64-bit range, or times with a `tzinfo`.
 
 ## License
 

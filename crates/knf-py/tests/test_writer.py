@@ -1,14 +1,22 @@
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from io import StringIO
 import math
+import tomllib
 
 import pytest
 
 from knf import dump_toml, dumps_toml, load
 
 
-def parse(text):
-    return pytest.importorskip("tomllib").loads(text)
+def parse(text: str) -> dict:
+    return tomllib.loads(text)
+
+
+class NoOffset(tzinfo):
+    """A tzinfo whose offset is unknown, like a DST-aware zone on a bare time."""
+
+    def utcoffset(self, dt):
+        return None
 
 
 @pytest.mark.parametrize("pretty", [True, False])
@@ -34,7 +42,13 @@ def test_roundtrip(pretty, tmp_path):
     with path.open("w", encoding="utf-8") as fp:
         assert dump_toml(data, fp, pretty=pretty) is None
     assert load([path]) == data
-    assert list(parse(text))[:3] == list(data)[:3]
+
+
+def test_insertion_order_with_tables_after_scalars():
+    data = {"z": 1, "t": {"q": 1, "b": {"y": 1}, "a": 2}, "a": 2}
+    result = parse(dumps_toml(data))
+    assert list(result) == ["z", "a", "t"]
+    assert list(result["t"]) == ["q", "a", "b"]
 
 
 def test_special_values():
@@ -49,6 +63,7 @@ def test_special_values():
     (None, TypeError), (object(), TypeError), (b"bytes", TypeError),
     (2**63, ValueError), (-(2**63) - 1, ValueError),
     (time(tzinfo=timezone.utc), ValueError),
+    (time(tzinfo=NoOffset()), ValueError),
     (datetime(2026, 1, 1, tzinfo=timezone(timedelta(seconds=1))), ValueError),
 ])
 def test_invalid_values_include_path(value, error):

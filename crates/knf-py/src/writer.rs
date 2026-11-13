@@ -3,18 +3,12 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 
-/// Serialize a dict as TOML, preserving insertion order and ending with a newline.
-///
-/// Values may be strings, bools, signed 64-bit integers, floats, lists, tuples,
-/// dicts with string keys, and datetime/date/time objects. None is unsupported.
-/// Datetime offsets must be whole minutes; time objects must be naive.
-/// Raises TypeError for unsupported types and ValueError for invalid values,
-/// cycles, or nesting deeper than 128 containers. Errors include the key path.
+/// Serialize a dict as TOML; see `__init__.pyi` for supported types and errors.
 #[pyfunction]
 #[pyo3(signature = (data, *, pretty = true))]
 pub(super) fn dumps_toml(data: &Bound<'_, PyDict>, pretty: bool) -> PyResult<String> {
     let value = convert(data.as_any(), &mut Vec::new(), &mut Vec::new())?;
-    knf::format::emit(value, pretty).map_err(|err| PyValueError::new_err(err.to_string()))
+    knf::format::emit(value, pretty).map_err(|err| PyValueError::new_err(format!("{err:#}")))
 }
 
 fn convert(
@@ -85,20 +79,22 @@ fn convert(
         ancestors.pop();
         return Ok(result);
     }
-    // Use the standard library to keep abi3/Python 3.9 compatibility.
+    // Go through the standard library, as `datetime_to_py` does, for abi3.
     let datetime = value.py().import("datetime")?;
     let is_datetime = value.is_instance(&datetime.getattr("datetime")?)?;
     let is_time = value.is_instance(&datetime.getattr("time")?)?;
     if is_datetime || is_time || value.is_instance(&datetime.getattr("date")?)? {
-        if is_datetime || is_time {
+        // Any tzinfo on a time is rejected: `utcoffset()` is `None` for
+        // DST-aware zones, which would silently drop the zone.
+        if is_time && !value.getattr("tzinfo")?.is_none() {
+            return Err(PyValueError::new_err(format!(
+                "TOML does not support times with a tzinfo {}",
+                location()
+            )));
+        }
+        if is_datetime {
             let offset = value.call_method0("utcoffset")?;
             if !offset.is_none() {
-                if is_time {
-                    return Err(PyValueError::new_err(format!(
-                        "TOML does not support offset times {}",
-                        location()
-                    )));
-                }
                 let seconds: f64 = offset.call_method0("total_seconds")?.extract()?;
                 if seconds % 60.0 != 0.0 {
                     return Err(PyValueError::new_err(format!(

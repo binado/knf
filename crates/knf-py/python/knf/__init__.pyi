@@ -8,13 +8,20 @@ def dumps_toml(data: dict[str, Any], *, pretty: bool = True) -> str:
 
     Supports str, bool, signed 64-bit int, float, list, tuple, dict with string
     keys, and datetime/date/time. None is unsupported. Datetime offsets must be
-    whole minutes; times must be naive. Preserves dict insertion order.
+    whole minutes; times must have no tzinfo. Keys keep insertion order, except
+    that TOML writes tables after scalar keys.
+
     Raises TypeError for unsupported types and ValueError for invalid values,
-    cycles, or nesting deeper than 128 containers, with key paths.
+    cycles, or nesting beyond 128 levels. Errors for such values name the key
+    path.
     """
 
 def dump_toml(data: dict[str, Any], fp: TextIO, *, pretty: bool = True) -> None:
-    """Serialize with dumps_toml, then write to a text stream (UTF-8 for files)."""
+    """Serialize with dumps_toml, then write to a text stream.
+
+    Serialization completes first; stream errors propagate unchanged. Open files
+    with ``encoding="utf-8"``.
+    """
 
 class ParseError(ValueError):
     """A file is not valid JSON or TOML, or is not an object at the top level."""

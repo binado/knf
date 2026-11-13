@@ -398,7 +398,7 @@ fn toml_to_py<'py>(
 }
 
 fn datetime_to_py(py: Python<'_>, value: toml::value::Datetime) -> PyResult<Bound<'_, PyAny>> {
-    // Construct through the standard library for abi3/Python 3.9 compatibility.
+    // Construct through the standard library for abi3 compatibility.
     // Pass native components directly; never serialize and reparse a document.
     let module = py.import("datetime")?;
     match (value.date, value.time) {
