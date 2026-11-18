@@ -30,6 +30,7 @@ tempfile = "3"
 # version is required so `cargo publish` can rewrite the path dep to a crates.io
 # requirement. Keep it equal to [workspace.package].version.
 knf-core = { path = "crates/knf-core", version = "0.7.0" }
+knf-convert = { path = "crates/knf-convert", version = "0.7.0" }
 
 [profile.release]
 lto = "thin"

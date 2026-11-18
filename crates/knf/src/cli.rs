@@ -116,9 +116,30 @@ separate keys; single-quoted spans are literal.
     )]
     pub shallow: Option<KeyGlobPattern>,
 
-    /// Format for parsing, inline typing and output; required for stdin
+    /// Format for parsing and inline typing; required for stdin
     #[arg(short = 'f', long, value_name = "FORMAT")]
     pub format: Option<FormatArg>,
+
+    /// Convert the merged document to this output format
+    #[arg(
+        long,
+        value_name = "FORMAT",
+        long_help = "\
+Convert the document after merging and interpolation. Output defaults to
+the input format.
+
+TOML dates, times and datetimes become strings in TOML notation. Non-finite
+TOML floats become strings: nan, inf or -inf. JSON null object fields are
+omitted, and integers above the TOML signed range become floats. A JSON null
+array entry is an error. Use --strict to reject all lossy conversions.
+
+  knf base.toml prod.toml --to json"
+    )]
+    pub to: Option<FormatArg>,
+
+    /// Reject lossy output conversions
+    #[arg(long, requires = "to")]
+    pub strict: bool,
 
     /// Resolve ${key.path} and ${env:VAR} references in the merged document
     #[arg(
@@ -187,7 +208,7 @@ Stdin cannot supply both a merge layer and context.
     /// Run a command after -- with the merged file in KNF_CONFIG_PATH
     #[arg(
         long,
-        conflicts_with = "list_files",
+        conflicts_with_all = ["list_files", "to"],
         long_help = "\
 Run the command and arguments after --. KNF_CONFIG_PATH points to a private
 temporary JSON or TOML file containing the merged configuration. The file is

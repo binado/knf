@@ -82,6 +82,7 @@ fn exec_requires_delimiter_and_command() {
         &["--exec", "some-command"][..],
         &["--exec", "--"][..],
         &["--list-files", "--exec", "--", "some-command"][..],
+        &["--to", "toml", "--exec", "--", "some-command"][..],
     ] {
         knf(&dir).args(args).assert().code(2);
     }
@@ -1598,11 +1599,7 @@ fn toml_inline_literals_accept_surrounding_whitespace() {
 #[test]
 fn removed_options_are_usage_errors() {
     let dir = tree(&[]);
-    for args in [
-        ["--input-format", "json"],
-        ["--null-as", "none"],
-        ["--strict", "a.json"],
-    ] {
+    for args in [["--input-format", "json"], ["--null-as", "none"]] {
         let out = knf(&dir).args(args).output().unwrap();
         assert_eq!(out.status.code(), Some(2));
         assert!(
@@ -1990,4 +1987,128 @@ fn shallow_invalid_glob_errors_before_file_io() {
     let err = String::from_utf8(output.stderr).unwrap();
     assert!(!err.contains("No such file"), "{err}");
     insta::assert_snapshot!(err);
+}
+
+#[test]
+fn convert_after_merging_and_interpolation_in_the_input_format() {
+    let dir = tree(&[
+        (
+            "base.toml",
+            "[db]\nports=[80, 81]\nstarted=2024-01-01\ncopy='${db.started}'\n",
+        ),
+        ("prod.toml", "[db]\nports=[443]\n"),
+        (
+            "base.json",
+            r#"{"db":{"ports":[80,81],"id":null,"copy":"${db.id}"}}"#,
+        ),
+        ("prod.json", r#"{"db":{"ports":[443],"id":42}}"#),
+    ]);
+    assert_eq!(
+        run(
+            &dir,
+            &[
+                "base.toml",
+                "prod.toml",
+                "-i",
+                "-c",
+                "db.started=2024-01-02",
+                "--to",
+                "json",
+                "--compact",
+            ],
+        ),
+        "{\"db\":{\"ports\":[443],\"started\":\"2024-01-02\",\"copy\":\"2024-01-02\"}}\n"
+    );
+    let text = run(
+        &dir,
+        &["base.json", "prod.json", "-i", "--to", "toml", "--strict"],
+    );
+    assert_toml_eq_json(&text, r#"{"db":{"ports":[443],"id":42,"copy":42}}"#);
+
+    let args = ["base.json", "--compact"];
+    assert_eq!(
+        run(&dir, &args),
+        run(
+            &dir,
+            &["base.json", "--compact", "--to", "json", "--strict"],
+        )
+    );
+}
+
+#[test]
+fn convert_lossy_toml_values_to_strings() {
+    let dir = tree(&[(
+        "lossy.toml",
+        "[nested]\ndate=1979-05-27\ntime=07:32:00\nlocal=1979-05-27T07:32:00\noffset=1979-05-27T07:32:00-07:00\nfloats=[nan, inf, -inf]\n",
+    )]);
+    let text = run(&dir, &["lossy.toml", "--to", "json"]);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+        serde_json::json!({"nested": {
+            "date": "1979-05-27",
+            "time": "07:32:00",
+            "local": "1979-05-27T07:32:00",
+            "offset": "1979-05-27T07:32:00-07:00",
+            "floats": ["nan", "inf", "-inf"]
+        }})
+    );
+    let args = ["lossy.toml", "--to", "json", "--strict"];
+    assert!(run_err(&dir, &args).contains("nested.date:"));
+    let args = [
+        "lossy.toml",
+        "--to",
+        "json",
+        "--strict",
+        "-c",
+        "nested.date=1",
+        "-c",
+        "nested.time=2",
+        "-c",
+        "nested.local=3",
+        "-c",
+        "nested.offset=4",
+    ];
+    assert!(run_err(&dir, &args).contains("nested.floats[0]:"));
+}
+
+#[test]
+fn convert_lossy_json_values_to_toml() {
+    let dir = tree(&[
+        (
+            "lossy.json",
+            r#"{"nested":{"drop":null,"large":18446744073709551615,"float":1.5}}"#,
+        ),
+        ("null_array.json", r#"{"nested":[1,null,2]}"#),
+    ]);
+    let text = run(&dir, &["lossy.json", "--to", "toml"]);
+    let value: toml::Value = toml::from_str(&text).unwrap();
+    let nested = value["nested"].as_table().unwrap();
+    assert!(!nested.contains_key("drop"));
+    assert_eq!(nested["large"].as_float(), Some(u64::MAX as f64));
+    assert_eq!(nested["float"].as_float(), Some(1.5));
+
+    let args = ["lossy.json", "--to", "toml", "--strict"];
+    assert!(run_err(&dir, &args).contains("nested.drop:"));
+    let args = [
+        "lossy.json",
+        "--to",
+        "toml",
+        "--strict",
+        "-c",
+        "nested.drop=true",
+    ];
+    assert!(run_err(&dir, &args).contains("nested.large:"));
+    let args = ["null_array.json", "--to", "toml"];
+    assert!(run_err(&dir, &args).contains("nested[1]:"));
+}
+
+#[test]
+fn strict_requires_an_output_format_before_reading_inputs() {
+    let dir = tree(&[]);
+    let out = knf(&dir)
+        .args(["missing.json", "--strict"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8(out.stderr).unwrap().contains("--to"));
 }
