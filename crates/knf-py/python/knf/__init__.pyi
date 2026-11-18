@@ -32,6 +32,9 @@ def dump(
 
 config: dict[str, Any]
 
+def deep_merge(cfg: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    """Return a new dict by merging dict pairs and replacing other values."""
+
 def dumps_toml(data: dict[str, Any], *, pretty: bool = True) -> str:
     """Serialize a dict as TOML with a trailing newline.
 

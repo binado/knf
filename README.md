@@ -213,7 +213,7 @@ knf base.toml pilot.toml -c seed=42 --exec -- python fit.py --replicate 2
 ## Python API
 
 ```python
-from knf import accumulate, dump, dumps, filter_paths, load
+from knf import accumulate, deep_merge, dump, dumps, filter_paths, load
 
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
@@ -247,6 +247,17 @@ seed = knf.config["seed"]
 It infers the format from a path extension and requires `format` for a stream.
 Both accept `pretty=False` for compact output. The TOML-specific helpers
 `dumps_toml` and `dump_toml` are also available.
+
+`deep_merge(cfg, overrides)` returns a new dict. Dict pairs merge recursively.
+Lists, scalars and `None` replace values wholesale. Interpolation happens in
+`load()`, so changing `root` after `"${root}/data"` resolved to `"old/data"`
+leaves the resolved path at `"old/data"`.
+
+```python
+cfg = load(["base.toml"], interpolate=True)
+pilot = deep_merge(cfg, {"solver": {"steps": 10}})
+```
+
 
 ## License
 
