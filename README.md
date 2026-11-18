@@ -28,7 +28,7 @@ knf defaults.json overrides.json -c server.port=8080
 cat base.json | knf - prod.json -f json
 ```
 
-Layers merge left to right; the output uses the input format.
+Layers merge left to right. Output defaults to the input format.
 
 | Case | Behaviour |
 | --- | --- |
@@ -184,9 +184,20 @@ Context bases and chained inheritance work. Environment bases must parse as
 objects/tables, and their contents remain terminal. Without `-m`, `KEY` is
 ordinary data.
 
-**`-f/--format json|toml`**: set the format for parsing, `-c` typing and output.
-Required for stdin; never converts between formats. Mixed input formats are an
-error.
+**`-f/--format json|toml`**: set the input format for parsing and `-c` typing.
+Required for stdin. Mixed input formats are an error without an override.
+
+**`--to json|toml`**: convert the final document after merging and interpolation.
+
+```bash
+knf base.toml prod.toml --to json
+knf base.json prod.json --to toml --strict
+```
+
+TOML dates, times and datetimes become strings in TOML notation. Non-finite
+floats become `"nan"`, `"inf"` or `"-inf"`. JSON null object fields are omitted
+and integers above the TOML signed range become floats. JSON null array entries
+are errors. Add **`--strict`** to reject every lossy mapping.
 
 **`--compact`**: disable pretty-printing.
 

@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use knf::{
-    ConfigFormat, InterpOptions, Layers, MergeOptions, ProcessEnv, format, load_layers, merge,
-    merge_interpolate,
+    ConfigFormat, Format, InterpOptions, Layers, MergeOptions, ProcessEnv, format, load_layers,
+    merge, merge_interpolate,
 };
 
 use cli::Cli;
@@ -76,23 +76,40 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     run_pipeline(&cli, &files, &opts)
 }
 
-/// Dispatch once to a native pipeline; every later stage retains its type.
+/// Resolve natively and convert only the final document when requested.
 fn run_pipeline(cli: &Cli, files: &[PathBuf], opts: &MergeOptions) -> anyhow::Result<()> {
     let mut inputs = files.to_vec();
     inputs.extend(cli.with.iter().cloned());
     let layers = load_layers(&inputs, cli.format.map(Into::into))
         .map_err(|err| explain_pipeline(err, cli.with.as_deref()))?;
-    match layers {
-        Layers::Json(layers) => run_native(cli, layers, opts),
-        Layers::Toml(layers) => run_native(cli, layers, opts),
+    let pretty = !cli.compact;
+    let text = match layers {
+        Layers::Json(layers) => {
+            let merged = resolve_native(cli, layers, opts)?;
+            if cli.to.map(Format::from) == Some(Format::Toml) {
+                format::emit(knf_convert::json_to_toml(merged, cli.strict)?, pretty)
+            } else {
+                format::emit(merged, pretty)
+            }
+        }
+        Layers::Toml(layers) => {
+            let merged = resolve_native(cli, layers, opts)?;
+            if cli.to.map(Format::from) == Some(Format::Json) {
+                format::emit(knf_convert::toml_to_json(merged, cli.strict)?, pretty)
+            } else {
+                format::emit(merged, pretty)
+            }
+        }
     }
+    .map_err(|err| explain_pipeline(err, None))?;
+    write_stdout(&text)
 }
 
-fn run_native<V: ConfigFormat>(
+fn resolve_native<V: ConfigFormat>(
     cli: &Cli,
     mut layers: Vec<V>,
     opts: &MergeOptions,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<V> {
     let context = cli
         .with
         .as_ref()
@@ -105,19 +122,16 @@ fn run_native<V: ConfigFormat>(
         );
     }
     // References merge as the values they name, so they fold with the layers.
-    let merged = if cli.interpolate {
+    if cli.interpolate {
         let options = InterpOptions {
             merge_key: cli.merge_key.clone(),
             shallow: cli.shallow.clone(),
         };
-        merge_interpolate(layers, context.as_ref(), &ProcessEnv, &options).map_err(|err| {
-            explain::explain_interp(err, context.is_some(), cli.merge_key.is_some())
-        })?
+        merge_interpolate(layers, context.as_ref(), &ProcessEnv, &options)
+            .map_err(|err| explain::explain_interp(err, context.is_some(), cli.merge_key.is_some()))
     } else {
-        merge(layers, opts)
-    };
-    let text = format::emit(merged, !cli.compact).map_err(|err| explain_pipeline(err, None))?;
-    write_stdout(&text)
+        Ok(merge(layers, opts))
+    }
 }
 
 /// Writes to stdout, treating a closed pipe as success so `knf big.json | head`
