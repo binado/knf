@@ -234,13 +234,13 @@ raises `knf.ParseError` or `knf.InterpolationError` (both `ValueError`s); I/O
 failures raise the usual `OSError` subclasses. TOML datetimes become `datetime`
 objects.
 
-Scripts launched with `--exec` can read `knf.config`, the resolved
-configuration, loaded on first access and cached. It is `None` outside `--exec`.
+Scripts launched with `--exec` can call `knf.config()` for the resolved
+configuration, read fresh on each call. It raises `RuntimeError` outside `--exec`.
 
 ```python
 import knf
 
-seed = knf.config["seed"]
+seed = knf.config()["seed"]
 ```
 
 `dumps` returns JSON or TOML text. `dump` writes to a UTF-8 path or text stream.

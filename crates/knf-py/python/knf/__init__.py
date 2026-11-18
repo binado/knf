@@ -15,13 +15,20 @@ The same Rust pipeline the ``knf`` command line runs, called natively::
 existing list without filesystem access. Both return ``pathlib.Path`` objects
 that can be passed directly to ``load``. ``deep_merge`` applies in-memory
 overrides. ``dumps`` and ``dump`` serialize a dict as JSON or TOML. Under
-``knf --exec``, ``knf.config`` holds the resolved configuration.
+``knf --exec``, ``config()`` returns the resolved configuration.
 """
 
 import os as _os
+from typing import Any
 
 from ._knf import (
-    InterpolationError, ParseError, accumulate, dumps, dumps_toml, filter_paths, load,
+    InterpolationError,
+    ParseError,
+    accumulate,
+    dumps,
+    dumps_toml,
+    filter_paths,
+    load,
 )
 
 
@@ -67,23 +74,35 @@ def dump_toml(data, fp, *, pretty=True):
     fp.write(dumps_toml(data, pretty=pretty))
 
 
-def __getattr__(name):
-    if name != "config":
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+def config() -> dict[str, Any]:
+    """Return the resolved configuration of the ``knf --exec`` run.
+
+    The snapshot named by ``KNF_CONFIG_PATH`` is read on every call, so each
+    caller gets an independent dict.
+
+    Returns
+    -------
+    dict[str, Any]
+        The merged, interpolated configuration.
+
+    Raises
+    ------
+    RuntimeError
+        If not launched by ``knf --exec``, or the snapshot cannot be loaded.
+    """
     path = _os.environ.get("KNF_CONFIG_PATH")
     if not path:
-        # Not launched by `knf --exec`; leave uncached so a later run can set it.
-        return None
+        raise RuntimeError(
+            "knf.config() requires a run launched with knf [FILES] --exec -- COMMAND"
+        )
     # The snapshot is already resolved, so skip interpolation; it may be JSON or TOML.
     try:
-        config = load([path], interpolate=False)
+        return load([path], interpolate=False)
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"cannot load KNF_CONFIG_PATH={path!r}: {exc}") from exc
-    globals()["config"] = config
-    return config
 
 
 __all__ = [
-    "InterpolationError", "ParseError", "accumulate", "deep_merge", "dump", "dump_toml",
-    "dumps", "dumps_toml", "filter_paths", "load",
+    "InterpolationError", "ParseError", "accumulate", "config", "deep_merge", "dump",
+    "dump_toml", "dumps", "dumps_toml", "filter_paths", "load",
 ]

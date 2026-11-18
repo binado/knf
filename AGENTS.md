@@ -53,5 +53,5 @@ No cargo features; no new dependencies without deliberate reason. Reusable logic
 - `knf/tests/public_api.rs`: Guards against missing re-exports.
 - `knf/tests/cli.rs`: CLI integration tests (use `with_env`, never ambient env).
 - `knf-convert` unit tests: Conversion and lossy-warning cases.
-- `knf-py/tests/`: pytest; `test_exec.py` (`--exec`/`knf.config`), `test_in_memory_merge.py` (`deep_merge`).
+- `knf-py/tests/`: pytest; `test_exec.py` (`--exec`/`knf.config()`), `test_in_memory_merge.py` (`deep_merge`).
 - `interp/` unit tests: Must use `HashMap` stub `Env`, never process env.

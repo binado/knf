@@ -8,16 +8,25 @@ import knf
 import pytest
 
 
-def test_config_outside_exec_is_none(monkeypatch):
+def test_config_outside_exec_raises_runtime_error(monkeypatch):
     monkeypatch.delenv("KNF_CONFIG_PATH", raising=False)
-    assert knf.config is None
-    assert hasattr(knf, "config")
+    with pytest.raises(RuntimeError, match=r"--exec -- COMMAND"):
+        knf.config()
 
 
 def test_config_unreadable_snapshot_raises_runtime_error(monkeypatch, tmp_path):
     monkeypatch.setenv("KNF_CONFIG_PATH", str(tmp_path / "missing.toml"))
     with pytest.raises(RuntimeError, match="KNF_CONFIG_PATH"):
-        knf.config
+        knf.config()
+
+
+def test_config_calls_return_independent_dicts(monkeypatch, tmp_path):
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text('{"a": {"b": 1}}', encoding="utf-8")
+    monkeypatch.setenv("KNF_CONFIG_PATH", str(snapshot))
+    first = knf.config()
+    first["a"]["b"] = 2
+    assert knf.config() == {"a": {"b": 1}}
 
 
 @pytest.mark.parametrize("entry_point", ["wheel", "standalone"])
@@ -62,13 +71,8 @@ expected = {
     "literal": "${seed}",
     "replicate": 2,
 }
-if knf.config != expected:
-    print(f"bad config: {knf.config!r}", file=sys.stderr)
-    sys.exit(BAD)
-del os.environ["KNF_CONFIG_PATH"]
-from knf import config
-if knf.config is not config:
-    print("config not cached", file=sys.stderr)
+if knf.config() != expected:
+    print(f"bad config: {knf.config()!r}", file=sys.stderr)
     sys.exit(BAD)
 if sys.argv[1:] != ["--replicate", "two words", "--", "-i"]:
     print(f"bad argv: {sys.argv!r}", file=sys.stderr)
