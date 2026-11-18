@@ -197,7 +197,7 @@ knf base.json prod.json --to toml --strict
 TOML dates, times and datetimes become strings in TOML notation. Non-finite
 floats become `"nan"`, `"inf"` or `"-inf"`. JSON null object fields are omitted
 and integers above the TOML signed range become floats. JSON null array entries
-are errors. Add **`--strict`** to reject every lossy mapping.
+are errors. A lossy conversion warns on stderr; add **`--strict`** to reject it.
 
 **`--compact`**: disable pretty-printing.
 

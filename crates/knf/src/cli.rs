@@ -131,7 +131,8 @@ the input format.
 TOML dates, times and datetimes become strings in TOML notation. Non-finite
 TOML floats become strings: nan, inf or -inf. JSON null object fields are
 omitted, and integers above the TOML signed range become floats. A JSON null
-array entry is an error. Use --strict to reject all lossy conversions.
+array entry is an error. A lossy conversion prints a warning on stderr; use
+--strict to reject it and name the key.
 
   knf base.toml prod.toml --to json"
     )]

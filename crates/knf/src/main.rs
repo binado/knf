@@ -120,10 +120,9 @@ fn run_pipeline(
         Layers::Json(layers) => {
             let merged = resolve_native(cli, layers, opts)?;
             if cli.to.map(Format::from) == Some(Format::Toml) {
-                (
-                    Format::Toml,
-                    format::emit(knf_convert::json_to_toml(merged, cli.strict)?, pretty),
-                )
+                let converted = knf_convert::json_to_toml(merged, cli.strict)?;
+                warn_if_lossy(converted.lossy);
+                (Format::Toml, format::emit(converted.value, pretty))
             } else {
                 (Format::Json, format::emit(merged, pretty))
             }
@@ -131,16 +130,21 @@ fn run_pipeline(
         Layers::Toml(layers) => {
             let merged = resolve_native(cli, layers, opts)?;
             if cli.to.map(Format::from) == Some(Format::Json) {
-                (
-                    Format::Json,
-                    format::emit(knf_convert::toml_to_json(merged, cli.strict)?, pretty),
-                )
+                let converted = knf_convert::toml_to_json(merged, cli.strict)?;
+                warn_if_lossy(converted.lossy);
+                (Format::Json, format::emit(converted.value, pretty))
             } else {
                 (Format::Toml, format::emit(merged, pretty))
             }
         }
     };
     Ok((text.map_err(|err| explain_pipeline(err, None))?, format))
+}
+
+fn warn_if_lossy(lossy: bool) {
+    if lossy {
+        eprintln!("warning: conversion was lossy; rerun with --strict to find the affected keys");
+    }
 }
 
 fn resolve_native<V: ConfigFormat>(

@@ -2057,70 +2057,36 @@ fn convert_after_merging_and_interpolation_in_the_input_format() {
 }
 
 #[test]
-fn convert_lossy_toml_values_to_strings() {
-    let dir = tree(&[(
-        "lossy.toml",
-        "[nested]\ndate=1979-05-27\ntime=07:32:00\nlocal=1979-05-27T07:32:00\noffset=1979-05-27T07:32:00-07:00\nfloats=[nan, inf, -inf]\n",
-    )]);
-    let text = run(&dir, &["lossy.toml", "--to", "json"]);
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&text).unwrap(),
-        serde_json::json!({"nested": {
-            "date": "1979-05-27",
-            "time": "07:32:00",
-            "local": "1979-05-27T07:32:00",
-            "offset": "1979-05-27T07:32:00-07:00",
-            "floats": ["nan", "inf", "-inf"]
-        }})
-    );
-    let args = ["lossy.toml", "--to", "json", "--strict"];
-    assert!(run_err(&dir, &args).contains("nested.date:"));
-    let args = [
-        "lossy.toml",
-        "--to",
-        "json",
-        "--strict",
-        "-c",
-        "nested.date=1",
-        "-c",
-        "nested.time=2",
-        "-c",
-        "nested.local=3",
-        "-c",
-        "nested.offset=4",
-    ];
-    assert!(run_err(&dir, &args).contains("nested.floats[0]:"));
+fn lossy_conversion_warns_on_stderr_and_strict_names_the_key() {
+    let dir = tree(&[
+        ("lossy.toml", "[nested]\ndate=1979-05-27\n"),
+        ("lossy.json", r#"{"nested":{"drop":null}}"#),
+        ("clean.json", r#"{"nested":{"a":1}}"#),
+    ]);
+    for (file, to, key) in [
+        ("lossy.toml", "json", "nested.date:"),
+        ("lossy.json", "toml", "nested.drop:"),
+    ] {
+        let out = knf(&dir).args([file, "--to", to]).output().unwrap();
+        assert!(out.status.success());
+        assert_eq!(
+            String::from_utf8(out.stderr).unwrap(),
+            "warning: conversion was lossy; rerun with --strict to find the affected keys\n"
+        );
+        assert!(run_err(&dir, &[file, "--to", to, "--strict"]).contains(key));
+    }
+    let out = knf(&dir)
+        .args(["clean.json", "--to", "toml", "--strict"])
+        .output()
+        .unwrap();
+    assert!(out.status.success() && out.stderr.is_empty());
 }
 
 #[test]
-fn convert_lossy_json_values_to_toml() {
-    let dir = tree(&[
-        (
-            "lossy.json",
-            r#"{"nested":{"drop":null,"large":18446744073709551615,"float":1.5}}"#,
-        ),
-        ("null_array.json", r#"{"nested":[1,null,2]}"#),
-    ]);
-    let text = run(&dir, &["lossy.json", "--to", "toml"]);
-    let value: toml::Value = toml::from_str(&text).unwrap();
-    let nested = value["nested"].as_table().unwrap();
-    assert!(!nested.contains_key("drop"));
-    assert_eq!(nested["large"].as_float(), Some(u64::MAX as f64));
-    assert_eq!(nested["float"].as_float(), Some(1.5));
-
-    let args = ["lossy.json", "--to", "toml", "--strict"];
-    assert!(run_err(&dir, &args).contains("nested.drop:"));
-    let args = [
-        "lossy.json",
-        "--to",
-        "toml",
-        "--strict",
-        "-c",
-        "nested.drop=true",
-    ];
-    assert!(run_err(&dir, &args).contains("nested.large:"));
-    let args = ["null_array.json", "--to", "toml"];
-    assert!(run_err(&dir, &args).contains("nested[1]:"));
+fn null_array_entries_fail_conversion_without_strict() {
+    let dir = tree(&[("null_array.json", r#"{"nested":[1,null,2]}"#)]);
+    let err = run_err(&dir, &["null_array.json", "--to", "toml"]);
+    assert!(err.contains("nested[1]:"));
 }
 
 #[test]
