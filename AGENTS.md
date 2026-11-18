@@ -22,7 +22,7 @@ cargo test -p knf-cli --test cli <name> # run a single CLI integration test
 - `knf-core/`: The library (crate name `knf`). Pipeline: `load_layers` → `merge`, or `load_layers` → `merge_interpolate` with interpolation. No `clap`.
 - `knf-convert/`: Output conversion between native JSON and TOML values. No CLI or Python dependencies.
 - `knf/`: The CLI binary (`knf-cli`). Argv parsing, stderr formatting and `--exec` process launch. No `pyo3`.
-- `knf-py/`: Python bindings (`pyknf` wheel, module `knf._knf`). Tested via `just test-py`.
+- `knf-py/`: PyO3 bindings (module `knf._knf`). The `pyknf` wheel is built from the root `pyproject.toml`; Python sources and tests are in `python/`. Tested via `just test-py`.
 
 No cargo features; no new dependencies without deliberate reason. Reusable logic belongs in `knf-core`.
 

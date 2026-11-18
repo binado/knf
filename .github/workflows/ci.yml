@@ -59,7 +59,7 @@ jobs:
         run: cargo package --workspace --locked --no-verify
       - name: Verify local CLI installation
         run: cargo install --path crates/knf --locked
-      # maturin reads the pyproject.toml beside the manifest it is given.
+      # maturin reads the root pyproject.toml, which points at crates/knf-py.
       - name: Build pyknf wheel
         uses: PyO3/maturin-action@v1
         with:
@@ -67,7 +67,7 @@ jobs:
           target: x86_64
           manylinux: "2_17"
           maturin-version: v1.14.1
-          args: --release --locked --compatibility pypi -m crates/knf-py/Cargo.toml --out dist
+          args: --release --locked --compatibility pypi --out dist
       - name: Verify Python wheel installation
         env:
           # The binary installed by `cargo install` above.
@@ -78,4 +78,4 @@ jobs:
           /tmp/knf-wheel-test/bin/pip install pytest
           /tmp/knf-wheel-test/bin/knf --version
           test "$(/tmp/knf-wheel-test/bin/knf -c smoke=true --compact)" = '{"smoke":true}'
-          PATH="/tmp/knf-wheel-test/bin:$PATH" /tmp/knf-wheel-test/bin/python -m pytest crates/knf-py/tests
+          PATH="/tmp/knf-wheel-test/bin:$PATH" /tmp/knf-wheel-test/bin/python -m pytest python/tests
