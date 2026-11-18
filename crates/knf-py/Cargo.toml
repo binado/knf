@@ -1,5 +1,5 @@
 [package]
-# `import knf`, published to PyPI as `pyknf` (see pyproject.toml here) and never
+# `import knf`, published to PyPI as `pyknf` (see the root pyproject.toml) and never
 # to crates.io. The wheel's `knf` command is a Python entry point that calls
 # into the same source as `crates/knf` (included from `src/lib.rs`). `cargo
 # install knf-cli` still builds that crate on its own, free of pyo3 (`cargo

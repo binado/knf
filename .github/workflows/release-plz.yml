@@ -143,7 +143,7 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
-      # The pyo3 module; maturin reads the pyproject.toml beside the manifest.
+      # The pyo3 module; maturin reads the root pyproject.toml, which points at crates/knf-py.
       - name: Build pyknf wheel
         uses: PyO3/maturin-action@v1
         with:
@@ -151,7 +151,7 @@ jobs:
           target: ${{ matrix.platform.target }}
           manylinux: ${{ matrix.platform.manylinux }}
           maturin-version: v1.14.1
-          args: --release --locked --compatibility pypi -m crates/knf-py/Cargo.toml --out dist/pyknf
+          args: --release --locked --compatibility pypi --out dist/pyknf
           sccache: true
       - name: Smoke-test native wheels
         if: ${{ matrix.platform.family == 'macos' || matrix.platform.family == 'windows' }}

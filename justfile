@@ -11,7 +11,7 @@ test:
     cargo test --workspace
 
 test-py:
-    cd crates/knf-py && maturin develop && pytest tests
+    maturin develop && pytest python/tests
 
 review:
     cargo insta review
