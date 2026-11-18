@@ -8,6 +8,7 @@ use std::ffi::OsString;
 use std::io::Write;
 use std::path::{PathBuf, absolute};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
 use knf::{
@@ -18,11 +19,26 @@ use knf::{
 use cli::Cli;
 use explain::{explain_pipeline, name_the_inline_layer_flag};
 
+/// Set while an `--exec` child runs, so Ctrl-C is left to the child.
+static CHILD_RUNNING: AtomicBool = AtomicBool::new(false);
+
 // Entry point for the `knf-cli` binary. `knf-py` includes this file and calls
 // `main_from` instead, so the function is unused in that compilation.
 #[allow(dead_code)]
 fn main() {
-    // The pyknf wheel calls `main_from` with `sys.argv` instead.
+    // The pyknf wheel calls `main_from` with `sys.argv` instead, and keeps
+    // Python's own SIGINT handling.
+    //
+    // A terminal Ctrl-C reaches `knf` and its child together. While a child
+    // runs, `knf` outlives it so the snapshot is removed on drop; otherwise it
+    // exits as a default SIGINT would.
+    if let Err(err) = ctrlc::set_handler(|| {
+        if !CHILD_RUNNING.load(Ordering::SeqCst) {
+            std::process::exit(130);
+        }
+    }) {
+        eprintln!("warning: Ctrl-C will not clean up the --exec snapshot: {err}");
+    }
     main_from(std::env::args_os());
 }
 
@@ -171,11 +187,14 @@ fn run_child(
         .write_all(text.as_bytes())
         .context("writing configuration snapshot")?;
     let path = absolute(snapshot.path()).context("resolving configuration snapshot path")?;
+    CHILD_RUNNING.store(true, Ordering::SeqCst);
     let status = Command::new(program)
         .args(args)
         .env("KNF_CONFIG_PATH", path)
         .status()
-        .with_context(|| format!("running {program:?}"))?;
+        .with_context(|| format!("running {program:?}"));
+    CHILD_RUNNING.store(false, Ordering::SeqCst);
+    let status = status?;
     #[cfg(unix)]
     if let Some(signal) = std::os::unix::process::ExitStatusExt::signal(&status) {
         return Ok(128 + signal);

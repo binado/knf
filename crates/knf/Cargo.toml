@@ -22,6 +22,8 @@ knf-convert.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 tempfile.workspace = true
+# Standalone binary only: keeps `--exec` alive across Ctrl-C to delete its snapshot.
+ctrlc.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

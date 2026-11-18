@@ -130,6 +130,27 @@ fn exec_inherits_streams_and_cleans_snapshot_after_nonzero_exit() {
 
 #[cfg(unix)]
 #[test]
+fn exec_survives_sigint_and_cleans_snapshot() {
+    let dir = tree(&[("base.json", r#"{"seed":1}"#)]);
+    // SIGINT only the parent, as `kill -INT <knf>` would; the child keeps running.
+    let output = knf(&dir)
+        .args([
+            "base.json",
+            "--exec",
+            "--",
+            "sh",
+            "-c",
+            r#"echo "$KNF_CONFIG_PATH"; kill -INT "$PPID"; sleep 1"#,
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!std::path::Path::new(stdout.trim()).exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn exec_does_not_launch_after_merge_error() {
     let dir = tree(&[("base.json", r#"{"value":"${missing}"}"#)]);
     knf(&dir)
