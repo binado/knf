@@ -4,6 +4,7 @@ Repo-wide guidance for AI agents. Crate-specific rules live in `crates/<crate>/A
 
 - Commits must follow Conventional Commits.
 - Keep `README.md` examples and tables in sync with CLI and Python API changes. Keep the README and comments concise: detail belongs in `--help`, rustdoc and tests.
+- Don't use code comments to enforce invariance or patterns. Those should be manifested in the code design.
 
 ## Commands
 
@@ -23,10 +24,3 @@ cargo test -p knf-cli --test cli <name> # run a single CLI integration test
 - `crates/knf-convert/`: Output conversion between native JSON and TOML values. No CLI or Python dependencies.
 - `crates/knf/`: The CLI binary (`knf-cli`). No `pyo3`.
 - `crates/knf-py/`: PyO3 bindings (module `knf._knf`). Python sources and tests are in `python/`; the `pyknf` wheel is built from the root `pyproject.toml`.
-
-## Workspace Rules
-
-- No cargo features; no new dependencies without deliberate reason. Reusable logic belongs in `knf-core`.
-- `ProcessEnv` (`knf-core/src/env.rs`) is the only `std::env::var` caller in the workspace.
-- Native adapters (`serde_json`, `toml`) are confined to `knf-core/src/{format,value,set}.rs`, `knf-convert` and `knf-py` (`from_py.rs`). Tests may name native values anywhere.
-- TOML datetimes remain native and originate from TOML document/inline parsers; never route values through JSON.
