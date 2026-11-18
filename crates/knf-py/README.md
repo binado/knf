@@ -8,12 +8,13 @@ pip install pyknf  # the `knf` module and the `knf` executable
 ```
 
 ```python
-from knf import accumulate, filter_paths, load
+from knf import accumulate, deep_merge, filter_paths, load
 
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
 config = load(["foo.toml", "bar.toml"], interpolate=True, context="config.toml")
 config = load(["config.toml"], interpolate=True, merge_key="extends")
+pilot = deep_merge(config, {"solver": {"steps": 10}})
 
 files = accumulate("services/api/prod.toml", base_dir=project_root)
 files = filter_paths(files, "{defaults,prod}.toml", filename_only=True)
@@ -22,6 +23,9 @@ config = load(files)
 
 - `load` merges left to right: objects recurse; arrays, scalars and `None`
   replace. All files must share one format. An empty list returns `{}`.
+- `deep_merge` applies those merge rules to two dicts and returns a new dict.
+  Interpolation runs during `load()`. Overrides preserve previously resolved
+  references at their resolved values.
 - `interpolate=True` resolves `${key.path}` and `${env:NAME}` against the
   final document. A whole-string reference merges as the value it names, so
   an object referent merges with an object from another file.

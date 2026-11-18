@@ -193,7 +193,7 @@ error.
 ## Python API
 
 ```python
-from knf import accumulate, dump_toml, dumps_toml, filter_paths, load
+from knf import accumulate, deep_merge, dump_toml, dumps_toml, filter_paths, load
 
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
@@ -213,6 +213,16 @@ with open("merged.toml", "w", encoding="utf-8") as fp:
 raises `knf.ParseError` or `knf.InterpolationError` (both `ValueError`s); I/O
 failures raise the usual `OSError` subclasses. TOML datetimes become `datetime`
 objects.
+
+`deep_merge(cfg, overrides)` returns a new dict. Dict pairs merge recursively.
+Lists, scalars and `None` replace values wholesale. Interpolation happens in
+`load()`, so changing `root` after `"${root}/data"` resolved to `"old/data"`
+leaves the resolved path at `"old/data"`.
+
+```python
+cfg = load(["base.toml"], interpolate=True)
+pilot = deep_merge(cfg, {"solver": {"steps": 10}})
+```
 
 `dumps_toml` returns TOML text; `dump_toml` writes it to a text stream. Both
 accept `pretty=False` for compact output. TOML cannot represent `None`, integers
