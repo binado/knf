@@ -1,11 +1,12 @@
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from io import StringIO
+import json
 import math
 import tomllib
 
 import pytest
 
-from knf import dump_toml, dumps_toml, load
+from knf import dump, dump_toml, dumps, dumps_toml, load
 
 
 def parse(text: str) -> dict:
@@ -64,6 +65,7 @@ def test_special_values():
     (2**63, ValueError), (-(2**63) - 1, ValueError),
     (time(tzinfo=timezone.utc), ValueError),
     (time(tzinfo=NoOffset()), ValueError),
+    (datetime(2026, 1, 1, tzinfo=NoOffset()), ValueError),
     (datetime(2026, 1, 1, tzinfo=timezone(timedelta(seconds=1))), ValueError),
 ])
 def test_invalid_values_include_path(value, error):
@@ -100,3 +102,110 @@ def test_dump_serializes_before_writing_and_propagates_io_errors():
     fp.close()
     with pytest.raises(ValueError, match="closed file"):
         dump_toml({"x": 1}, fp)
+
+
+@pytest.mark.parametrize(
+    ("format", "data", "parse_text"),
+    [
+        ("json", {"nested": [None, -(2**63), 2**64 - 1, "olá"]}, json.loads),
+        ("toml", {"nested": {"date": date(2026, 11, 13)}}, tomllib.loads),
+    ],
+)
+@pytest.mark.parametrize("pretty", [True, False])
+def test_dump_formats(format, data, parse_text, pretty, tmp_path):
+    text = dumps(data, format=format, pretty=pretty)
+    assert text.endswith("\n")
+    assert parse_text(text) == data
+
+    path = tmp_path / f"config.{format.upper()}"
+    assert dump(data, path, pretty=pretty) is None
+    assert path.read_text(encoding="utf-8") == text
+
+    path = tmp_path / "config.txt"
+    assert dump(data, str(path), format=format, pretty=pretty) is None
+    assert path.read_text(encoding="utf-8") == text
+
+    stream = StringIO()
+    assert dump(data, stream, format=format, pretty=pretty) is None
+    assert stream.getvalue() == text
+
+
+@pytest.mark.parametrize(
+    ("format", "value", "error"),
+    [
+        ("json", date(2026, 11, 13), TypeError),
+        ("json", math.inf, ValueError),
+        ("json", 2**64, ValueError),
+        ("toml", None, TypeError),
+    ],
+)
+def test_dump_serializes_before_opening_path(format, value, error, tmp_path):
+    path = tmp_path / f"config.{format}"
+    path.write_text("unchanged", encoding="utf-8")
+    with pytest.raises(error, match=r"nested.*items.*\[0\]"):
+        dump({"nested": {"items": [value]}}, path)
+    assert path.read_text(encoding="utf-8") == "unchanged"
+
+
+def test_dump_requires_a_known_format(tmp_path):
+    with pytest.raises(TypeError):
+        dumps({})
+    with pytest.raises(ValueError, match="format"):
+        dumps({}, format="yaml")
+    with pytest.raises(ValueError, match="format"):
+        dump({}, tmp_path / "config.yaml")
+    with pytest.raises(ValueError, match="format"):
+        dump({}, StringIO())
+
+
+def test_dumps_toml_datetime_with_unknown_offset_names_tzinfo():
+    with pytest.raises(ValueError, match=r"utcoffset\(\) is None.*`when`"):
+        dumps_toml({"when": datetime(2026, 1, 1, tzinfo=NoOffset())})
+
+
+@pytest.mark.parametrize("format", ["json", "toml"])
+def test_dumps_circular_reference_raises_with_path(format):
+    cycle: dict = {}
+    cycle["self"] = cycle
+    with pytest.raises(ValueError, match=r"circular reference at `a\.self`"):
+        dumps({"a": cycle}, format=format)
+
+
+@pytest.mark.parametrize(
+    ("format", "message"),
+    [("json", "JSON object keys"), ("toml", "TOML table keys")],
+)
+def test_dumps_non_string_key_raises_type_error(format, message):
+    with pytest.raises(TypeError, match=message):
+        dumps({"nested": {1: "x"}}, format=format)
+
+
+@pytest.mark.parametrize("format", ["json", "toml"])
+def test_dumps_nesting_beyond_128_raises(format):
+    deep: dict = {}
+    for _ in range(128):
+        deep = {"child": deep}
+    with pytest.raises(ValueError, match="nesting exceeds 128"):
+        dumps(deep, format=format)
+
+
+def test_dumps_toml_time_with_tzinfo_raises():
+    with pytest.raises(ValueError, match="times with a tzinfo"):
+        dumps({"t": time(1, tzinfo=timezone.utc)}, format="toml")
+
+
+@pytest.mark.parametrize("value", [2**63, -(2**63) - 1])
+def test_dumps_toml_integer_outside_i64_raises(value):
+    with pytest.raises(ValueError, match="signed 64-bit"):
+        dumps({"n": value}, format="toml")
+
+
+@pytest.mark.parametrize("value", [-(2**63), 2**63 - 1, 2**64 - 1])
+def test_dumps_json_integer_within_64_bits_roundtrips(value):
+    assert json.loads(dumps({"n": value}, format="json")) == {"n": value}
+
+
+@pytest.mark.parametrize("value", [2**64, -(2**63) - 1])
+def test_dumps_json_integer_outside_64_bits_raises(value):
+    with pytest.raises(ValueError, match="64-bit"):
+        dumps({"n": value}, format="json")

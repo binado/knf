@@ -1,8 +1,8 @@
 """Load and merge layered JSON and TOML configuration files into a dict.
 
 Inputs must share one format. TOML dates and times become Python date/time
-objects, with fractional seconds truncated to microseconds.
-Pass ``shallow="db.*"`` to ``load`` to replace the immediate children of ``db``
+objects, with fractional seconds truncated to microseconds. Pass
+``shallow="db.*"`` to ``load`` to replace the immediate children of ``db``
 wholesale, using the same key-path glob syntax as the command line.
 
 The same Rust pipeline the ``knf`` command line runs, called natively::
@@ -13,11 +13,60 @@ The same Rust pipeline the ``knf`` command line runs, called natively::
 
 ``accumulate`` discovers ordered input paths; ``filter_paths`` selects from an
 existing list without filesystem access. Both return ``pathlib.Path`` objects
-that can be passed directly to ``load``. ``dumps_toml`` and ``dump_toml``
-serialize a dict back to TOML.
+that can be passed directly to ``load``. ``deep_merge`` applies in-memory
+overrides. ``dumps`` and ``dump`` serialize a dict as JSON or TOML. Under
+``knf --exec``, ``config()`` returns the resolved configuration.
 """
 
-from ._knf import InterpolationError, ParseError, accumulate, dumps_toml, filter_paths, load
+import os as _os
+from typing import Any
+
+from ._knf import (
+    InterpolationError,
+    ParseError,
+    accumulate,
+    dumps,
+    dumps_toml,
+    filter_paths,
+    load,
+)
+
+
+def dump(data, target, *, format=None, pretty=True):
+    """Write a dict to a UTF-8 path or text stream after serialization succeeds.
+
+    If omitted, the format is inferred from a path's .json or .toml extension.
+    Text streams require an explicit format.
+    """
+    if isinstance(target, (str, _os.PathLike)):
+        path = _os.fspath(target)
+        if format is None:
+            suffix = _os.path.splitext(path)[1].lower()
+            if suffix not in (".json", ".toml"):
+                raise ValueError("cannot infer format from path; pass format='json' or 'toml'")
+            format = suffix[1:]
+        text = dumps(data, format=format, pretty=pretty)
+        with open(path, "w", encoding="utf-8") as fp:
+            fp.write(text)
+    else:
+        if format is None:
+            raise ValueError("format is required for a text stream")
+        target.write(dumps(data, format=format, pretty=pretty))
+
+
+def deep_merge(cfg, overrides):
+    """Return a new dict with overrides applied recursively to dict pairs.
+
+    Other values replace wholesale, including lists and None. Values outside a
+    recursive merge are shared with the inputs. Interpolation happens in load().
+    """
+    merged = cfg.copy()
+    for key, value in overrides.items():
+        original = cfg.get(key)
+        if isinstance(original, dict) and isinstance(value, dict):
+            value = deep_merge(original, value)
+        merged[key] = value
+    return merged
 
 
 def dump_toml(data, fp, *, pretty=True):
@@ -25,7 +74,35 @@ def dump_toml(data, fp, *, pretty=True):
     fp.write(dumps_toml(data, pretty=pretty))
 
 
+def config() -> dict[str, Any]:
+    """Return the resolved configuration of the ``knf --exec`` run.
+
+    The snapshot named by ``KNF_CONFIG_PATH`` is read on every call, so each
+    caller gets an independent dict.
+
+    Returns
+    -------
+    dict[str, Any]
+        The merged, interpolated configuration.
+
+    Raises
+    ------
+    RuntimeError
+        If not launched by ``knf --exec``, or the snapshot cannot be loaded.
+    """
+    path = _os.environ.get("KNF_CONFIG_PATH")
+    if not path:
+        raise RuntimeError(
+            "knf.config() requires a run launched with knf [FILES] --exec -- COMMAND"
+        )
+    # The snapshot is already resolved, so skip interpolation; it may be JSON or TOML.
+    try:
+        return load([path], interpolate=False)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"cannot load KNF_CONFIG_PATH={path!r}: {exc}") from exc
+
+
 __all__ = [
-    "InterpolationError", "ParseError", "accumulate", "dump_toml", "dumps_toml",
-    "filter_paths", "load",
+    "InterpolationError", "ParseError", "accumulate", "config", "deep_merge", "dump",
+    "dump_toml", "dumps", "dumps_toml", "filter_paths", "load",
 ]

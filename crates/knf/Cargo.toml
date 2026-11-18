@@ -18,12 +18,15 @@ path = "src/main.rs"
 # enforcement on the other side of the boundary.
 [dependencies]
 knf-core.workspace = true
+knf-convert.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+tempfile.workspace = true
+# Standalone binary only: keeps `--exec` alive across Ctrl-C to delete its snapshot.
+ctrlc.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
 toml.workspace = true
 assert_cmd = "2"
 insta = "1"
-tempfile = "3"

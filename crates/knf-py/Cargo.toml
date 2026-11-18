@@ -27,8 +27,12 @@ doctest = false
 # `clap` serves the included CLI. JSON and TOML values convert directly to Python.
 [dependencies]
 knf-core.workspace = true
+knf-convert.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+tempfile.workspace = true
+# Compiled in with the included CLI; its handler is never installed here.
+ctrlc.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 pyo3 = { version = "0.29", features = ["abi3-py311"] }

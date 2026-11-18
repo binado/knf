@@ -72,6 +72,207 @@ fn with_env<'a>(cmd: &'a mut Command, vars: &[(&str, Option<&str>)]) -> &'a mut 
 }
 
 #[test]
+fn exec_requires_delimiter_and_command() {
+    let dir = tree(&[("--exec", r#"{"standalone":true}"#)]);
+    assert_eq!(
+        run(&dir, &["-f", "json", "--", "--exec"]),
+        "{\n  \"standalone\": true\n}\n"
+    );
+    for args in [
+        &["--exec", "some-command"][..],
+        &["--exec", "--"][..],
+        &["--list-files", "--exec", "--", "some-command"][..],
+        &["--to", "toml", "--exec", "--", "some-command"][..],
+    ] {
+        knf(&dir).args(args).assert().code(2);
+    }
+}
+
+#[test]
+fn exec_scan_ignores_exec_and_delimiter_that_are_not_structural() {
+    let dir = tree(&[("--exec", r#"{"standalone":true}"#), ("a.json", "{}")]);
+    // `--exec` after the first `--` is a filename, not the flag.
+    assert_eq!(
+        run(&dir, &["-f", "json", "--", "--exec"]),
+        "{\n  \"standalone\": true\n}\n"
+    );
+    // A repeated flag is a clap error, not a command.
+    knf(&dir)
+        .args(["a.json", "--exec", "--exec", "--", "true"])
+        .assert()
+        .code(2);
+    // An option value of `--exec` or `--` is never structural.
+    for args in [
+        &["a.json", "-m", "--exec", "--", "true"][..],
+        &["a.json", "-c", "--exec", "--", "true"][..],
+        &["a.json", "--merge-key", "--", "true"][..],
+        &["a.json", "-c", "--", "true"][..],
+    ] {
+        knf(&dir).args(args).assert().code(2);
+    }
+    // Attached values are not mistaken for the flag.
+    knf(&dir)
+        .args(["a.json", "-i", "--merge-key=--exec", "--exec", "--", "true"])
+        .assert()
+        .success();
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_command_may_itself_contain_exec_and_delimiters() {
+    let dir = tree(&[("a.json", "{}")]);
+    let out = knf(&dir)
+        .args([
+            "a.json", "--exec", "--", "echo", "--exec", "--", "--exec", "x",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(out.stdout, b"--exec -- --exec x\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_spawn_failure_reports_the_program_and_removes_snapshot() {
+    let dir = tree(&[("a.json", "{}")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let args = ["a.json", "--exec", "--", "knf-no-such-program"];
+    let mut cmd = knf(&dir);
+    let err = err_stderr(
+        with_env(
+            cmd.args(args),
+            &[("TMPDIR", Some(tmp.path().to_str().unwrap()))],
+        ),
+        &args,
+    );
+    assert!(err.contains("running \"knf-no-such-program\""), "{err}");
+    assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_reports_signal_death_as_128_plus_signal() {
+    let dir = tree(&[("a.json", r#"{"a":1}"#)]);
+    let out = knf(&dir)
+        .args([
+            "a.json",
+            "--exec",
+            "--",
+            "sh",
+            "-c",
+            r#"echo "$KNF_CONFIG_PATH"; kill -TERM $$"#,
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(143));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(!std::path::Path::new(stdout.trim()).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_snapshot_of_toml_input_is_toml_and_keeps_datetimes() {
+    let dir = tree(&[("a.toml", "when = 1979-05-27T07:32:00Z\n")]);
+    let out = knf(&dir)
+        .args([
+            "a.toml",
+            "--exec",
+            "--",
+            "sh",
+            "-c",
+            r#"echo "$KNF_CONFIG_PATH"; cat "$KNF_CONFIG_PATH""#,
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let (path, body) = stdout.split_once('\n').unwrap();
+    assert_eq!(std::path::Path::new(path).extension().unwrap(), "toml");
+    assert!(body.contains("when = 1979-05-27T07:32:00Z"), "{body}");
+    assert!(!std::path::Path::new(path).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_inherits_streams_and_cleans_snapshot_after_nonzero_exit() {
+    let dir = tree(&[("base.json", r#"{"seed":1}"#)]);
+    let output = knf(&dir)
+        .args([
+            "base.json",
+            "-c",
+            "seed=42",
+            "--compact",
+            "--exec",
+            "--",
+            "sh",
+            "-c",
+            r#"read -r input
+               printf '%s\n' "$input" "$@" "$KNF_CONFIG_PATH"
+               cat "$KNF_CONFIG_PATH" >&2
+               exit 17"#,
+            "sh",
+            "--replicate",
+            "two words",
+            "--",
+        ])
+        .write_stdin("child stdin\n")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(17));
+    assert_eq!(output.stderr, b"{\"seed\":42}\n");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<_> = stdout.lines().collect();
+    assert_eq!(
+        &lines[..4],
+        &["child stdin", "--replicate", "two words", "--"]
+    );
+    let snapshot = std::path::Path::new(lines[4]);
+    assert!(snapshot.is_absolute());
+    assert_eq!(snapshot.extension().unwrap(), "json");
+    assert!(!snapshot.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_survives_sigint_and_cleans_snapshot() {
+    let dir = tree(&[("base.json", r#"{"seed":1}"#)]);
+    // SIGINT only the parent, as `kill -INT <knf>` would; the child keeps running.
+    let output = knf(&dir)
+        .args([
+            "base.json",
+            "--exec",
+            "--",
+            "sh",
+            "-c",
+            r#"echo "$KNF_CONFIG_PATH"; kill -INT "$PPID"; sleep 1"#,
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!std::path::Path::new(stdout.trim()).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_does_not_launch_after_merge_error() {
+    let dir = tree(&[("base.json", r#"{"value":"${missing}"}"#)]);
+    knf(&dir)
+        .args([
+            "base.json",
+            "-i",
+            "--exec",
+            "--",
+            "sh",
+            "-c",
+            "touch launched",
+        ])
+        .assert()
+        .code(1);
+    assert!(!dir.path().join("launched").exists());
+}
+
+#[test]
 fn merge_key_resolves_final_layers_and_inline_overrides_in_both_formats() {
     let dir = tree(&[
         (
@@ -1523,11 +1724,7 @@ fn toml_inline_literals_accept_surrounding_whitespace() {
 #[test]
 fn removed_options_are_usage_errors() {
     let dir = tree(&[]);
-    for args in [
-        ["--input-format", "json"],
-        ["--null-as", "none"],
-        ["--strict", "a.json"],
-    ] {
+    for args in [["--input-format", "json"], ["--null-as", "none"]] {
         let out = knf(&dir).args(args).output().unwrap();
         assert_eq!(out.status.code(), Some(2));
         assert!(
@@ -1915,4 +2112,120 @@ fn shallow_invalid_glob_errors_before_file_io() {
     let err = String::from_utf8(output.stderr).unwrap();
     assert!(!err.contains("No such file"), "{err}");
     insta::assert_snapshot!(err);
+}
+
+#[test]
+fn convert_after_merging_and_interpolation_in_the_input_format() {
+    let dir = tree(&[
+        (
+            "base.toml",
+            "[db]\nports=[80, 81]\nstarted=2024-01-01\ncopy='${db.started}'\n",
+        ),
+        ("prod.toml", "[db]\nports=[443]\n"),
+        (
+            "base.json",
+            r#"{"db":{"ports":[80,81],"id":null,"copy":"${db.id}"}}"#,
+        ),
+        ("prod.json", r#"{"db":{"ports":[443],"id":42}}"#),
+    ]);
+    assert_eq!(
+        run(
+            &dir,
+            &[
+                "base.toml",
+                "prod.toml",
+                "-i",
+                "-c",
+                "db.started=2024-01-02",
+                "--to",
+                "json",
+                "--compact",
+            ],
+        ),
+        "{\"db\":{\"ports\":[443],\"started\":\"2024-01-02\",\"copy\":\"2024-01-02\"}}\n"
+    );
+    let text = run(
+        &dir,
+        &["base.json", "prod.json", "-i", "--to", "toml", "--strict"],
+    );
+    assert_toml_eq_json(&text, r#"{"db":{"ports":[443],"id":42,"copy":42}}"#);
+
+    let args = ["base.json", "--compact"];
+    assert_eq!(
+        run(&dir, &args),
+        run(
+            &dir,
+            &["base.json", "--compact", "--to", "json", "--strict"],
+        )
+    );
+}
+
+#[test]
+fn lossy_conversion_warns_on_stderr_and_strict_names_the_key() {
+    let dir = tree(&[
+        ("lossy.toml", "[nested]\ndate=1979-05-27\n"),
+        ("lossy.json", r#"{"nested":{"drop":null}}"#),
+        ("clean.json", r#"{"nested":{"a":1}}"#),
+    ]);
+    for (file, to, key) in [
+        ("lossy.toml", "json", "nested.date:"),
+        ("lossy.json", "toml", "nested.drop:"),
+    ] {
+        let out = knf(&dir).args([file, "--to", to]).output().unwrap();
+        assert!(out.status.success());
+        assert_eq!(
+            String::from_utf8(out.stderr).unwrap(),
+            "warning: conversion was lossy; rerun with --strict to find the affected keys\n"
+        );
+        assert!(run_err(&dir, &[file, "--to", to, "--strict"]).contains(key));
+    }
+    let out = knf(&dir)
+        .args(["clean.json", "--to", "toml", "--strict"])
+        .output()
+        .unwrap();
+    assert!(out.status.success() && out.stderr.is_empty());
+}
+
+#[test]
+fn null_array_entries_fail_conversion_without_strict() {
+    let dir = tree(&[("null_array.json", r#"{"nested":[1,null,2]}"#)]);
+    let err = run_err(&dir, &["null_array.json", "--to", "toml"]);
+    assert!(err.contains("nested[1]:"));
+}
+
+#[test]
+fn strict_requires_an_output_format_before_reading_inputs() {
+    let dir = tree(&[]);
+    let out = knf(&dir)
+        .args(["missing.json", "--strict"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("required arguments were not provided") && stderr.contains("--to"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn strict_conflicts_with_exec() {
+    let dir = tree(&[("a.json", r#"{"a":1}"#)]);
+    knf(&dir)
+        .args(["a.json", "--to", "json", "--strict", "--exec", "--", "true"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn same_format_strict_is_a_no_op() {
+    let dir = tree(&[("a.json", r#"{"n":null,"big":18446744073709551615}"#)]);
+    let args = ["a.json", "--compact"];
+    let plain = run(&dir, &args);
+    let out = knf(&dir)
+        .args(["a.json", "--compact", "--to", "json", "--strict"])
+        .output()
+        .unwrap();
+    assert!(out.status.success() && out.stderr.is_empty());
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), plain);
 }

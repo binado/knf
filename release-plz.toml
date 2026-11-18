@@ -8,7 +8,7 @@ semver_check = false
 name = "knf-cli"
 # The library and the Python module live in sibling crates; their commits
 # belong in the CLI changelog, since knf-cli is what ships both.
-changelog_include = ["knf-core", "knf-py"]
+changelog_include = ["knf-core", "knf-convert", "knf-py"]
 
 # The Python module, the only PyPI package. Track its changes so Python-only
 # updates bump the shared workspace version and produce a knf-cli release tag.

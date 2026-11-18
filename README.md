@@ -28,7 +28,7 @@ knf defaults.json overrides.json -c server.port=8080
 cat base.json | knf - prod.json -f json
 ```
 
-Layers merge left to right; the output uses the input format.
+Layers merge left to right. Output defaults to the input format.
 
 | Case | Behaviour |
 | --- | --- |
@@ -184,16 +184,37 @@ Context bases and chained inheritance work. Environment bases must parse as
 objects/tables, and their contents remain terminal. Without `-m`, `KEY` is
 ordinary data.
 
-**`-f/--format json|toml`**: set the format for parsing, `-c` typing and output.
-Required for stdin; never converts between formats. Mixed input formats are an
-error.
+**`-f/--format json|toml`**: set the input format for parsing and `-c` typing.
+Required for stdin. Mixed input formats are an error without an override.
+
+**`--to json|toml`**: convert the final document after merging and interpolation.
+
+```bash
+knf base.toml prod.toml --to json
+knf base.json prod.json --to toml --strict
+```
+
+TOML dates, times and datetimes become strings in TOML notation. Non-finite
+floats become `"nan"`, `"inf"` or `"-inf"`. JSON null object fields are omitted
+and integers above the TOML signed range become floats. JSON null array entries
+are errors. A lossy conversion warns on stderr; add **`--strict`** to reject it.
 
 **`--compact`**: disable pretty-printing.
+
+**`--exec -- COMMAND [ARGS...]`**: run a command with the merged configuration.
+The child inherits standard streams and returns its exit status. Its
+`KNF_CONFIG_PATH` environment variable points to a private temporary JSON or
+TOML file that is removed when the command finishes. Cannot be combined with
+`--to` or `--list-files`.
+
+```bash
+knf base.toml pilot.toml -c seed=42 --exec -- python fit.py --replicate 2
+```
 
 ## Python API
 
 ```python
-from knf import accumulate, dump_toml, dumps_toml, filter_paths, load
+from knf import accumulate, deep_merge, dump, dumps, filter_paths, load
 
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
@@ -204,9 +225,8 @@ files = accumulate("services/api/prod.toml", base_dir=project_root)
 files = filter_paths(files, "{defaults,prod}.toml", filename_only=True)
 config = load(files)
 
-text = dumps_toml(config)
-with open("merged.toml", "w", encoding="utf-8") as fp:
-    dump_toml(config, fp)
+text = dumps(config, format="toml")
+dump(config, "merged.toml")
 ```
 
 `load` returns a `dict` and follows the same rules as the CLI. Invalid input
@@ -214,9 +234,27 @@ raises `knf.ParseError` or `knf.InterpolationError` (both `ValueError`s); I/O
 failures raise the usual `OSError` subclasses. TOML datetimes become `datetime`
 objects.
 
-`dumps_toml` returns TOML text; `dump_toml` writes it to a text stream. Both
-accept `pretty=False` for compact output. TOML cannot represent `None`, integers
-outside signed 64-bit range, or times with a `tzinfo`.
+Scripts launched with `--exec` can call `knf.config()` for the resolved
+configuration, read fresh on each call. It raises `RuntimeError` outside `--exec`.
+
+```python
+import knf
+
+seed = knf.config()["seed"]
+```
+
+`dumps` returns JSON or TOML text. `dump` writes to a UTF-8 path or text stream.
+It infers the format from a path extension and requires `format` for a stream.
+Both accept `pretty=False` for compact output. `dumps_toml` and `dump_toml`
+are TOML-only; see their docs for supported types and limits.
+
+`deep_merge(cfg, overrides)` returns a new dict: dicts merge recursively;
+lists, scalars and `None` replace. It does not re-run interpolation.
+
+```python
+cfg = load(["base.toml"], interpolate=True)
+pilot = deep_merge(cfg, {"solver": {"steps": 10}})
+```
 
 ## License
 
