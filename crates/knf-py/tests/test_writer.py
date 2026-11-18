@@ -65,6 +65,7 @@ def test_special_values():
     (2**63, ValueError), (-(2**63) - 1, ValueError),
     (time(tzinfo=timezone.utc), ValueError),
     (time(tzinfo=NoOffset()), ValueError),
+    (datetime(2026, 1, 1, tzinfo=NoOffset()), ValueError),
     (datetime(2026, 1, 1, tzinfo=timezone(timedelta(seconds=1))), ValueError),
 ])
 def test_invalid_values_include_path(value, error):
@@ -155,3 +156,56 @@ def test_dump_requires_a_known_format(tmp_path):
         dump({}, tmp_path / "config.yaml")
     with pytest.raises(ValueError, match="format"):
         dump({}, StringIO())
+
+
+def test_dumps_toml_datetime_with_unknown_offset_names_tzinfo():
+    with pytest.raises(ValueError, match=r"utcoffset\(\) is None.*`when`"):
+        dumps_toml({"when": datetime(2026, 1, 1, tzinfo=NoOffset())})
+
+
+@pytest.mark.parametrize("format", ["json", "toml"])
+def test_dumps_circular_reference_raises_with_path(format):
+    cycle: dict = {}
+    cycle["self"] = cycle
+    with pytest.raises(ValueError, match=r"circular reference at `a\.self`"):
+        dumps({"a": cycle}, format=format)
+
+
+@pytest.mark.parametrize(
+    ("format", "message"),
+    [("json", "JSON object keys"), ("toml", "TOML table keys")],
+)
+def test_dumps_non_string_key_raises_type_error(format, message):
+    with pytest.raises(TypeError, match=message):
+        dumps({"nested": {1: "x"}}, format=format)
+
+
+@pytest.mark.parametrize("format", ["json", "toml"])
+def test_dumps_nesting_beyond_128_raises(format):
+    deep: dict = {}
+    for _ in range(128):
+        deep = {"child": deep}
+    with pytest.raises(ValueError, match="nesting exceeds 128"):
+        dumps(deep, format=format)
+
+
+def test_dumps_toml_time_with_tzinfo_raises():
+    with pytest.raises(ValueError, match="times with a tzinfo"):
+        dumps({"t": time(1, tzinfo=timezone.utc)}, format="toml")
+
+
+@pytest.mark.parametrize("value", [2**63, -(2**63) - 1])
+def test_dumps_toml_integer_outside_i64_raises(value):
+    with pytest.raises(ValueError, match="signed 64-bit"):
+        dumps({"n": value}, format="toml")
+
+
+@pytest.mark.parametrize("value", [-(2**63), 2**63 - 1, 2**64 - 1])
+def test_dumps_json_integer_within_64_bits_roundtrips(value):
+    assert json.loads(dumps({"n": value}, format="json")) == {"n": value}
+
+
+@pytest.mark.parametrize("value", [2**64, -(2**63) - 1])
+def test_dumps_json_integer_outside_64_bits_raises(value):
+    with pytest.raises(ValueError, match="64-bit"):
+        dumps({"n": value}, format="json")

@@ -21,7 +21,7 @@ cargo test -p knf-cli --test cli <name> # run a single CLI integration test
 
 - `knf-core/`: The library (crate name `knf`). Pipeline: `load_layers` → `merge`, or `load_layers` → `merge_interpolate` with interpolation. No `clap`.
 - `knf-convert/`: Output conversion between native JSON and TOML values. No CLI or Python dependencies.
-- `knf/`: The CLI binary (`knf-cli`). Argv parsing and stderr formatting. No `pyo3`.
+- `knf/`: The CLI binary (`knf-cli`). Argv parsing, stderr formatting and `--exec` process launch. No `pyo3`.
 - `knf-py/`: Python bindings (`pyknf` wheel, module `knf._knf`). Tested via `just test-py`.
 
 No cargo features; no new dependencies without deliberate reason. Reusable logic belongs in `knf-core`.
@@ -30,7 +30,7 @@ No cargo features; no new dependencies without deliberate reason. Reusable logic
 
 - **Library errors never name CLI flags, files, or layers** — only key paths. Flag-specific `help:` lines belong in `crates/knf/src/explain.rs`.
 - Library error `Display` implementations must **not** end with a newline (CLI appends `help:` flush against them).
-- Native adapters (`serde_json`, `toml`) live strictly in `format.rs`, `value.rs`, and `set.rs`. Core algorithms (`merge.rs`, `path.rs`, `interp/`) use `ConfigValue`/`ConfigObject`/`ConfigFormat` and remain format-agnostic; tests may name native values.
+- In `knf-core`, native adapters (`serde_json`, `toml`) live strictly in `format.rs`, `value.rs`, and `set.rs`; elsewhere only `knf-convert` and `knf-py` (`from_py.rs`) name native values. Core algorithms (`merge.rs`, `path.rs`, `interp/`) use `ConfigValue`/`ConfigObject`/`ConfigFormat` and remain format-agnostic; tests may name native values.
 - `ProcessEnv` (`knf-core/src/env.rs`) is the only `std::env::var` caller in the workspace; `interp/` uses the `Env` trait.
 - Assignment/reference paths use `RefPath`; writers take keys only, validated via `RefPath::try_into_keys` prior to I/O. Merge selectors use `glob::KeyGlobPattern` against actual key segments, never diagnostic path renderings.
 - TOML datetimes remain native and originate from TOML document/inline parsers; never route values through JSON.
@@ -52,4 +52,6 @@ No cargo features; no new dependencies without deliberate reason. Reusable logic
 - `knf-core/tests/library.rs`: Public library API suite.
 - `knf/tests/public_api.rs`: Guards against missing re-exports.
 - `knf/tests/cli.rs`: CLI integration tests (use `with_env`, never ambient env).
+- `knf-convert` unit tests: Conversion and lossy-warning cases.
+- `knf-py/tests/`: pytest; `test_exec.py` (`--exec`/`knf.config`), `test_in_memory_merge.py` (`deep_merge`).
 - `interp/` unit tests: Must use `HashMap` stub `Env`, never process env.

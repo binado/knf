@@ -18,6 +18,7 @@ use knf::{
 
 use cli::Cli;
 use explain::{explain_pipeline, name_the_inline_layer_flag};
+use knf_convert::{Converted, Policy};
 
 /// Set while an `--exec` child runs, so Ctrl-C is left to the child.
 static CHILD_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -116,23 +117,27 @@ fn run_pipeline(
     let layers = load_layers(&inputs, cli.format.map(Into::into))
         .map_err(|err| explain_pipeline(err, cli.with.as_deref()))?;
     let pretty = !cli.compact;
+    let policy = if cli.strict {
+        Policy::Strict
+    } else {
+        Policy::Lossy
+    };
+    let to = cli.to.map(Format::from);
     let (format, text) = match layers {
         Layers::Json(layers) => {
             let merged = resolve_native(cli, layers, opts)?;
-            if cli.to.map(Format::from) == Some(Format::Toml) {
-                let converted = knf_convert::json_to_toml(merged, cli.strict)?;
-                warn_if_lossy(converted.lossy);
-                (Format::Toml, format::emit(converted.value, pretty))
+            if to == Some(Format::Toml) {
+                let converted = knf_convert::json_to_toml(merged, policy)?;
+                (Format::Toml, emit_converted(converted, pretty))
             } else {
                 (Format::Json, format::emit(merged, pretty))
             }
         }
         Layers::Toml(layers) => {
             let merged = resolve_native(cli, layers, opts)?;
-            if cli.to.map(Format::from) == Some(Format::Json) {
-                let converted = knf_convert::toml_to_json(merged, cli.strict)?;
-                warn_if_lossy(converted.lossy);
-                (Format::Json, format::emit(converted.value, pretty))
+            if to == Some(Format::Json) {
+                let converted = knf_convert::toml_to_json(merged, policy)?;
+                (Format::Json, emit_converted(converted, pretty))
             } else {
                 (Format::Toml, format::emit(merged, pretty))
             }
@@ -141,10 +146,15 @@ fn run_pipeline(
     Ok((text.map_err(|err| explain_pipeline(err, None))?, format))
 }
 
-fn warn_if_lossy(lossy: bool) {
-    if lossy {
+/// Warns when the conversion was lossy, then serializes the converted value.
+fn emit_converted<V: ConfigFormat>(
+    converted: Converted<V>,
+    pretty: bool,
+) -> anyhow::Result<String> {
+    if converted.lossy {
         eprintln!("warning: conversion was lossy; rerun with --strict to find the affected keys");
     }
+    format::emit(converted.value, pretty)
 }
 
 fn resolve_native<V: ConfigFormat>(

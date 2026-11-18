@@ -26,9 +26,8 @@ dump(config, "merged.toml")
 
 - `load` merges left to right: objects recurse; arrays, scalars and `None`
   replace. All files must share one format. An empty list returns `{}`.
-- `deep_merge` applies those merge rules to two dicts and returns a new dict.
-  Interpolation runs during `load()`. Overrides preserve previously resolved
-  references at their resolved values.
+- `deep_merge(cfg, overrides)` returns a new dict: dicts merge recursively;
+  lists, scalars and `None` replace. It does not re-run interpolation.
 - `interpolate=True` resolves `${key.path}` and `${env:NAME}` against the
   final document. A whole-string reference merges as the value it names, so
   an object referent merges with an object from another file.
@@ -43,12 +42,12 @@ dump(config, "merged.toml")
 - `accumulate` collects same-format files along a relative target path, with
   the target last. `filter_paths` filters a list by glob without I/O.
 - `dumps` returns JSON or TOML text. `dump` infers the format from the path
-  extension and requires an explicit format for text streams.
+  extension and requires an explicit format for text streams. See
+  `dumps_toml` docs for TOML limits.
 - Errors: `knf.ParseError` and `knf.InterpolationError` (both `ValueError`s),
   `ValueError` for bad arguments, and `OSError` subclasses for I/O failures.
 - TOML datetimes become `datetime`, `date` or `time` objects.
 
-Launch a Python script with `knf base.toml -c seed=42 --exec -- python fit.py`
-and read the resolved dict as `knf.config` inside the script.
+Scripts launched with `knf --exec` can read the resolved dict as `knf.config`.
 
 See the [project README](https://github.com/binado/knf) for details.

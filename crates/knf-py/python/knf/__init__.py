@@ -1,8 +1,8 @@
 """Load and merge layered JSON and TOML configuration files into a dict.
 
 Inputs must share one format. TOML dates and times become Python date/time
-objects, with fractional seconds truncated to microseconds.
-Pass ``shallow="db.*"`` to ``load`` to replace the immediate children of ``db``
+objects, with fractional seconds truncated to microseconds. Pass
+``shallow="db.*"`` to ``load`` to replace the immediate children of ``db``
 wholesale, using the same key-path glob syntax as the command line.
 
 The same Rust pipeline the ``knf`` command line runs, called natively::
@@ -13,8 +13,9 @@ The same Rust pipeline the ``knf`` command line runs, called natively::
 
 ``accumulate`` discovers ordered input paths; ``filter_paths`` selects from an
 existing list without filesystem access. Both return ``pathlib.Path`` objects
-that can be passed directly to ``load``. ``deep_merge`` applies in-memory overrides.
-``dumps`` and ``dump`` serialize a dict as JSON or TOML.
+that can be passed directly to ``load``. ``deep_merge`` applies in-memory
+overrides. ``dumps`` and ``dump`` serialize a dict as JSON or TOML. Under
+``knf --exec``, ``knf.config`` holds the resolved configuration.
 """
 
 import os as _os
@@ -35,7 +36,7 @@ def dump(data, target, *, format=None, pretty=True):
         if format is None:
             suffix = _os.path.splitext(path)[1].lower()
             if suffix not in (".json", ".toml"):
-                raise ValueError("cannot infer format from path. Pass format='json' or 'toml'")
+                raise ValueError("cannot infer format from path; pass format='json' or 'toml'")
             format = suffix[1:]
         text = dumps(data, format=format, pretty=pretty)
         with open(path, "w", encoding="utf-8") as fp:
@@ -72,7 +73,11 @@ def __getattr__(name):
     path = _os.environ.get("KNF_CONFIG_PATH")
     if not path:
         raise RuntimeError("knf.config requires a run launched with knf [FILES] --exec -- COMMAND")
-    config = load([path], interpolate=False)
+    # The snapshot is already resolved, so skip interpolation; it may be JSON or TOML.
+    try:
+        config = load([path], interpolate=False)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"cannot load KNF_CONFIG_PATH={path!r}: {exc}") from exc
     globals()["config"] = config
     return config
 

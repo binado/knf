@@ -214,7 +214,7 @@ Stdin cannot supply both a merge layer and context.
 Run the command and arguments after --. KNF_CONFIG_PATH points to a private
 temporary JSON or TOML file containing the merged configuration. The file is
 removed when the command finishes. The command inherits standard streams and
-its exit status is returned.
+its exit status is returned. Cannot be combined with --to or --list-files.
 
   knf base.toml -c seed=42 --exec -- python fit.py --replicate 2"
     )]
@@ -222,7 +222,9 @@ its exit status is returned.
 }
 
 impl Cli {
-    /// Leave clap's file delimiter alone unless `--exec` appears before it.
+    /// Splits the child command (everything after the first `--`) off argv when
+    /// `--exec` precedes that `--`, otherwise leaves argv for clap. Exits with a
+    /// usage error if `--exec` has no command.
     pub fn parse_command(args: impl IntoIterator<Item = OsString>) -> (Self, Vec<OsString>) {
         let mut args: Vec<_> = args.into_iter().collect();
         let delimiter = args.iter().skip(1).position(|arg| arg == "--");

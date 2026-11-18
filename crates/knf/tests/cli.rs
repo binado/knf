@@ -88,6 +88,110 @@ fn exec_requires_delimiter_and_command() {
     }
 }
 
+#[test]
+fn exec_scan_ignores_exec_and_delimiter_that_are_not_structural() {
+    let dir = tree(&[("--exec", r#"{"standalone":true}"#), ("a.json", "{}")]);
+    // `--exec` after the first `--` is a filename, not the flag.
+    assert_eq!(
+        run(&dir, &["-f", "json", "--", "--exec"]),
+        "{\n  \"standalone\": true\n}\n"
+    );
+    // A repeated flag is a clap error, not a command.
+    knf(&dir)
+        .args(["a.json", "--exec", "--exec", "--", "true"])
+        .assert()
+        .code(2);
+    // An option value of `--exec` or `--` is never structural.
+    for args in [
+        &["a.json", "-m", "--exec", "--", "true"][..],
+        &["a.json", "-c", "--exec", "--", "true"][..],
+        &["a.json", "--merge-key", "--", "true"][..],
+        &["a.json", "-c", "--", "true"][..],
+    ] {
+        knf(&dir).args(args).assert().code(2);
+    }
+    // Attached values are not mistaken for the flag.
+    knf(&dir)
+        .args(["a.json", "-i", "--merge-key=--exec", "--exec", "--", "true"])
+        .assert()
+        .success();
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_command_may_itself_contain_exec_and_delimiters() {
+    let dir = tree(&[("a.json", "{}")]);
+    let out = knf(&dir)
+        .args([
+            "a.json", "--exec", "--", "echo", "--exec", "--", "--exec", "x",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(out.stdout, b"--exec -- --exec x\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_spawn_failure_reports_the_program_and_removes_snapshot() {
+    let dir = tree(&[("a.json", "{}")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let args = ["a.json", "--exec", "--", "knf-no-such-program"];
+    let mut cmd = knf(&dir);
+    let err = err_stderr(
+        with_env(
+            cmd.args(args),
+            &[("TMPDIR", Some(tmp.path().to_str().unwrap()))],
+        ),
+        &args,
+    );
+    assert!(err.contains("running \"knf-no-such-program\""), "{err}");
+    assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_reports_signal_death_as_128_plus_signal() {
+    let dir = tree(&[("a.json", r#"{"a":1}"#)]);
+    let out = knf(&dir)
+        .args([
+            "a.json",
+            "--exec",
+            "--",
+            "sh",
+            "-c",
+            r#"echo "$KNF_CONFIG_PATH"; kill -TERM $$"#,
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(143));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(!std::path::Path::new(stdout.trim()).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_snapshot_of_toml_input_is_toml_and_keeps_datetimes() {
+    let dir = tree(&[("a.toml", "when = 1979-05-27T07:32:00Z\n")]);
+    let out = knf(&dir)
+        .args([
+            "a.toml",
+            "--exec",
+            "--",
+            "sh",
+            "-c",
+            r#"echo "$KNF_CONFIG_PATH"; cat "$KNF_CONFIG_PATH""#,
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let (path, body) = stdout.split_once('\n').unwrap();
+    assert_eq!(std::path::Path::new(path).extension().unwrap(), "toml");
+    assert!(body.contains("when = 1979-05-27T07:32:00Z"), "{body}");
+    assert!(!std::path::Path::new(path).exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn exec_inherits_streams_and_cleans_snapshot_after_nonzero_exit() {
@@ -2097,5 +2201,31 @@ fn strict_requires_an_output_format_before_reading_inputs() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
-    assert!(String::from_utf8(out.stderr).unwrap().contains("--to"));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("required arguments were not provided") && stderr.contains("--to"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn strict_conflicts_with_exec() {
+    let dir = tree(&[("a.json", r#"{"a":1}"#)]);
+    knf(&dir)
+        .args(["a.json", "--to", "json", "--strict", "--exec", "--", "true"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn same_format_strict_is_a_no_op() {
+    let dir = tree(&[("a.json", r#"{"n":null,"big":18446744073709551615}"#)]);
+    let args = ["a.json", "--compact"];
+    let plain = run(&dir, &args);
+    let out = knf(&dir)
+        .args(["a.json", "--compact", "--to", "json", "--strict"])
+        .output()
+        .unwrap();
+    assert!(out.status.success() && out.stderr.is_empty());
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), plain);
 }

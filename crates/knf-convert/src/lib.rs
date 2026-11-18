@@ -12,44 +12,65 @@ pub struct ConversionError {
     reason: &'static str,
 }
 
+impl ConversionError {
+    /// Key path of the offending value, or `<root>`.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Why the value cannot be converted.
+    pub fn reason(&self) -> &str {
+        self.reason
+    }
+}
+
+/// Whether lossy mappings are applied or rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Policy {
+    /// Apply lossy mappings and report them in [`Converted::lossy`].
+    Lossy,
+    /// Reject lossy mappings with a [`ConversionError`].
+    Strict,
+}
+
 type Result<T> = std::result::Result<T, ConversionError>;
 
 /// A converted value and whether any mapping was lossy.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Converted<T> {
     pub value: T,
-    /// True when a lossy mapping was applied; always false under `strict`.
+    /// True when a lossy mapping was applied; always false under [`Policy::Strict`].
     pub lossy: bool,
 }
 
-/// Converts TOML to JSON. When `strict` is false, dates, times and datetimes
+/// Converts TOML to JSON. Under [`Policy::Lossy`], dates, times and datetimes
 /// become strings in TOML's standard notation, and non-finite floats become
-/// `"nan"`, `"inf"` or `"-inf"`. Strict conversion rejects those mappings.
-pub fn toml_to_json(value: Toml, strict: bool) -> Result<Converted<Json>> {
-    let mut converter = Converter::new(strict);
+/// `"nan"`, `"inf"` or `"-inf"`. [`Policy::Strict`] rejects those mappings.
+pub fn toml_to_json(value: Toml, policy: Policy) -> Result<Converted<Json>> {
+    let mut converter = Converter::new(policy);
     let value = converter.convert_to_json(value)?;
     Ok(converter.finish(value))
 }
 
-/// Converts JSON to TOML. When `strict` is false, null object fields are
+/// Converts JSON to TOML. Under [`Policy::Lossy`], null object fields are
 /// omitted and integers above `i64::MAX` become floats. Strict conversion
 /// rejects those mappings. Null array entries and root null always fail.
-pub fn json_to_toml(value: Json, strict: bool) -> Result<Converted<Toml>> {
-    let mut converter = Converter::new(strict);
+pub fn json_to_toml(value: Json, policy: Policy) -> Result<Converted<Toml>> {
+    let mut converter = Converter::new(policy);
     let value = converter.convert_to_toml(value)?;
     Ok(converter.finish(value))
 }
 
 struct Converter {
-    strict: bool,
+    policy: Policy,
     lossy: bool,
     path: Vec<Seg>,
 }
 
 impl Converter {
-    fn new(strict: bool) -> Self {
+    fn new(policy: Policy) -> Self {
         Self {
-            strict,
+            policy,
             lossy: false,
             path: Vec::new(),
         }
@@ -72,7 +93,7 @@ impl Converter {
     }
 
     fn allow_loss(&mut self, reason: &'static str) -> Result<()> {
-        if self.strict {
+        if self.policy == Policy::Strict {
             return Err(self.error(reason));
         }
         self.lossy = true;
@@ -195,7 +216,7 @@ mod tests {
             "[nested]\ndate=1979-05-27\ntime=07:32:00\nlocal=1979-05-27T07:32:00\n\
              offset=1979-05-27T07:32:00-07:00\nfloats=[nan, inf, -inf, -nan]\n",
         );
-        let out = toml_to_json(input, false).unwrap();
+        let out = toml_to_json(input, Policy::Lossy).unwrap();
         assert!(out.lossy);
         assert_eq!(
             out.value,
@@ -211,7 +232,7 @@ mod tests {
 
     #[test]
     fn toml_lossless_values_are_not_flagged() {
-        let out = toml_to_json(toml("a = 1\nb = [1.5, 'x', true]\n"), true).unwrap();
+        let out = toml_to_json(toml("a = 1\nb = [1.5, 'x', true]\n"), Policy::Strict).unwrap();
         assert!(!out.lossy);
         assert_eq!(out.value, json!({"a": 1, "b": [1.5, "x", true]}));
     }
@@ -228,7 +249,7 @@ mod tests {
             ("[n]\nv=[-inf]", "n.v[0]"),
             ("a=[{b=[1979-05-27]}]", "a[0].b[0]"),
         ] {
-            let message = err(toml_to_json(toml(text), true));
+            let message = err(toml_to_json(toml(text), Policy::Strict));
             assert!(
                 message.starts_with(&format!("{path}: ")),
                 "{text}: {message}"
@@ -239,7 +260,7 @@ mod tests {
     #[test]
     fn json_lossy_values_are_adjusted() {
         let input = json!({"nested": {"drop": null, "large": u64::MAX, "float": 1.5}});
-        let out = json_to_toml(input, false).unwrap();
+        let out = json_to_toml(input, Policy::Lossy).unwrap();
         assert!(out.lossy);
         let nested = out.value["nested"].as_table().unwrap();
         assert!(!nested.contains_key("drop"));
@@ -249,21 +270,21 @@ mod tests {
 
     #[test]
     fn json_all_null_object_becomes_empty_table() {
-        let out = json_to_toml(json!({"a": {"b": null}}), false).unwrap();
+        let out = json_to_toml(json!({"a": {"b": null}}), Policy::Lossy).unwrap();
         assert!(out.lossy);
         assert_eq!(out.value, toml("[a]\n"));
     }
 
     #[test]
     fn json_integer_boundaries() {
-        let min = json_to_toml(json!({"v": i64::MIN}), true).unwrap();
+        let min = json_to_toml(json!({"v": i64::MIN}), Policy::Strict).unwrap();
         assert_eq!(min.value["v"].as_integer(), Some(i64::MIN));
-        let max = json_to_toml(json!({"v": i64::MAX}), true).unwrap();
+        let max = json_to_toml(json!({"v": i64::MAX}), Policy::Strict).unwrap();
         assert_eq!(max.value["v"].as_integer(), Some(i64::MAX));
         let over = json!({"v": i64::MAX as u64 + 1});
-        assert!(json_to_toml(over.clone(), false).unwrap().lossy);
+        assert!(json_to_toml(over.clone(), Policy::Lossy).unwrap().lossy);
         assert_eq!(
-            err(json_to_toml(over, true)),
+            err(json_to_toml(over, Policy::Strict)),
             "v: integer exceeds TOML's signed 64-bit range"
         );
     }
@@ -271,34 +292,44 @@ mod tests {
     #[test]
     fn json_lossless_values_are_not_flagged() {
         let input = json!({"a": [1, {"b": 2.5}], "c": "x", "d": false});
-        let out = json_to_toml(input, true).unwrap();
+        let out = json_to_toml(input, Policy::Strict).unwrap();
         assert!(!out.lossy);
     }
 
     #[test]
     fn strict_json_rejects_each_lossy_kind_with_its_path() {
         assert_eq!(
-            err(json_to_toml(json!({"n": {"drop": null}}), true)),
+            err(json_to_toml(json!({"n": {"drop": null}}), Policy::Strict)),
             "n.drop: TOML cannot represent null object fields"
         );
         assert_eq!(
-            err(json_to_toml(json!({"a": [{"b": u64::MAX}]}), true)),
+            err(json_to_toml(
+                json!({"a": [{"b": u64::MAX}]}),
+                Policy::Strict
+            )),
             "a[0].b: integer exceeds TOML's signed 64-bit range"
         );
     }
 
     #[test]
     fn json_null_in_arrays_and_at_root_fails_in_every_mode() {
-        for strict in [false, true] {
+        for policy in [Policy::Lossy, Policy::Strict] {
             assert_eq!(
-                err(json_to_toml(json!({"a": [1, null]}), strict)),
+                err(json_to_toml(json!({"a": [1, null]}), policy)),
                 "a[1]: TOML cannot represent null"
             );
             assert_eq!(
-                err(json_to_toml(Json::Null, strict)),
+                err(json_to_toml(Json::Null, policy)),
                 "<root>: TOML cannot represent null"
             );
         }
+    }
+
+    #[test]
+    fn error_exposes_path_and_reason() {
+        let error = json_to_toml(json!({"a": [null]}), Policy::Lossy).unwrap_err();
+        assert_eq!(error.path(), "a[0]");
+        assert_eq!(error.reason(), "TOML cannot represent null");
     }
 
     #[test]
@@ -306,7 +337,7 @@ mod tests {
         // A path leaked by a successful sibling would show up in the error.
         let message = err(json_to_toml(
             json!({"ok": {"x": [1]}, "bad": [null]}),
-            false,
+            Policy::Lossy,
         ));
         assert_eq!(message, "bad[0]: TOML cannot represent null");
     }
