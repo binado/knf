@@ -48,6 +48,6 @@ dump(config, "merged.toml")
   `ValueError` for bad arguments, and `OSError` subclasses for I/O failures.
 - TOML datetimes become `datetime`, `date` or `time` objects.
 
-Scripts launched with `knf --exec` can read the resolved dict as `knf.config`.
+Scripts launched with `knf --exec` can read the resolved dict as `knf.config` (`None` outside `--exec`).
 
 See the [project README](https://github.com/binado/knf) for details.

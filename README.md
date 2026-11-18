@@ -235,7 +235,7 @@ failures raise the usual `OSError` subclasses. TOML datetimes become `datetime`
 objects.
 
 Scripts launched with `--exec` can read `knf.config`, the resolved
-configuration, loaded on first access and cached.
+configuration, loaded on first access and cached. It is `None` outside `--exec`.
 
 ```python
 import knf

@@ -8,9 +8,15 @@ import knf
 import pytest
 
 
-def test_config_requires_exec(monkeypatch):
+def test_config_outside_exec_is_none(monkeypatch):
     monkeypatch.delenv("KNF_CONFIG_PATH", raising=False)
-    with pytest.raises(RuntimeError, match=r"--exec -- COMMAND"):
+    assert knf.config is None
+    assert hasattr(knf, "config")
+
+
+def test_config_unreadable_snapshot_raises_runtime_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("KNF_CONFIG_PATH", str(tmp_path / "missing.toml"))
+    with pytest.raises(RuntimeError, match="KNF_CONFIG_PATH"):
         knf.config
 
 

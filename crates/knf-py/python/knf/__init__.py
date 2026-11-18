@@ -72,7 +72,8 @@ def __getattr__(name):
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     path = _os.environ.get("KNF_CONFIG_PATH")
     if not path:
-        raise RuntimeError("knf.config requires a run launched with knf [FILES] --exec -- COMMAND")
+        # Not launched by `knf --exec`; leave uncached so a later run can set it.
+        return None
     # The snapshot is already resolved, so skip interpolation; it may be JSON or TOML.
     try:
         config = load([path], interpolate=False)

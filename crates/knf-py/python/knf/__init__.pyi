@@ -30,8 +30,8 @@ def dump(
     Text streams require an explicit format. I/O errors propagate unchanged.
     """
 
-config: dict[str, Any]
-"""Resolved configuration of the `knf --exec` run; read lazily from KNF_CONFIG_PATH and cached. Raises RuntimeError outside --exec."""
+config: dict[str, Any] | None
+"""Resolved configuration of the `knf --exec` run; read lazily from KNF_CONFIG_PATH and cached. None outside --exec; raises RuntimeError if the snapshot cannot be loaded."""
 
 def deep_merge(cfg: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
     """Return a new dict by merging dict pairs and replacing other values.
