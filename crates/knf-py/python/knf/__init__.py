@@ -13,13 +13,37 @@ The same Rust pipeline the ``knf`` command line runs, called natively::
 
 ``accumulate`` discovers ordered input paths; ``filter_paths`` selects from an
 existing list without filesystem access. Both return ``pathlib.Path`` objects
-that can be passed directly to ``load``. ``dumps_toml`` and ``dump_toml``
-serialize a dict back to TOML.
+that can be passed directly to ``load``. ``dumps`` and ``dump`` serialize
+a dict as JSON or TOML.
 """
 
 import os as _os
 
-from ._knf import InterpolationError, ParseError, accumulate, dumps_toml, filter_paths, load
+from ._knf import (
+    InterpolationError, ParseError, accumulate, dumps, dumps_toml, filter_paths, load,
+)
+
+
+def dump(data, target, *, format=None, pretty=True):
+    """Write a dict to a UTF-8 path or text stream after serialization succeeds.
+
+    If omitted, the format is inferred from a path's .json or .toml extension.
+    Text streams require an explicit format.
+    """
+    if isinstance(target, (str, _os.PathLike)):
+        path = _os.fspath(target)
+        if format is None:
+            suffix = _os.path.splitext(path)[1].lower()
+            if suffix not in (".json", ".toml"):
+                raise ValueError("cannot infer format from path. Pass format='json' or 'toml'")
+            format = suffix[1:]
+        text = dumps(data, format=format, pretty=pretty)
+        with open(path, "w", encoding="utf-8") as fp:
+            fp.write(text)
+    else:
+        if format is None:
+            raise ValueError("format is required for a text stream")
+        target.write(dumps(data, format=format, pretty=pretty))
 
 
 def dump_toml(data, fp, *, pretty=True):
@@ -39,6 +63,6 @@ def __getattr__(name):
 
 
 __all__ = [
-    "InterpolationError", "ParseError", "accumulate", "dump_toml", "dumps_toml",
-    "filter_paths", "load",
+    "InterpolationError", "ParseError", "accumulate", "dump", "dump_toml",
+    "dumps", "dumps_toml", "filter_paths", "load",
 ]

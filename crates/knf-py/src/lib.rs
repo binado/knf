@@ -24,6 +24,7 @@ use pyo3::exceptions::{
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyList, PyString};
 
+mod from_py;
 mod writer;
 
 create_exception!(
@@ -305,6 +306,7 @@ fn cli(py: Python<'_>) -> PyResult<()> {
 #[pymodule]
 fn _knf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load, m)?)?;
+    m.add_function(wrap_pyfunction!(writer::dumps, m)?)?;
     m.add_function(wrap_pyfunction!(writer::dumps_toml, m)?)?;
     m.add_function(wrap_pyfunction!(accumulate, m)?)?;
     m.add_function(wrap_pyfunction!(filter_paths, m)?)?;
