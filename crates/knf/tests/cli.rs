@@ -72,6 +72,81 @@ fn with_env<'a>(cmd: &'a mut Command, vars: &[(&str, Option<&str>)]) -> &'a mut 
 }
 
 #[test]
+fn exec_requires_delimiter_and_command() {
+    let dir = tree(&[("--exec", r#"{"standalone":true}"#)]);
+    assert_eq!(
+        run(&dir, &["-f", "json", "--", "--exec"]),
+        "{\n  \"standalone\": true\n}\n"
+    );
+    for args in [
+        &["--exec", "some-command"][..],
+        &["--exec", "--"][..],
+        &["--list-files", "--exec", "--", "some-command"][..],
+    ] {
+        knf(&dir).args(args).assert().code(2);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_inherits_streams_and_cleans_snapshot_after_nonzero_exit() {
+    let dir = tree(&[("base.json", r#"{"seed":1}"#)]);
+    let output = knf(&dir)
+        .args([
+            "base.json",
+            "-c",
+            "seed=42",
+            "--compact",
+            "--exec",
+            "--",
+            "sh",
+            "-c",
+            r#"read -r input
+               printf '%s\n' "$input" "$@" "$KNF_CONFIG_PATH"
+               cat "$KNF_CONFIG_PATH" >&2
+               exit 17"#,
+            "sh",
+            "--replicate",
+            "two words",
+            "--",
+        ])
+        .write_stdin("child stdin\n")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(17));
+    assert_eq!(output.stderr, b"{\"seed\":42}\n");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<_> = stdout.lines().collect();
+    assert_eq!(
+        &lines[..4],
+        &["child stdin", "--replicate", "two words", "--"]
+    );
+    let snapshot = std::path::Path::new(lines[4]);
+    assert!(snapshot.is_absolute());
+    assert_eq!(snapshot.extension().unwrap(), "json");
+    assert!(!snapshot.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_does_not_launch_after_merge_error() {
+    let dir = tree(&[("base.json", r#"{"value":"${missing}"}"#)]);
+    knf(&dir)
+        .args([
+            "base.json",
+            "-i",
+            "--exec",
+            "--",
+            "sh",
+            "-c",
+            "touch launched",
+        ])
+        .assert()
+        .code(1);
+    assert!(!dir.path().join("launched").exists());
+}
+
+#[test]
 fn merge_key_resolves_final_layers_and_inline_overrides_in_both_formats() {
     let dir = tree(&[
         (

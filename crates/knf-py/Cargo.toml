@@ -29,6 +29,7 @@ doctest = false
 knf-core.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+tempfile.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 pyo3 = { version = "0.29", features = ["abi3-py311"] }

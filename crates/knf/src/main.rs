@@ -4,13 +4,15 @@ mod accumulate;
 mod cli;
 mod explain;
 
+use std::ffi::OsString;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{PathBuf, absolute};
+use std::process::Command;
 
-use clap::Parser;
+use anyhow::Context;
 use knf::{
-    ConfigFormat, InterpOptions, Layers, MergeOptions, ProcessEnv, format, load_layers, merge,
-    merge_interpolate,
+    ConfigFormat, Format, InterpOptions, Layers, MergeOptions, ProcessEnv, format, load_layers,
+    merge, merge_interpolate,
 };
 
 use cli::Cli;
@@ -28,23 +30,27 @@ fn main() {
 pub fn main_from<I, T>(args: I)
 where
     I: IntoIterator<Item = T>,
-    T: Into<std::ffi::OsString> + Clone,
+    T: Into<OsString>,
 {
     // clap handles --help/--version and exits 2 on usage errors.
-    let cli = Cli::parse_from(args);
+    let (cli, command) = Cli::parse_command(args.into_iter().map(Into::into));
 
-    if let Err(err) = run(cli) {
-        // Frontend help is added by `explain`; library errors remain flag-free.
-        eprintln!("error: {err}");
-        for cause in err.chain().skip(1) {
-            eprintln!("  caused by: {cause}");
+    match run(cli, &command) {
+        Ok(0) => (),
+        Ok(code) => std::process::exit(code),
+        Err(err) => {
+            // Frontend help is added by `explain`; library errors remain flag-free.
+            eprintln!("error: {err}");
+            for cause in err.chain().skip(1) {
+                eprintln!("  caused by: {cause}");
+            }
+            std::process::exit(1);
         }
-        std::process::exit(1);
     }
 }
 
 /// Prepare explicit file inputs and terminal overlays for the shared pipeline.
-fn run(cli: Cli) -> anyhow::Result<()> {
+fn run(cli: Cli, command: &[OsString]) -> anyhow::Result<i32> {
     // Validate -c paths before any file I/O.
     for leaf in &cli.set {
         leaf.validate_keys().map_err(name_the_inline_layer_flag)?;
@@ -70,14 +76,25 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             use std::fmt::Write;
             writeln!(text, "{}", path.display()).expect("writing to a String cannot fail");
         }
-        return write_stdout(&text);
+        write_stdout(&text)?;
+        return Ok(0);
     }
 
-    run_pipeline(&cli, &files, &opts)
+    let (text, format) = run_pipeline(&cli, &files, &opts)?;
+    if let Some((program, args)) = command.split_first() {
+        run_child(program, args, &text, format)
+    } else {
+        write_stdout(&text)?;
+        Ok(0)
+    }
 }
 
 /// Dispatch once to a native pipeline; every later stage retains its type.
-fn run_pipeline(cli: &Cli, files: &[PathBuf], opts: &MergeOptions) -> anyhow::Result<()> {
+fn run_pipeline(
+    cli: &Cli,
+    files: &[PathBuf],
+    opts: &MergeOptions,
+) -> anyhow::Result<(String, Format)> {
     let mut inputs = files.to_vec();
     inputs.extend(cli.with.iter().cloned());
     let layers = load_layers(&inputs, cli.format.map(Into::into))
@@ -92,7 +109,7 @@ fn run_native<V: ConfigFormat>(
     cli: &Cli,
     mut layers: Vec<V>,
     opts: &MergeOptions,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<(String, Format)> {
     let context = cli
         .with
         .as_ref()
@@ -117,13 +134,39 @@ fn run_native<V: ConfigFormat>(
         merge(layers, opts)
     };
     let text = format::emit(merged, !cli.compact).map_err(|err| explain_pipeline(err, None))?;
-    write_stdout(&text)
+    Ok((text, V::FORMAT))
+}
+
+fn run_child(
+    program: &OsString,
+    args: &[OsString],
+    text: &str,
+    format: Format,
+) -> anyhow::Result<i32> {
+    let mut snapshot = tempfile::Builder::new()
+        .prefix("knf-")
+        .suffix(&format!(".{}", format.extension()))
+        .tempfile()
+        .context("creating configuration snapshot")?;
+    snapshot
+        .write_all(text.as_bytes())
+        .context("writing configuration snapshot")?;
+    let path = absolute(snapshot.path()).context("resolving configuration snapshot path")?;
+    let status = Command::new(program)
+        .args(args)
+        .env("KNF_CONFIG_PATH", path)
+        .status()
+        .with_context(|| format!("running {program:?}"))?;
+    #[cfg(unix)]
+    if let Some(signal) = std::os::unix::process::ExitStatusExt::signal(&status) {
+        return Ok(128 + signal);
+    }
+    Ok(status.code().unwrap_or(1))
 }
 
 /// Writes to stdout, treating a closed pipe as success so `knf big.json | head`
 /// does not report an error the user cannot act on.
 fn write_stdout(text: &str) -> anyhow::Result<()> {
-    use anyhow::Context;
     match std::io::stdout().write_all(text.as_bytes()) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),

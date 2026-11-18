@@ -334,6 +334,7 @@ dependencies = [
  "knf-core",
  "pyo3",
  "serde_json",
+ "tempfile",
  "toml",
 ]
 

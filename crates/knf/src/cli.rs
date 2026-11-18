@@ -1,6 +1,6 @@
 //! clap derive structs.
 
-use std::path::PathBuf;
+use std::{ffi::OsString, path::PathBuf};
 
 use clap::{CommandFactory, Parser, error::ErrorKind};
 use knf::glob::KeyGlobPattern;
@@ -35,7 +35,8 @@ Objects merge recursively; arrays, scalars and null replace wholesale.
 
   knf base.toml prod.toml
   knf base.json - -f json
-  knf defaults.toml -c server.port=8080"
+  knf defaults.toml -c server.port=8080
+  knf base.toml -c seed=42 --exec -- python fit.py --replicate 2"
 )]
 pub struct Cli {
     /// Files to merge as layers; `-` reads stdin
@@ -182,9 +183,48 @@ Stdin cannot supply both a merge layer and context.
     /// Disable pretty-printing
     #[arg(long)]
     pub compact: bool,
+
+    /// Run a command after -- with the merged file in KNF_CONFIG_PATH
+    #[arg(
+        long,
+        conflicts_with = "list_files",
+        long_help = "\
+Run the command and arguments after --. KNF_CONFIG_PATH points to a private
+temporary JSON or TOML file containing the merged configuration. The file is
+removed when the command finishes. The command inherits standard streams and
+its exit status is returned.
+
+  knf base.toml -c seed=42 --exec -- python fit.py --replicate 2"
+    )]
+    pub exec: bool,
 }
 
 impl Cli {
+    /// Leave clap's file delimiter alone unless `--exec` appears before it.
+    pub fn parse_command(args: impl IntoIterator<Item = OsString>) -> (Self, Vec<OsString>) {
+        let mut args: Vec<_> = args.into_iter().collect();
+        let delimiter = args.iter().skip(1).position(|arg| arg == "--");
+        let end = delimiter.map_or(args.len(), |index| index + 1);
+        let command =
+            if args.iter().take(end).skip(1).any(|arg| arg == "--exec") && end < args.len() {
+                let command = args.split_off(end + 1);
+                args.pop();
+                command
+            } else {
+                Vec::new()
+            };
+        let cli = Self::parse_from(args);
+        if cli.exec && command.is_empty() {
+            Self::command()
+                .error(
+                    ErrorKind::MissingRequiredArgument,
+                    "--exec requires -- followed by a command",
+                )
+                .exit();
+        }
+        (cli, command)
+    }
+
     /// Validate stdin sources after filtering, before reading any documents.
     pub fn validate_stdin(&self, files: &[PathBuf]) {
         if self

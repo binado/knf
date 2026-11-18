@@ -3,6 +3,8 @@ from pathlib import Path
 from collections.abc import Sequence
 from typing import Any, Optional, TextIO, Union
 
+config: dict[str, Any]
+
 def dumps_toml(data: dict[str, Any], *, pretty: bool = True) -> str:
     """Serialize a dict as TOML with a trailing newline.
 

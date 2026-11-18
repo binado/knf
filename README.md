@@ -190,6 +190,15 @@ error.
 
 **`--compact`**: disable pretty-printing.
 
+**`--exec -- COMMAND [ARGS...]`**: run a command with the merged configuration.
+The child inherits standard streams and returns its exit status. Its
+`KNF_CONFIG_PATH` environment variable points to a private temporary JSON or
+TOML file that is removed when the command finishes.
+
+```bash
+knf base.toml pilot.toml -c seed=42 --exec -- python fit.py --replicate 2
+```
+
 ## Python API
 
 ```python
@@ -213,6 +222,15 @@ with open("merged.toml", "w", encoding="utf-8") as fp:
 raises `knf.ParseError` or `knf.InterpolationError` (both `ValueError`s); I/O
 failures raise the usual `OSError` subclasses. TOML datetimes become `datetime`
 objects.
+
+Scripts launched with `--exec` can read `knf.config`. Python loads the resolved
+configuration as a dict on first access and caches it for the process.
+
+```python
+import knf
+
+seed = knf.config["seed"]
+```
 
 `dumps_toml` returns TOML text; `dump_toml` writes it to a text stream. Both
 accept `pretty=False` for compact output. TOML cannot represent `None`, integers

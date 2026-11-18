@@ -17,12 +17,25 @@ that can be passed directly to ``load``. ``dumps_toml`` and ``dump_toml``
 serialize a dict back to TOML.
 """
 
+import os as _os
+
 from ._knf import InterpolationError, ParseError, accumulate, dumps_toml, filter_paths, load
 
 
 def dump_toml(data, fp, *, pretty=True):
     """Serialize with :func:`dumps_toml`, then write to the text stream ``fp``."""
     fp.write(dumps_toml(data, pretty=pretty))
+
+
+def __getattr__(name):
+    if name != "config":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    path = _os.environ.get("KNF_CONFIG_PATH")
+    if not path:
+        raise RuntimeError("knf.config requires a run launched with knf [FILES] --exec -- COMMAND")
+    config = load([path], interpolate=False)
+    globals()["config"] = config
+    return config
 
 
 __all__ = [

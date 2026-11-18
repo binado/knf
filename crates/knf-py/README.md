@@ -39,4 +39,7 @@ config = load(files)
   `ValueError` for bad arguments, and `OSError` subclasses for I/O failures.
 - TOML datetimes become `datetime`, `date` or `time` objects.
 
+Launch a Python script with `knf base.toml -c seed=42 --exec -- python fit.py`
+and read the resolved dict as `knf.config` inside the script.
+
 See the [project README](https://github.com/binado/knf) for details.
