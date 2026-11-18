@@ -1,11 +1,12 @@
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from io import StringIO
+import json
 import math
 import tomllib
 
 import pytest
 
-from knf import dump_toml, dumps_toml, load
+from knf import dump, dump_toml, dumps, dumps_toml, load
 
 
 def parse(text: str) -> dict:
@@ -100,3 +101,57 @@ def test_dump_serializes_before_writing_and_propagates_io_errors():
     fp.close()
     with pytest.raises(ValueError, match="closed file"):
         dump_toml({"x": 1}, fp)
+
+
+@pytest.mark.parametrize(
+    ("format", "data", "parse_text"),
+    [
+        ("json", {"nested": [None, -(2**63), 2**64 - 1, "olá"]}, json.loads),
+        ("toml", {"nested": {"date": date(2026, 11, 13)}}, tomllib.loads),
+    ],
+)
+@pytest.mark.parametrize("pretty", [True, False])
+def test_dump_formats(format, data, parse_text, pretty, tmp_path):
+    text = dumps(data, format=format, pretty=pretty)
+    assert text.endswith("\n")
+    assert parse_text(text) == data
+
+    path = tmp_path / f"config.{format.upper()}"
+    assert dump(data, path, pretty=pretty) is None
+    assert path.read_text(encoding="utf-8") == text
+
+    path = tmp_path / "config.txt"
+    assert dump(data, str(path), format=format, pretty=pretty) is None
+    assert path.read_text(encoding="utf-8") == text
+
+    stream = StringIO()
+    assert dump(data, stream, format=format, pretty=pretty) is None
+    assert stream.getvalue() == text
+
+
+@pytest.mark.parametrize(
+    ("format", "value", "error"),
+    [
+        ("json", date(2026, 11, 13), TypeError),
+        ("json", math.inf, ValueError),
+        ("json", 2**64, ValueError),
+        ("toml", None, TypeError),
+    ],
+)
+def test_dump_serializes_before_opening_path(format, value, error, tmp_path):
+    path = tmp_path / f"config.{format}"
+    path.write_text("unchanged", encoding="utf-8")
+    with pytest.raises(error, match=r"nested.*items.*\[0\]"):
+        dump({"nested": {"items": [value]}}, path)
+    assert path.read_text(encoding="utf-8") == "unchanged"
+
+
+def test_dump_requires_a_known_format(tmp_path):
+    with pytest.raises(TypeError):
+        dumps({})
+    with pytest.raises(ValueError, match="format"):
+        dumps({}, format="yaml")
+    with pytest.raises(ValueError, match="format"):
+        dump({}, tmp_path / "config.yaml")
+    with pytest.raises(ValueError, match="format"):
+        dump({}, StringIO())

@@ -8,7 +8,7 @@ pip install pyknf  # the `knf` module and the `knf` executable
 ```
 
 ```python
-from knf import accumulate, filter_paths, load
+from knf import accumulate, dump, dumps, filter_paths, load
 
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
@@ -18,6 +18,9 @@ config = load(["config.toml"], interpolate=True, merge_key="extends")
 files = accumulate("services/api/prod.toml", base_dir=project_root)
 files = filter_paths(files, "{defaults,prod}.toml", filename_only=True)
 config = load(files)
+
+text = dumps(config, format="toml")
+dump(config, "merged.toml")
 ```
 
 - `load` merges left to right: objects recurse; arrays, scalars and `None`
@@ -35,6 +38,8 @@ config = load(files)
   Requires `interpolate=True` and honors `shallow` at destination paths.
 - `accumulate` collects same-format files along a relative target path, with
   the target last. `filter_paths` filters a list by glob without I/O.
+- `dumps` returns JSON or TOML text. `dump` infers the format from the path
+  extension and requires an explicit format for text streams.
 - Errors: `knf.ParseError` and `knf.InterpolationError` (both `ValueError`s),
   `ValueError` for bad arguments, and `OSError` subclasses for I/O failures.
 - TOML datetimes become `datetime`, `date` or `time` objects.

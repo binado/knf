@@ -193,7 +193,7 @@ error.
 ## Python API
 
 ```python
-from knf import accumulate, dump_toml, dumps_toml, filter_paths, load
+from knf import accumulate, dump, dumps, filter_paths, load
 
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
@@ -204,9 +204,8 @@ files = accumulate("services/api/prod.toml", base_dir=project_root)
 files = filter_paths(files, "{defaults,prod}.toml", filename_only=True)
 config = load(files)
 
-text = dumps_toml(config)
-with open("merged.toml", "w", encoding="utf-8") as fp:
-    dump_toml(config, fp)
+text = dumps(config, format="toml")
+dump(config, "merged.toml")
 ```
 
 `load` returns a `dict` and follows the same rules as the CLI. Invalid input
@@ -214,9 +213,10 @@ raises `knf.ParseError` or `knf.InterpolationError` (both `ValueError`s); I/O
 failures raise the usual `OSError` subclasses. TOML datetimes become `datetime`
 objects.
 
-`dumps_toml` returns TOML text; `dump_toml` writes it to a text stream. Both
-accept `pretty=False` for compact output. TOML cannot represent `None`, integers
-outside signed 64-bit range, or times with a `tzinfo`.
+`dumps` returns JSON or TOML text. `dump` writes to a UTF-8 path or text stream.
+It infers the format from a path extension and requires `format` for a stream.
+Both accept `pretty=False` for compact output. The TOML-specific helpers
+`dumps_toml` and `dump_toml` are also available.
 
 ## License
 
