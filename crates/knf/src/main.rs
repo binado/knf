@@ -9,7 +9,7 @@ use std::path::{PathBuf, absolute};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use knf::{
     ConfigFormat, Format, InterpOptions, Layers, MergeOptions, ProcessEnv, format, load_layers,
     merge, merge_interpolate,
@@ -74,7 +74,6 @@ fn run(cli: Cli, command: &[OsString]) -> anyhow::Result<i32> {
     } else if let Some(pattern) = &cli.glob_filename {
         files = knf::fs::filter_paths(&files, pattern, true);
     }
-    cli.validate_stdin(&files);
     if cli.list_files {
         let mut text = String::new();
         for path in &files {
@@ -101,15 +100,24 @@ fn run_pipeline(
 ) -> anyhow::Result<(String, Format)> {
     let mut inputs = files.to_vec();
     inputs.extend(cli.with.iter().cloned());
-    let layers = load_layers(&inputs, cli.format.map(Into::into))
-        .map_err(|err| explain_pipeline(err, cli.with.as_deref()))?;
+    let to = cli.to.map(Format::from);
+    let layers = if inputs.is_empty() {
+        match to {
+            Some(Format::Json) => Layers::Json(Vec::new()),
+            Some(Format::Toml) => Layers::Toml(Vec::new()),
+            None => {
+                bail!("no input files to infer a format from\nhelp: pass --to json or --to toml")
+            }
+        }
+    } else {
+        load_layers(&inputs).map_err(|err| explain_pipeline(err, cli.with.as_deref()))?
+    };
     let pretty = !cli.compact;
     let policy = if cli.strict {
         Policy::Strict
     } else {
         Policy::Lossy
     };
-    let to = cli.to.map(Format::from);
     let (format, text) = match layers {
         Layers::Json(layers) => {
             let merged = resolve_native(cli, layers, opts)?;

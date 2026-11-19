@@ -93,7 +93,6 @@ fn default_base_returns_relative_paths() {
 #[test]
 fn invalid_targets_are_typed_and_never_need_filesystem_access() {
     for (path, expected) in [
-        ("-", AccumulateTargetError::Stdin),
         ("foo/../target.toml", AccumulateTargetError::InvalidPath),
         ("target.yaml", AccumulateTargetError::UnknownExtension),
         ("", AccumulateTargetError::UnknownExtension),

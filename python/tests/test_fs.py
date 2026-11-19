@@ -90,7 +90,7 @@ def test_custom_pathlike_inputs(tree):
     ]
 
 
-@pytest.mark.parametrize("target", ["-", "../missing.toml", "foo/../missing.toml", "missing.yaml", ""])
+@pytest.mark.parametrize("target", ["../missing.toml", "foo/../missing.toml", "missing.yaml", ""])
 def test_invalid_targets_fail_before_filesystem_access(tmp_path, target):
     with pytest.raises(ValueError) as info:
         accumulate(target, base_dir=tmp_path / "missing-base")

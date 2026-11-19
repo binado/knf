@@ -5,10 +5,6 @@ use std::path::Path;
 use anyhow::anyhow;
 use knf::{InterpError, LoadError, PathError, Problem};
 
-pub fn context_stdin_conflict() -> &'static str {
-    "stdin cannot supply both a merge layer and --with context"
-}
-
 /// Adds CLI help to unwrapped `LoadError` or `InterpError` pipeline errors.
 ///
 /// `context` is the `--with` path for load failures (`None` for later stages).
@@ -25,19 +21,19 @@ pub fn explain_pipeline(err: impl Into<anyhow::Error>, context: Option<&Path>) -
     }
 }
 
-/// Names the flag that resolves a format-selection error.
+/// Adds help to a load error.
 ///
 /// `context` is the `--with` path when one was supplied. Mixed formats then
 /// share one format with that file, and a directory at that path is not a
 /// merge layer.
 fn explain_load(err: LoadError, context: Option<&Path>) -> anyhow::Error {
     match &err {
-        LoadError::StdinNeedsFormat | LoadError::UnknownExtension { .. } => {
-            anyhow!("{err}: pass -f json or -f toml")
+        LoadError::UnknownExtension { .. } => {
+            anyhow!("{err}\nhelp: name the file with a .json or .toml extension")
         }
-        LoadError::MixedFormats if context.is_some() => anyhow!(
-            "{err}\nhelp: inputs and the --with file must share one format; pass -f json or -f toml"
-        ),
+        LoadError::MixedFormats if context.is_some() => {
+            anyhow!("{err}\nhelp: inputs and the --with file must share one format")
+        }
         LoadError::MixedFormats => {
             anyhow!("{err}\nhelp: merge JSON layers and TOML layers separately")
         }

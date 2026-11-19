@@ -459,11 +459,9 @@ def test_toml_nonfinite_values_and_large_json_integers(write):
     assert load([path]) == {"id": 18446744073709551615, "null": None}
 
 
-def test_wheel_cli_uses_one_native_format_option(write):
-    path = write("a.toml", "name = 'native'")
-    assert subprocess.run(["knf", str(path), "-f", "json"], capture_output=True).returncode == 1
-    out = subprocess.run(["knf", "-f", "toml", "-c", "day=1979-05-27"], capture_output=True, text=True)
+def test_wheel_cli_selects_the_format_of_inline_only_runs_with_to(write):
+    out = subprocess.run(["knf", "--to", "toml", "-c", "day=1979-05-27"], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     assert "day = 1979-05-27" in out.stdout
-    for flag in ("--input-format", "--null-as"):
+    for flag in ("-f", "--format", "--input-format", "--null-as"):
         assert subprocess.run(["knf", flag, "json"], capture_output=True).returncode == 2

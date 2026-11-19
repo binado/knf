@@ -1,7 +1,7 @@
 //! Public API surface smoke tests for `knf`.
 use knf::{
     ConfigFormat, ConfigObject, ConfigValue, Cycle, Env, Format, InterpError, InterpOptions,
-    Layers, LoadError, MergeOptions, PathError, PathLeaf, Problem, ProcessEnv, RefPath, STDIN, Seg,
+    Layers, LoadError, MergeOptions, PathError, PathLeaf, Problem, ProcessEnv, RefPath, Seg,
     Syntax, interpolate, interpolate_with_context, json_or_string, load_layers, merge,
     merge_interpolate, merge_into, render_path, resolve_format, toml_or_string,
 };
@@ -41,7 +41,7 @@ fn native_pipeline<V: ConfigFormat + std::fmt::Debug>(env: &dyn Env) {
         "number"
     );
     let emitted = knf::format::emit(merged, true).unwrap();
-    let _: V = knf::format::parse(&emitted, &knf::format::SourceName::Stdin).unwrap();
+    let _: V = knf::format::parse(&emitted, std::path::Path::new("a.json")).unwrap();
     let doc = "copy=${port}"
         .parse::<PathLeaf<String>>()
         .unwrap()
@@ -120,9 +120,8 @@ fn public_interfaces_support_both_native_types() {
         path.try_into_keys(),
         Err(PathError::IndexInKeyPath { .. })
     ));
-    assert_eq!(STDIN, "-");
-    assert_eq!(resolve_format::<&str>(&[], None).unwrap(), Format::Json);
-    let Layers::Json(layers) = load_layers::<&str>(&[], None).unwrap() else {
+    assert_eq!(resolve_format::<&str>(&[]).unwrap(), Format::Json);
+    let Layers::Json(layers) = load_layers::<&str>(&[]).unwrap() else {
         panic!("default")
     };
     assert!(layers.is_empty());

@@ -6,7 +6,7 @@ use clap::{CommandFactory, Parser, error::ErrorKind};
 use knf::glob::KeyGlobPattern;
 use knf::{Format, PathLeaf};
 
-/// `-f` values. Mirrors [`Format`] because the orphan rule forbids deriving
+/// `--to` values. Mirrors [`Format`] because the orphan rule forbids deriving
 /// `ValueEnum` on it here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum FormatArg {
@@ -34,12 +34,12 @@ Merge layered JSON or TOML files, left to right, and print the result.
 Objects merge recursively; arrays, scalars and null replace wholesale.
 
   knf base.toml prod.toml
-  knf base.json - -f json
+  knf base.json prod.json --to toml
   knf defaults.toml -c server.port=8080
   knf base.toml -c seed=42 --exec -- python fit.py --replicate 2"
 )]
 pub struct Cli {
-    /// Files to merge as layers; `-` reads stdin
+    /// Files to merge as layers; the extension selects JSON or TOML
     #[arg(value_name = "FILE")]
     pub files: Vec<PathBuf>,
 
@@ -51,7 +51,7 @@ pub struct Cli {
         conflicts_with = "glob_filename",
         long_help = "\
 Keep only inputs whose whole path matches a case-sensitive glob. Supports *,
-**, ?, [...], {a,b} and leading ! negation. Stdin matches as -.
+**, ?, [...], {a,b} and leading ! negation.
 
   knf config/**/*.toml -g 'config/**/prod.toml'"
     )]
@@ -80,7 +80,7 @@ Like --glob, but match only the filename.
         value_name = "KEY.PATH=VALUE",
         long_help = "\
 Inline layer applied after all files; repeatable. The value is parsed in the
-selected format, falling back to a string.
+input format (--to when there are no files), falling back to a string.
 
   -c port=8080  -c name=foo  -c version='\"1.0\"'"
     )]
@@ -100,17 +100,14 @@ separate keys; single-quoted spans are literal.
     )]
     pub shallow: Option<KeyGlobPattern>,
 
-    /// Format for parsing and inline typing; required for stdin
-    #[arg(short = 'f', long, value_name = "FORMAT")]
-    pub format: Option<FormatArg>,
-
     /// Convert the merged document to this output format
     #[arg(
         long,
         value_name = "FORMAT",
         long_help = "\
 Convert the document after merging and interpolation. Output defaults to
-the input format.
+the input format. Required when there are no input files, where it also
+selects the format of -c values.
 
 TOML dates, times and datetimes become strings in TOML notation. Non-finite
 TOML floats become strings: nan, inf or -inf. JSON null object fields are
@@ -148,17 +145,13 @@ an object from another layer. --shallow forces replacement.
         long = "with",
         value_name = "FILE",
         requires = "interpolate",
-        requires_if("-", "format"),
         long_help = "\
 Read one context file for interpolation; requires --interpolate. Each complete
 reference path is looked up in the merged document first, then in the context.
 Context values and their dependencies resolve only when referenced. Selected
-containers keep their own children. The context uses the same format as inputs,
-including any -f override. Use - to read context from stdin; requires -f.
-Stdin cannot supply both a merge layer and context.
+containers keep their own children. The context uses the same format as inputs.
 
-  knf foo.toml bar.toml -i --with config.toml
-  generate-config | knf foo.toml -i --with - -f toml"
+  knf foo.toml bar.toml -i --with config.toml"
     )]
     pub with: Option<PathBuf>,
 
@@ -169,12 +162,13 @@ Stdin cannot supply both a merge layer and context.
     /// Run a command after -- with the merged file in KNF_CONFIG_PATH
     #[arg(
         long,
-        conflicts_with_all = ["list_files", "to"],
+        conflicts_with = "list_files",
         long_help = "\
 Run the command and arguments after --. KNF_CONFIG_PATH points to a private
 temporary JSON or TOML file containing the merged configuration. The file is
 removed when the command finishes. The command inherits standard streams and
-its exit status is returned. Cannot be combined with --to or --list-files.
+its exit status is returned. With --to, the file is in the converted format.
+Cannot be combined with --list-files.
 
   knf base.toml -c seed=42 --exec -- python fit.py --replicate 2"
     )]
@@ -207,23 +201,6 @@ impl Cli {
                 .exit();
         }
         (cli, command)
-    }
-
-    /// Validate stdin sources after filtering, before reading any documents.
-    pub fn validate_stdin(&self, files: &[PathBuf]) {
-        if self
-            .with
-            .as_ref()
-            .is_some_and(|path| path.as_os_str() == knf::STDIN)
-            && files.iter().any(|path| path.as_os_str() == knf::STDIN)
-        {
-            Self::command()
-                .error(
-                    ErrorKind::ArgumentConflict,
-                    super::explain::context_stdin_conflict(),
-                )
-                .exit();
-        }
     }
 }
 

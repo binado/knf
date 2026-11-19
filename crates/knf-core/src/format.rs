@@ -1,7 +1,7 @@
 //! Format detection, parsing and emission.
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::ConfigValue;
 use anyhow::{Context, bail};
@@ -38,22 +38,6 @@ impl Format {
 impl fmt::Display for Format {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.extension())
-    }
-}
-
-/// Which input a parse error came from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SourceName {
-    File(PathBuf),
-    Stdin,
-}
-
-impl fmt::Display for SourceName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::File(p) => write!(f, "{}", p.display()),
-            Self::Stdin => f.write_str("<stdin>"),
-        }
     }
 }
 
@@ -110,11 +94,12 @@ impl ConfigFormat for toml::Value {
 }
 
 /// Parse a native document, requiring an object/table root.
-pub fn parse<V: ConfigFormat>(text: &str, source: &SourceName) -> anyhow::Result<V> {
+pub fn parse<V: ConfigFormat>(text: &str, source: &Path) -> anyhow::Result<V> {
     let label = match V::FORMAT {
         Format::Json => "JSON",
         Format::Toml => "TOML",
     };
+    let source = source.display();
     let value = V::parse_document(text).with_context(|| format!("{source}: invalid {label}"))?;
     if value.as_object().is_none() {
         bail!(
@@ -151,7 +136,7 @@ mod tests {
 
     #[test]
     fn top_level_must_be_an_object() {
-        let err = parse::<serde_json::Value>("[1,2]", &SourceName::Stdin).unwrap_err();
+        let err = parse::<serde_json::Value>("[1,2]", Path::new("a.json")).unwrap_err();
         assert!(err.to_string().contains("found array"), "{err}");
     }
 }
