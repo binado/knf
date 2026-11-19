@@ -392,9 +392,8 @@ dependencies = [
  "insta",
  "knf-convert",
  "knf-core",
+ "knf-mdtest",
  "serde_json",
- "shlex",
- "similar 3.2.1",
  "tempfile",
  "toml",
 ]
@@ -420,6 +419,15 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
+]
+
+[[package]]
+name = "knf-mdtest"
+version = "0.7.1"
+dependencies = [
+ "shlex",
+ "similar 3.2.1",
+ "tempfile",
 ]
 
 [[package]]

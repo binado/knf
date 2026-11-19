@@ -19,3 +19,8 @@ name = "knf-py"
 git_only = true
 publish = false
 changelog_update = false
+
+# Test-only harness; never versioned, tagged or published.
+[[package]]
+name = "knf-mdtest"
+release = false

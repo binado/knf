@@ -1,26 +1,27 @@
-//! Executes parsed fixture tests against the `knf` binary and reports or rewrites expectations.
+//! Executes parsed fixture tests against the configured binary and reports or rewrites expectations.
 
 use std::path::Path;
+use std::process::Command;
 
-use assert_cmd::Command;
 use similar::TextDiff;
 
+use crate::Config;
 use crate::parse::{Expected, Test};
 
-pub struct Outcome {
+pub(crate) struct Outcome {
     pub stdout: String,
     pub stderr: String,
     pub code: Option<i32>,
 }
 
-pub fn execute(test: &Test) -> Outcome {
+pub(crate) fn execute(test: &Test, config: &Config) -> Outcome {
     let dir = tempfile::tempdir().expect("tempdir");
     for file in &test.files {
         let full = dir.path().join(&file.path);
         std::fs::create_dir_all(full.parent().expect("has a parent")).expect("mkdir");
         std::fs::write(&full, &file.contents).expect("write input file");
     }
-    let mut cmd = Command::cargo_bin("knf").expect("binary built");
+    let mut cmd = Command::new(config.bin);
     cmd.current_dir(dir.path()).env_clear();
     if let Some(path) = std::env::var_os("PATH") {
         cmd.env("PATH", path);
@@ -28,7 +29,10 @@ pub fn execute(test: &Test) -> Outcome {
     for (name, value) in &test.invocation.env {
         cmd.env(name, value);
     }
-    let out = cmd.args(&test.invocation.args).output().expect("spawn knf");
+    let out = cmd
+        .args(&test.invocation.args)
+        .output()
+        .expect("spawn binary");
     Outcome {
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -41,11 +45,11 @@ fn expected_text(expected: &Option<Expected>) -> &str {
 }
 
 /// One human-readable failure per mismatching stream, each anchored at `file:line`.
-pub fn mismatches(file: &str, test: &Test, outcome: &Outcome) -> Vec<String> {
+pub(crate) fn mismatches(file: &str, test: &Test, outcome: &Outcome) -> Vec<String> {
     let mut failures = Vec::new();
     let mut fail = |what: &str, detail: String| {
         failures.push(format!(
-            "{file}:{line}: {name}\n{what} mismatch:\n{detail}\nrerun: MDTEST_FILTER='{title}' cargo test -p knf-cli --test mdtest",
+            "{file}:{line}: {name}\n{what} mismatch:\n{detail}\nrerun with MDTEST_FILTER='{title}'",
             line = test.line,
             name = test.name,
             title = test.name.rsplit(" - ").next().unwrap_or(&test.name),
@@ -106,7 +110,7 @@ fn rewrite_stream(text: &str, expected: &Option<Expected>, actual: &str) -> Opti
 }
 
 /// Rewrites `stdout`/`stderr` fences of `tests` to match `outcomes`, returning the new text.
-pub fn blessed(text: &str, tests: &[(&Test, Outcome)]) -> String {
+pub(crate) fn blessed(text: &str, tests: &[(&Test, Outcome)]) -> String {
     let mut edits = Vec::new();
     for (test, outcome) in tests {
         let mut insertion = String::new();
@@ -144,13 +148,14 @@ pub fn blessed(text: &str, tests: &[(&Test, Outcome)]) -> String {
     out
 }
 
-pub fn run_file(path: &Path) -> datatest_stable::Result<()> {
+pub(crate) fn run_file(path: &Path, config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
         .expect("utf-8 name");
     let text = std::fs::read_to_string(path)?;
-    let tests = crate::parse::parse(name, &text).map_err(|e| format!("{name}: {e}"))?;
+    let tests =
+        crate::parse::parse(name, &text, config.program).map_err(|e| format!("{name}: {e}"))?;
     let filter = std::env::var("MDTEST_FILTER").ok();
     let selected: Vec<&Test> = tests
         .iter()
@@ -158,7 +163,8 @@ pub fn run_file(path: &Path) -> datatest_stable::Result<()> {
         .collect();
 
     if std::env::var_os("MDTEST_UPDATE").is_some() {
-        let outcomes: Vec<(&Test, Outcome)> = selected.iter().map(|t| (*t, execute(t))).collect();
+        let outcomes: Vec<(&Test, Outcome)> =
+            selected.iter().map(|t| (*t, execute(t, config))).collect();
         let updated = blessed(&text, &outcomes);
         if updated != text {
             std::fs::write(path, updated)?;
@@ -168,7 +174,7 @@ pub fn run_file(path: &Path) -> datatest_stable::Result<()> {
 
     let mut failures = Vec::new();
     for test in selected {
-        failures.extend(mismatches(name, test, &execute(test)));
+        failures.extend(mismatches(name, test, &execute(test, config)));
     }
     if failures.is_empty() {
         return Ok(());

@@ -4,7 +4,7 @@ The CLI binary (`knf-cli`): argv parsing, stderr formatting and `--exec` process
 
 ## Adding a CLI test
 
-Prefer a Markdown fixture in `resources/mdtest/*.md` (run by `tests/mdtest/`). Each heading is a section; a section with a `console` block is a test, and child sections inherit parent input files.
+Prefer a Markdown fixture in `resources/mdtest/*.md` (run by `tests/mdtest.rs`; format in [`crates/mdtest/README.md`](../mdtest/README.md)). Each heading is a section; a section with a `console` block is a test, and child sections inherit parent input files.
 
 ````markdown
 ## Unresolved reference
@@ -27,7 +27,5 @@ error: unresolved reference `${missing}`
 ```
 ````
 
-- A `` `path`: `` label plus a fence writes an input file; `stdout`/`stderr` fences are exact expected output (absent means empty); `? N` is the exit code (default 0).
-- Write the console block, then run `just bless` (`MDTEST_UPDATE=1`) to fill in `stdout`/`stderr` and review the diff.
-- `MDTEST_FILTER=<substring>` runs matching sections only.
+- Write the console block, then run `just bless` to fill in `stdout`/`stderr` and review the diff.
 - Tests about process behaviour (`--exec`, signals), non-UTF-8 paths or platform `cfg` stay in `tests/cli.rs`.

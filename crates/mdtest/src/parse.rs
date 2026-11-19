@@ -1,10 +1,10 @@
-//! Parser for the Markdown fixture format described in `resources/mdtest/README.md`.
+//! Parser for the Markdown fixture format described in the crate README.
 
 use std::fmt;
 use std::ops::Range;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct ParseError {
+pub(crate) struct ParseError {
     pub line: usize,
     pub message: String,
 }
@@ -23,14 +23,14 @@ fn err<T>(line: usize, message: impl Into<String>) -> Result<T, ParseError> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct InputFile {
+pub(crate) struct InputFile {
     pub path: String,
     pub contents: String,
 }
 
 /// An expected-output fence, located by byte ranges so it can be rewritten in place.
 #[derive(Debug, PartialEq, Eq)]
-pub struct Expected {
+pub(crate) struct Expected {
     pub body: String,
     /// The body lines, excluding the fence lines.
     pub body_range: Range<usize>,
@@ -39,14 +39,14 @@ pub struct Expected {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Invocation {
+pub(crate) struct Invocation {
     pub env: Vec<(String, String)>,
     pub args: Vec<String>,
     pub exit_code: i32,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Test {
+pub(crate) struct Test {
     pub name: String,
     pub line: usize,
     pub files: Vec<InputFile>,
@@ -177,7 +177,7 @@ fn validate_path(line: usize, path: &str) -> Result<(), ParseError> {
     Ok(())
 }
 
-fn parse_console(line: usize, body: &str) -> Result<Invocation, ParseError> {
+fn parse_console(line: usize, body: &str, program: &str) -> Result<Invocation, ParseError> {
     let mut rows = body.lines();
     let Some(command) = rows.next().and_then(|row| row.strip_prefix("$ ")) else {
         return err(line, "a console block must start with `$ `");
@@ -206,8 +206,11 @@ fn parse_console(line: usize, body: &str) -> Result<Invocation, ParseError> {
         let (name, value) = token.split_once('=').expect("checked by is_assignment");
         env.push((name.to_owned(), value.to_owned()));
     }
-    if tokens.next().as_deref() != Some("knf") {
-        return err(line, "the command must be `[NAME=VALUE ...] knf <args>`");
+    if tokens.next().as_deref() != Some(program) {
+        return err(
+            line,
+            format!("the command must be `[NAME=VALUE ...] {program} <args>`"),
+        );
     }
     Ok(Invocation {
         env,
@@ -225,7 +228,7 @@ fn is_assignment(token: &str) -> bool {
 }
 
 /// Parses a fixture file into runnable tests.
-pub fn parse(file_name: &str, text: &str) -> Result<Vec<Test>, ParseError> {
+pub(crate) fn parse(file_name: &str, text: &str, program: &str) -> Result<Vec<Test>, ParseError> {
     let lines = Lines::new(text);
     let mut stack: Vec<Section> = Vec::new();
     let mut tests = Vec::new();
@@ -253,7 +256,7 @@ pub fn parse(file_name: &str, text: &str) -> Result<Vec<Test>, ParseError> {
                 return err(i + 1, "a test has exactly one console block");
             }
             let body = &text[fence.body_range.clone()];
-            let invocation = parse_console(i + 1, body)?;
+            let invocation = parse_console(i + 1, body, program)?;
             section.pending.console = Some((invocation, fence.end));
             i = fence.next_line;
             continue;
@@ -391,4 +394,95 @@ fn finish(
         stderr: pending.stderr,
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse;
+
+    fn parse_err(text: &str) -> String {
+        parse("t.md", text, "knf")
+            .expect_err("should be rejected")
+            .message
+    }
+
+    #[test]
+    fn parses_files_command_and_expected_output() {
+        let text = "# A\n\n## B\n\n`x/a.toml`:\n\n```toml\nk = 1\n```\n\n```console\n$ FOO='a b' knf x/a.toml -i\n? 1\n```\n\n`stderr`:\n\n```text\nboom\n```\n";
+        let tests = parse("t.md", text, "knf").unwrap();
+        assert_eq!(tests.len(), 1);
+        let test = &tests[0];
+        assert_eq!(test.name, "t.md - A - B");
+        assert_eq!(test.files[0].path, "x/a.toml");
+        assert_eq!(test.files[0].contents, "k = 1\n");
+        assert_eq!(test.invocation.env, [("FOO".into(), "a b".into())]);
+        assert_eq!(test.invocation.args, ["x/a.toml", "-i"]);
+        assert_eq!(test.invocation.exit_code, 1);
+        assert!(test.stdout.is_none());
+        let stderr = test.stderr.as_ref().unwrap();
+        assert_eq!(stderr.body, "boom\n");
+        assert_eq!(&text[stderr.body_range.clone()], "boom\n");
+    }
+
+    #[test]
+    fn children_inherit_and_override_parent_files() {
+        let text = "# G\n\n`a.toml`:\n\n```toml\nx = 1\n```\n\n`b.toml`:\n\n```toml\ny = 1\n```\n\n## T\n\n`b.toml`:\n\n```toml\ny = 2\n```\n\n```console\n$ knf a.toml b.toml\n```\n";
+        let tests = parse("t.md", text, "knf").unwrap();
+        assert_eq!(tests.len(), 1);
+        let files: Vec<_> = tests[0]
+            .files
+            .iter()
+            .map(|f| (f.path.as_str(), f.contents.as_str()))
+            .collect();
+        assert_eq!(files, [("a.toml", "x = 1\n"), ("b.toml", "y = 2\n")]);
+    }
+
+    #[test]
+    fn rejects_indented_fence() {
+        assert!(parse_err("# T\n\n  ```console\n  $ knf\n  ```\n").contains("indented"));
+    }
+
+    #[test]
+    fn rejects_unterminated_fence() {
+        assert!(parse_err("# T\n\n```console\n$ knf\n").contains("unterminated"));
+    }
+
+    #[test]
+    fn rejects_two_console_blocks() {
+        let text = "# T\n\n```console\n$ knf\n```\n\n```console\n$ knf\n```\n";
+        assert!(parse_err(text).contains("exactly one console"));
+    }
+
+    #[test]
+    fn rejects_unknown_labels() {
+        assert!(parse_err("# T\n\n`a.toml`:\n\nprose\n").contains("not followed"));
+        assert!(parse_err("# T\n\n`../a.toml`:\n\n```toml\n```\n").contains("invalid input file"));
+        assert!(parse_err("# T\n\n```toml\na = 1\n```\n").contains("unlabelled"));
+    }
+
+    #[test]
+    fn rejects_heading_inside_a_test_section() {
+        let text = "# T\n\n```console\n$ knf\n```\n\n## Sub\n";
+        assert!(parse_err(text).contains("subsections"));
+    }
+
+    #[test]
+    fn rejects_output_without_a_console_block() {
+        assert!(parse_err("# T\n\n`stdout`:\n\n```text\nx\n```\n").contains("no console"));
+    }
+
+    #[test]
+    fn rejects_malformed_console_blocks() {
+        assert!(parse_err("# T\n\n```console\nknf\n```\n").contains("start with"));
+        assert!(parse_err("# T\n\n```console\n$ echo hi\n```\n").contains("must be"));
+        assert!(parse_err("# T\n\n```console\n$ knf\n? x\n```\n").contains("exit code"));
+        assert!(parse_err("# T\n\n```console\n$ knf 'a\n```\n").contains("quotes"));
+    }
+
+    #[test]
+    fn headings_inside_fences_are_not_sections() {
+        let text =
+            "# T\n\n`a.toml`:\n\n```toml\n# not a heading\n```\n\n```console\n$ knf a.toml\n```\n";
+        assert_eq!(parse("t.md", text, "knf").unwrap().len(), 1);
+    }
 }
