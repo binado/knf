@@ -73,16 +73,11 @@ fn with_env<'a>(cmd: &'a mut Command, vars: &[(&str, Option<&str>)]) -> &'a mut 
 
 #[test]
 fn exec_requires_delimiter_and_command() {
-    let dir = tree(&[("--exec", r#"{"standalone":true}"#)]);
-    assert_eq!(
-        run(&dir, &["-f", "json", "--", "--exec"]),
-        "{\n  \"standalone\": true\n}\n"
-    );
+    let dir = tree(&[]);
     for args in [
         &["--exec", "some-command"][..],
         &["--exec", "--"][..],
         &["--list-files", "--exec", "--", "some-command"][..],
-        &["--to", "toml", "--exec", "--", "some-command"][..],
     ] {
         knf(&dir).args(args).assert().code(2);
     }
@@ -90,12 +85,9 @@ fn exec_requires_delimiter_and_command() {
 
 #[test]
 fn exec_scan_ignores_exec_and_delimiter_that_are_not_structural() {
-    let dir = tree(&[("--exec", r#"{"standalone":true}"#), ("a.json", "{}")]);
+    let dir = tree(&[("a.json", "{}")]);
     // `--exec` after the first `--` is a filename, not the flag.
-    assert_eq!(
-        run(&dir, &["-f", "json", "--", "--exec"]),
-        "{\n  \"standalone\": true\n}\n"
-    );
+    assert!(run_err(&dir, &["--", "--exec"]).contains("cannot infer a format from `--exec`"));
     // A repeated flag is a clap error, not a command.
     knf(&dir)
         .args(["a.json", "--exec", "--exec", "--", "true"])
@@ -167,6 +159,30 @@ fn exec_reports_signal_death_as_128_plus_signal() {
     assert_eq!(out.status.code(), Some(143));
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(!std::path::Path::new(stdout.trim()).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_snapshot_follows_the_to_format() {
+    let dir = tree(&[("a.json", r#"{"a":1}"#)]);
+    let out = knf(&dir)
+        .args([
+            "a.json",
+            "--to",
+            "toml",
+            "--exec",
+            "--",
+            "sh",
+            "-c",
+            r#"echo "$KNF_CONFIG_PATH"; cat "$KNF_CONFIG_PATH""#,
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let (path, body) = stdout.split_once('\n').unwrap();
+    assert_eq!(std::path::Path::new(path).extension().unwrap(), "toml");
+    assert_eq!(body, "a = 1\n");
 }
 
 #[cfg(unix)]
@@ -372,29 +388,17 @@ fn context_is_independent_of_filtering_and_merge_options() {
 fn context_selects_format_for_inline_or_empty_output_and_respects_format_override() {
     let dir = tree(&[
         ("config.toml", "port = 5432\n"),
-        ("config.txt", "day = 1979-05-27\n"),
+        ("dated.toml", "day = 1979-05-27\n"),
     ]);
     assert_toml_eq_json(
         &run(&dir, &["-i", "--with", "config.toml", "-c", "copy=${port}"]),
         r#"{"copy":5432}"#,
     );
     assert_toml_eq_json(&run(&dir, &["-i", "--with", "config.toml"]), "{}");
-    let out = run(
-        &dir,
-        &[
-            "-i",
-            "--with",
-            "config.txt",
-            "-f",
-            "toml",
-            "-c",
-            "copy=${day}",
-        ],
-    );
+    let out = run(&dir, &["-i", "--with", "dated.toml", "-c", "copy=${day}"]);
     let out: toml::Value = toml::from_str(&out).unwrap();
     assert!(out["copy"].is_datetime());
     assert!(!out.as_table().unwrap().contains_key("day"));
-    assert!(run_err(&dir, &["-i", "--with", "config.toml", "-f", "json"]).contains("invalid JSON"));
 }
 
 #[test]
@@ -418,7 +422,6 @@ fn context_argument_errors_are_usage_errors_before_io() {
     let dir = tree(&[]);
     for args in [
         vec!["missing.json", "--with", "context.json"],
-        vec!["-i", "--with", "-"],
         vec!["-i", "--with"],
         vec!["-i", "--with", "a.json", "--with", "b.json"],
     ] {
@@ -427,160 +430,6 @@ fn context_argument_errors_are_usage_errors_before_io() {
         assert!(out.stdout.is_empty());
         assert!(!String::from_utf8_lossy(&out.stderr).contains("reading"));
     }
-}
-
-#[test]
-fn context_stdin_supports_both_formats_and_preserves_native_values() {
-    let dir = tree(&[
-        (
-            "foo.toml",
-            "host = 'base'\nurl = '${service.url}'\nday = '${service.day}'\n",
-        ),
-        ("bar.toml", "host = 'prod'\n"),
-        (
-            "foo.json",
-            r#"{"host":"base","url":"${service.url}","big":"${big_value}","null":"${null_value}"}"#,
-        ),
-    ]);
-    let out = ok_stdout(
-        knf(&dir).args(["foo.toml", "bar.toml", "-i", "--with", "-", "-f", "toml"])
-            .write_stdin("host = 'shared'\nunused = '${missing}'\n[service]\nurl = 'https://${host}/api'\nday = 1979-05-27\n"),
-        &[],
-    );
-    let out: toml::Value = toml::from_str(&out).unwrap();
-    assert_eq!(out["url"].as_str(), Some("https://prod/api"));
-    assert!(out["day"].is_datetime());
-    assert!(!out.as_table().unwrap().contains_key("service"));
-    assert!(!out.as_table().unwrap().contains_key("unused"));
-    let out = ok_stdout(
-        knf(&dir).args(["foo.json", "-i", "--with=-", "-f", "json", "--compact"])
-            .write_stdin(r#"{"service":{"url":"https://${host}/api"},"big_value":18446744073709551615,"null_value":null}"#),
-        &[],
-    );
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&out).unwrap(),
-        serde_json::json!({"host":"base","url":"https://base/api","big":u64::MAX,"null":null})
-    );
-}
-
-#[test]
-fn context_stdin_supports_inline_or_empty_output() {
-    let dir = tree(&[]);
-    assert_toml_eq_json(
-        &ok_stdout(
-            knf(&dir)
-                .args(["-i", "--with", "-", "-f", "toml", "-c", "copy=${port}"])
-                .write_stdin("port = 5432\n"),
-            &[],
-        ),
-        r#"{"copy":5432}"#,
-    );
-    assert_eq!(
-        ok_stdout(
-            knf(&dir)
-                .args(["-i", "--with", "-", "-f", "json", "--compact"])
-                .write_stdin(r#"{"unused":"${missing}"}"#),
-            &[],
-        ),
-        "{}\n"
-    );
-}
-
-#[test]
-fn context_stdin_requires_format_before_document_io() {
-    let dir = tree(&[]);
-    let out = knf(&dir)
-        .args(["missing.toml", "-i", "--with", "-"])
-        .write_stdin("invalid TOML")
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(2));
-    assert!(out.stdout.is_empty());
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains("--format"), "{stderr}");
-    assert!(!stderr.contains("reading"), "{stderr}");
-}
-
-#[test]
-fn context_stdin_conflicts_with_a_retained_stdin_layer_before_io() {
-    let dir = tree(&[]);
-    let out = knf(&dir)
-        .args(["missing.json", "-", "-i", "--with", "-", "-f", "json"])
-        .write_stdin("invalid JSON")
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(2));
-    assert!(out.stdout.is_empty());
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(
-        stderr.contains("stdin cannot supply both a merge layer and --with context"),
-        "{stderr}"
-    );
-    assert!(!stderr.contains("reading"), "{stderr}");
-}
-
-#[test]
-fn context_stdin_respects_filtered_sources_and_list_files_skips_reading_it() {
-    let dir = tree(&[("foo.json", r#"{"copy":"${value}"}"#)]);
-    assert_eq!(
-        ok_stdout(
-            knf(&dir)
-                .args([
-                    "-",
-                    "foo.json",
-                    "-g",
-                    "*.json",
-                    "-i",
-                    "--with",
-                    "-",
-                    "-f",
-                    "json",
-                    "--compact"
-                ])
-                .write_stdin(r#"{"value":42}"#),
-            &[],
-        ),
-        "{\"copy\":42}\n"
-    );
-    assert_eq!(
-        ok_stdout(
-            knf(&dir)
-                .args([
-                    "missing.json",
-                    "-i",
-                    "--with",
-                    "-",
-                    "-f",
-                    "json",
-                    "--list-files"
-                ])
-                .write_stdin("invalid JSON"),
-            &[],
-        ),
-        "missing.json\n"
-    );
-}
-
-#[test]
-fn context_file_still_supports_a_stdin_merge_layer() {
-    let dir = tree(&[("config.json", r#"{"value":42}"#)]);
-    assert_eq!(
-        ok_stdout(
-            knf(&dir)
-                .args([
-                    "-",
-                    "-i",
-                    "--with",
-                    "config.json",
-                    "-f",
-                    "json",
-                    "--compact"
-                ])
-                .write_stdin(r#"{"copy":"${value}"}"#),
-            &[],
-        ),
-        "{\"copy\":42}\n"
-    );
 }
 
 #[test]
@@ -805,13 +654,25 @@ fn glob_empty_selections_keep_existing_empty_input_and_set_behaviour() {
     let dir = tree(&[]);
     for flag in ["-g", "-G"] {
         assert_eq!(
-            run(&dir, &["missing.toml", flag, "*.json", "--compact"]),
+            run(
+                &dir,
+                &["missing.toml", flag, "*.json", "--to", "json", "--compact"]
+            ),
             "{}\n"
         );
         assert_eq!(
             run(
                 &dir,
-                &["missing.toml", flag, "*.json", "-c", "value=2", "--compact"]
+                &[
+                    "missing.toml",
+                    flag,
+                    "*.json",
+                    "-c",
+                    "value=2",
+                    "--to",
+                    "json",
+                    "--compact"
+                ]
             ),
             "{\"value\":2}\n"
         );
@@ -819,23 +680,10 @@ fn glob_empty_selections_keep_existing_empty_input_and_set_behaviour() {
             run(&dir, &["missing.toml", flag, "*.json", "--list-files"]),
             ""
         );
-        assert_eq!(run(&dir, &[flag, "*.json", "--compact"]), "{}\n");
-    }
-}
-
-#[test]
-fn glob_treats_stdin_as_a_literal_candidate() {
-    let dir = tree(&[]);
-    for flag in ["-g", "-G"] {
-        let out = knf(&dir)
-            .args(["-", flag, "{*.json,-}", "-f", "json", "--compact"])
-            .write_stdin(r#"{"value":1}"#)
-            .output()
-            .unwrap();
-        assert!(out.status.success());
-        assert_eq!(out.stdout, b"{\"value\":1}\n");
-        assert_eq!(run(&dir, &["-", flag, "*.toml", "--compact"]), "{}\n");
-        assert_eq!(run(&dir, &["-", flag, "-", "--list-files"]), "-\n");
+        assert_eq!(
+            run(&dir, &[flag, "*.json", "--to", "json", "--compact"]),
+            "{}\n"
+        );
     }
 }
 
@@ -947,30 +795,6 @@ fn toml_datetime_survives_set() {
 }
 
 #[test]
-fn a_different_format_option_changes_parsing_not_output_conversion() {
-    let dir = tree(&[("f.toml", DATED), ("g.json", r#"{"extra":1}"#)]);
-    assert!(run_err(&dir, &["f.toml", "g.json", "-f", "toml"]).contains("g.json: invalid TOML"));
-    assert!(run_err(&dir, &["f.toml", "-f", "json"]).contains("f.toml: invalid JSON"));
-}
-
-#[test]
-fn explicit_format_overrides_extensions_for_every_layer() {
-    let dir = tree(&[("a.toml", r#"{"a":1}"#), ("b.json", r#"{"b":2}"#)]);
-    assert_eq!(
-        run(&dir, &["a.toml", "b.json", "-f", "json", "--compact"]),
-        "{\"a\":1,\"b\":2}
-"
-    );
-    let dir = tree(&[("a.json", "a = 1"), ("b.toml", "b = 2")]);
-    assert_eq!(
-        run(&dir, &["a.json", "b.toml", "--format", "toml"]),
-        "a = 1
-b = 2
-"
-    );
-}
-
-#[test]
 fn key_order_is_preserved_in_both_formats() {
     let dir = tree(&[
         ("a.json", r#"{"zebra":1,"apple":2,"middle":3}"#),
@@ -1019,18 +843,16 @@ port = 443",
 }
 
 #[test]
-fn stdin_is_a_layer() {
-    let dir = tree(&[("base.json", r#"{"a":1,"b":2}"#)]);
-    let out = knf(&dir)
-        .args(["base.json", "-", "-f", "json", "--compact"])
-        .write_stdin(r#"{"b":99}"#)
-        .output()
-        .expect("spawn");
-    assert!(out.status.success());
-    assert_eq!(
-        String::from_utf8(out.stdout).expect("utf-8"),
-        "{\"a\":1,\"b\":99}\n"
-    );
+fn paths_without_a_known_extension_are_rejected_with_a_rename_hint() {
+    let dir = tree(&[("app.conf", "{}")]);
+    for name in ["app.conf", "-"] {
+        let err = run_err(&dir, &[name]);
+        assert!(
+            err.contains(&format!("cannot infer a format from `{name}`")),
+            "{err}"
+        );
+        assert!(err.contains("help: name the file with a .json or .toml extension"));
+    }
 }
 
 #[test]
@@ -1040,9 +862,9 @@ fn inline_configs_apply_last() {
         run(&dir, &["a.json", "-c", "server.port=8080", "--compact"]),
         "{\"server\":{\"port\":8080}}\n"
     );
-    // With no file inputs at all, the output defaults to JSON.
+    // With no file inputs, --to selects the format.
     assert_eq!(
-        run(&dir, &["-c", "a.b=1", "--compact"]),
+        run(&dir, &["-c", "a.b=1", "--to", "json", "--compact"]),
         "{\"a\":{\"b\":1}}\n"
     );
 }
@@ -1262,7 +1084,7 @@ fn toml_inline_typing_uses_native_values_and_string_fallback() {
     let out = run(
         &dir,
         &[
-            "-f",
+            "--to",
             "toml",
             "-c",
             "proxy=null",
@@ -1293,7 +1115,7 @@ fn toml_inline_literals_accept_surrounding_whitespace() {
     let out = run(
         &dir,
         &[
-            "-f",
+            "--to",
             "toml",
             "-c",
             "port= \t8080\r\n",
@@ -1364,30 +1186,25 @@ terminal = '${env:KNF_TEST_TERMINAL}'
 }
 
 #[test]
-fn empty_runs_use_the_selected_native_format() {
+fn runs_without_input_files_need_to_for_a_format() {
     let dir = tree(&[]);
-    assert_eq!(
-        run(&dir, &["--compact"]),
-        "{}
-"
-    );
-    assert_eq!(
-        run(&dir, &["-f", "toml"]),
-        "
-"
-    );
-    assert_eq!(
-        run(&dir, &["-f", "toml", "-c", "a=1"]),
-        "a = 1
-"
-    );
+    for args in [&[][..], &["-c", "a=1"][..]] {
+        let err = run_err(&dir, args);
+        assert!(
+            err.contains("no input files to infer a format from"),
+            "{err}"
+        );
+        assert!(err.contains("help: pass --to json or --to toml"), "{err}");
+    }
+    assert_eq!(run(&dir, &["--to", "json", "--compact"]), "{}\n");
+    assert_eq!(run(&dir, &["--to", "toml"]), "\n");
+    assert_eq!(run(&dir, &["--to", "toml", "-c", "a=1"]), "a = 1\n");
     assert_eq!(
         run(
             &dir,
-            &["missing.json", "-g", "*.toml", "-f", "toml", "-c", "a=1"]
+            &["missing.json", "-g", "*.toml", "--to", "toml", "-c", "a=1"]
         ),
-        "a = 1
-"
+        "a = 1\n"
     );
 }
 
@@ -1790,15 +1607,6 @@ fn strict_requires_an_output_format_before_reading_inputs() {
         stderr.contains("required arguments were not provided") && stderr.contains("--to"),
         "{stderr}"
     );
-}
-
-#[test]
-fn strict_conflicts_with_exec() {
-    let dir = tree(&[("a.json", r#"{"a":1}"#)]);
-    knf(&dir)
-        .args(["a.json", "--to", "json", "--strict", "--exec", "--", "true"])
-        .assert()
-        .code(2);
 }
 
 #[test]

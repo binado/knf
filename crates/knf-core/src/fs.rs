@@ -4,7 +4,7 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-use crate::{Format, STDIN};
+use crate::Format;
 
 /// An invalid glob pattern.
 pub use crate::glob::{GlobError, GlobPattern};
@@ -19,9 +19,6 @@ pub struct AccumulateTarget {
 /// Why a target cannot be used for discovery.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AccumulateTargetError {
-    /// Standard input cannot be discovered.
-    #[error("discovery does not accept stdin")]
-    Stdin,
     /// Targets must be relative and must not traverse parents.
     #[error("discovery requires a relative target path without .. components")]
     InvalidPath,
@@ -34,9 +31,6 @@ impl TryFrom<PathBuf> for AccumulateTarget {
     type Error = AccumulateTargetError;
 
     fn try_from(raw: PathBuf) -> Result<Self, Self::Error> {
-        if raw.as_os_str() == STDIN {
-            return Err(AccumulateTargetError::Stdin);
-        }
         if raw.components().any(|component| {
             matches!(
                 component,

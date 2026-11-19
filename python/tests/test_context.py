@@ -3,7 +3,6 @@
 import datetime
 import json
 import math
-import subprocess
 
 import pytest
 
@@ -66,15 +65,10 @@ def test_context_alone_returns_empty_output_and_leaves_unused_references_unresol
     assert load([], interpolate=True, context=context) == {}
 
 
-@pytest.mark.parametrize("context", ["missing.json", "-"])
+@pytest.mark.parametrize("context", ["missing.json"])
 def test_context_requires_interpolation_before_reads(tmp_path, context):
     with pytest.raises(ValueError, match="context requires interpolate=True"):
         load([tmp_path / "missing.json"], context=context)
-
-
-def test_context_rejects_stdin_before_reads(tmp_path):
-    with pytest.raises(ValueError, match="context does not accept stdin"):
-        load([tmp_path / "missing.json"], interpolate=True, context="-")
 
 
 @pytest.mark.parametrize("context", [{"port": 8080}, ["context.json"], 42])
@@ -124,14 +118,3 @@ def test_output_interpolation_failure_does_not_fall_back(tmp_path):
     context = write(tmp_path, "context.json", '{"a":1}')
     with pytest.raises(InterpolationError, match="a: `missing`"):
         load([doc], interpolate=True, context=context)
-
-
-def test_wheel_cli_accepts_stdin_context_and_rejects_duplicate_stdin(tmp_path):
-    doc = write(tmp_path, "doc.json", '{"copy":"${port}"}')
-    args = ["knf", str(doc), "-i", "--with", "-", "-f", "json", "--compact"]
-    result = subprocess.run(args, input='{"port":5432}', capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {"copy": 5432}
-    result = subprocess.run(args + ["-"], input='{"port":5432}', capture_output=True, text=True)
-    assert result.returncode == 2
-    assert "stdin cannot supply both" in result.stderr

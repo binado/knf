@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use knf::{Layers, MergeOptions, format::Format};
+use knf::{Layers, MergeOptions};
 use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
@@ -20,7 +20,7 @@ fn overlay(value: Value) -> Value {
 
 /// The whole file pipeline, as a caller composes it: load, then fold.
 fn merge_files<P: AsRef<Path>>(paths: &[P], opts: &MergeOptions) -> anyhow::Result<Value> {
-    let Layers::Json(layers) = knf::load_layers(paths, None)? else {
+    let Layers::Json(layers) = knf::load_layers(paths)? else {
         panic!("JSON fixtures")
     };
     Ok(knf::merge(layers, opts))
@@ -54,7 +54,7 @@ fn shallow_terminal_overlays_and_interpolation_compose() {
     let paths = [dir.path().join("base.json"), dir.path().join("prod.json")];
     let overlay = overlay(json!({"port": 443, "data": "${root}/data"}));
 
-    let Layers::Json(mut layers) = knf::load_layers(&paths, None).expect("layers load") else {
+    let Layers::Json(mut layers) = knf::load_layers(&paths).expect("layers load") else {
         panic!("JSON")
     };
     layers.push(overlay);
@@ -101,21 +101,6 @@ fn selected_values_keep_their_native_scalar_representations() {
 }
 
 #[test]
-fn input_format_can_override_paths_without_extensions() {
-    let dir = tree(&[("base", r#"{"a":1}"#), ("over", r#"{"b":2}"#)]);
-    let paths = [dir.path().join("base"), dir.path().join("over")];
-
-    let Layers::Json(layers) =
-        knf::load_layers(&paths, Some(Format::Json)).expect("explicit format")
-    else {
-        panic!("JSON")
-    };
-    let merged = knf::merge(layers, &MergeOptions::default());
-
-    assert_eq!(merged, json!({"a": 1, "b": 2}));
-}
-
-#[test]
 fn load_layers_accepts_borrowed_paths() {
     let dir = tree(&[("base.json", r#"{"a":1}"#)]);
     let path = dir.path().join("base.json");
@@ -129,7 +114,7 @@ fn load_layers_accepts_borrowed_paths() {
 fn load_errors_are_typed_and_flag_free() {
     let dir = tree(&[("layer", "{}")]);
 
-    let err = knf::load_layers(&[dir.path().join("layer")], None)
+    let err = knf::load_layers(&[dir.path().join("layer")])
         .expect_err("an extensionless path cannot be typed");
     let load = err
         .downcast_ref::<knf::LoadError>()
@@ -141,7 +126,7 @@ fn load_errors_are_typed_and_flag_free() {
         "a library error must not name a flag: {load}"
     );
 
-    let err = knf::load_layers(&[dir.path()], None).expect_err("a directory is no layer");
+    let err = knf::load_layers(&[dir.path()]).expect_err("a directory is no layer");
     assert!(matches!(
         err.downcast_ref::<knf::LoadError>(),
         Some(knf::LoadError::Directory { .. })
@@ -180,7 +165,7 @@ fn merge_does_not_interpolate() {
 #[test]
 fn mixed_formats_are_rejected_before_contents_are_read() {
     let paths = ["missing.json", "missing.toml"];
-    let err = knf::load_layers(&paths, None).unwrap_err();
+    let err = knf::load_layers(&paths).unwrap_err();
     let load = err.downcast_ref::<knf::LoadError>().unwrap();
     assert_eq!(*load, knf::LoadError::MixedFormats);
     assert_eq!(load.path(), None);
@@ -189,31 +174,15 @@ fn mixed_formats_are_rejected_before_contents_are_read() {
 }
 
 #[test]
-fn empty_layers_select_the_default_or_explicit_native_type() {
-    assert_eq!(
-        knf::load_layers::<&str>(&[], None).unwrap(),
-        Layers::Json(vec![])
-    );
-    assert_eq!(
-        knf::load_layers::<&str>(&[], Some(Format::Toml)).unwrap(),
-        Layers::Toml(vec![])
-    );
-    assert_eq!(
-        knf::resolve_format(&["-"], None),
-        Err(knf::LoadError::StdinNeedsFormat)
-    );
-    assert_eq!(
-        knf::resolve_format(&["-"], Some(Format::Toml)).unwrap(),
-        Format::Toml
-    );
+fn empty_layers_default_to_json() {
+    assert_eq!(knf::load_layers::<&str>(&[]).unwrap(), Layers::Json(vec![]));
 }
 
 #[test]
 fn native_toml_preserves_special_values_and_precision() {
     let source = "date = 1979-05-27T07:32:00.123456789Z\ninf = inf\nnan = nan\n";
     let dir = tree(&[("base.toml", source)]);
-    let Layers::Toml(layers) = knf::load_layers(&[dir.path().join("base.toml")], None).unwrap()
-    else {
+    let Layers::Toml(layers) = knf::load_layers(&[dir.path().join("base.toml")]).unwrap() else {
         panic!("TOML")
     };
     let mut merged = knf::merge(layers, &MergeOptions::default());
@@ -237,24 +206,4 @@ impl knf::Env for EmptyEnv {
     fn lookup(&self, _: &str) -> Option<String> {
         None
     }
-}
-
-#[test]
-fn explicit_format_overrides_extensions_without_converting_values() {
-    let dir = tree(&[
-        ("a.toml", r#"{"null":null,"id":18446744073709551615}"#),
-        ("b.json", r#"{"a":1}"#),
-    ]);
-    let Layers::Json(layers) = knf::load_layers(
-        &[dir.path().join("a.toml"), dir.path().join("b.json")],
-        Some(Format::Json),
-    )
-    .unwrap() else {
-        panic!("JSON")
-    };
-    let emitted = knf::format::emit(knf::merge(layers, &MergeOptions::default()), false).unwrap();
-    assert_eq!(
-        emitted,
-        "{\"null\":null,\"id\":18446744073709551615,\"a\":1}\n"
-    );
 }

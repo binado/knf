@@ -25,10 +25,11 @@ cargo add knf-core     # the library, imported as `knf`
 ```bash
 knf base.toml prod.toml > merged.toml
 knf defaults.json overrides.json -c server.port=8080
-cat base.json | knf - prod.json -f json
+knf -c server.port=8080 --to toml
 ```
 
-Layers merge left to right. Output defaults to the input format.
+Layers merge left to right. A file's extension (`.json` or `.toml`) selects its
+format, and output defaults to the input format. There is no stdin input.
 
 | Case | Behaviour |
 | --- | --- |
@@ -50,7 +51,8 @@ knf config/**/*.toml -G '*.prod.toml'
 **`-l/--list-files`**: print the (filtered) input list without reading files.
 
 **`-c KEY.PATH=VALUE`**: inline layer applied after all files. The value is
-parsed in the selected format and falls back to a string.
+parsed in the input format (`--to` when there are no files) and falls back to
+a string.
 
 | RHS | JSON | TOML |
 | --- | --- | --- |
@@ -140,17 +142,14 @@ context values resolve. A selected container keeps its own children.
 
 ```bash
 knf foo.toml bar.toml -i --with config.toml
-generate-config | knf foo.toml bar.toml -i --with - -f toml
 ```
 
-Context uses the same format as inputs, including `-f`. `--with -` reads stdin
-and requires `-f`; stdin cannot also supply a merge layer.
+Context uses the same format as inputs.
 Filtering and `--list-files` apply only to merge inputs.
 
-**`-f/--format json|toml`**: set the input format for parsing and `-c` typing.
-Required for stdin. Mixed input formats are an error without an override.
-
 **`--to json|toml`**: convert the final document after merging and interpolation.
+Required when there are no input files, where it also selects the format of `-c`
+values.
 
 ```bash
 knf base.toml prod.toml --to json
@@ -167,8 +166,8 @@ are errors. A lossy conversion warns on stderr; add **`--strict`** to reject it.
 **`--exec -- COMMAND [ARGS...]`**: run a command with the merged configuration.
 The child inherits standard streams and returns its exit status. Its
 `KNF_CONFIG_PATH` environment variable points to a private temporary JSON or
-TOML file that is removed when the command finishes. Cannot be combined with
-`--to` or `--list-files`.
+TOML file that is removed when the command finishes; `--to` selects its format.
+Cannot be combined with `--list-files`.
 
 ```bash
 knf base.toml pilot.toml -c seed=42 --exec -- python fit.py --replicate 2

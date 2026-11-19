@@ -132,13 +132,8 @@ fn load<'py>(
     shallow: Option<&str>,
     context: Option<PathBuf>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    if let Some(path) = &context {
-        if !interpolate {
-            return Err(PyValueError::new_err("context requires interpolate=True"));
-        }
-        if path.as_os_str() == knf::STDIN {
-            return Err(PyValueError::new_err("context does not accept stdin"));
-        }
+    if context.is_some() && !interpolate {
+        return Err(PyValueError::new_err("context requires interpolate=True"));
     }
     let shallow: Option<KeyGlobPattern> = shallow
         .map(str::parse)
@@ -152,7 +147,7 @@ fn load<'py>(
         .detach(move || {
             let mut inputs = files.clone();
             inputs.extend(context.iter().cloned());
-            let format = resolve_format(&inputs, None).map_err(|err| {
+            let format = resolve_format(&inputs).map_err(|err| {
                 Failure::File(
                     err.path().unwrap_or(Path::new("")).to_path_buf(),
                     err.into(),
@@ -204,7 +199,7 @@ fn load_native<V: ConfigFormat>(
         let read = || -> anyhow::Result<V> {
             let text = std::fs::read_to_string(path)
                 .with_context(|| format!("reading `{}`", path.display()))?;
-            knf::format::parse(&text, &knf::format::SourceName::File(path.to_path_buf()))
+            knf::format::parse(&text, path)
         };
         layers.push(read().map_err(|err| Failure::File(path.to_path_buf(), err))?);
     }
