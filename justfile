@@ -17,9 +17,6 @@ test-py:
 bless:
     MDTEST_UPDATE=1 cargo test -p knf-cli --test mdtest
 
-review:
-    cargo insta review
-
 build:
     cargo build --workspace
 

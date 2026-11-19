@@ -13,7 +13,7 @@ MSRV is Rust 1.88.
 ```bash
 just ci                                 # format-check + lint + test + build + doc
 just test-py                            # maturin develop + pytest in active venv
-just review                             # review stderr snapshots (cargo insta review)
+just bless                              # rewrite expected output in Markdown fixtures (MDTEST_UPDATE=1)
 cargo test -p knf-core --lib            # fast inner loop: unit tests only
 cargo test -p knf-cli --test cli <name> # run a single CLI integration test
 ```
