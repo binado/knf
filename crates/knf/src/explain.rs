@@ -3,43 +3,10 @@
 use std::path::Path;
 
 use anyhow::anyhow;
-use knf::fs::{AccumulateError, AccumulateTargetError};
 use knf::{InterpError, LoadError, PathError, Problem};
 
 pub fn context_stdin_conflict() -> &'static str {
     "stdin cannot supply both a merge layer and --with context"
-}
-
-/// Formats target validation errors using `--accumulate`.
-pub fn explain_accumulate_target(err: AccumulateTargetError) -> String {
-    match err {
-        AccumulateTargetError::Stdin => "--accumulate does not accept stdin",
-        AccumulateTargetError::InvalidPath => {
-            "--accumulate requires a relative target path without .. components"
-        }
-        AccumulateTargetError::UnknownExtension => {
-            "--accumulate requires a target with a JSON or TOML extension"
-        }
-    }
-    .to_owned()
-}
-
-/// Renders discovery errors with their paths and I/O context.
-pub fn explain_accumulate(err: AccumulateError) -> anyhow::Error {
-    match err {
-        AccumulateError::Inspect { path, source } => {
-            anyhow::Error::new(source).context(format!("inspecting `{}`", path.display()))
-        }
-        AccumulateError::List { path, source } => {
-            anyhow::Error::new(source).context(format!("listing `{}`", path.display()))
-        }
-        AccumulateError::Directory { path } | AccumulateError::NonRegular { path } => {
-            anyhow!("`{}` is not a regular file", path.display())
-        }
-        AccumulateError::CurrentDirectory(source) => {
-            anyhow::Error::new(source).context("determining the working directory")
-        }
-    }
 }
 
 /// Adds CLI help to unwrapped `LoadError` or `InterpError` pipeline errors.

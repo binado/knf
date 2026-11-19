@@ -1,6 +1,5 @@
 //! `knf <files...>`: merge layers left to right and print one document.
 
-mod accumulate;
 mod cli;
 mod explain;
 
@@ -69,11 +68,7 @@ fn run(cli: Cli, command: &[OsString]) -> anyhow::Result<i32> {
         shallow: cli.shallow.clone(),
     };
 
-    let mut files = if let Some(target) = &cli.accumulate {
-        knf::fs::accumulate(target, None).map_err(explain::explain_accumulate)?
-    } else {
-        cli.files.clone()
-    };
+    let mut files = cli.files.clone();
     if let Some(pattern) = &cli.glob {
         files = knf::fs::filter_paths(&files, pattern, false);
     } else if let Some(pattern) = &cli.glob_filename {
