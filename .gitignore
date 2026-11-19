@@ -11,3 +11,4 @@ __pycache__/
 
 # Local Python development/test environment.
 /.venv
+.DS_Store
