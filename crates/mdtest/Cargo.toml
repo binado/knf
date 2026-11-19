@@ -1,0 +1,16 @@
+[package]
+name = "knf-mdtest"
+description = "Markdown fixture harness for command-line tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "mdtest"
+
+[dependencies]
+shlex = "2.0.1"
+similar = "3.2.1"
+tempfile.workspace = true

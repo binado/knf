@@ -4,6 +4,7 @@
 !CHANGELOG.md
 !AGENTS.md
 !CLAUDE.md
+!/crates/knf/resources/mdtest/*.md
 # Python: what `maturin develop` builds in place.
 /python/knf/*.so
 /python/knf/*.pyd
