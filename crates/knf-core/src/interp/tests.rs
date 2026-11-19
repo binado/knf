@@ -47,29 +47,19 @@ macro_rules! common_tests {
 
         /// Interpolate with no environment at all.
         fn interp(doc: Value) -> Result<Value, InterpError> {
-            unchanged_with_unused_marker(doc, None, &StubEnv::default())
+            interpolate_with_options(doc, None, &StubEnv::default(), &InterpOptions::default())
         }
 
         fn interp_env(doc: Value, vars: &[(&str, &str)]) -> Result<Value, InterpError> {
-            unchanged_with_unused_marker(doc, None, &StubEnv::new(vars))
+            interpolate_with_options(doc, None, &StubEnv::new(vars), &InterpOptions::default())
         }
 
-        fn interpolate_with_context(doc: Value, context: &Value, env: &dyn Env) -> Result<Value, InterpError> {
-            unchanged_with_unused_marker(doc, Some(context), env)
-        }
-
-        // Run every case with an unused merge_key too, to verify it is a no-op.
-        fn unchanged_with_unused_marker(doc: Value, context: Option<&Value>, env: &dyn Env) -> Result<Value, InterpError> {
-            let old = interpolate_with_options(doc.clone(), context, env, &InterpOptions::default());
-            let new = interpolate_with_options(doc, context, env, &InterpOptions {
-                merge_key: Some("__unused_marker".into()), ..Default::default()
-            });
-            match (&old, &new) {
-                (Ok(old), Ok(new)) => assert_eq!(old, new),
-                (Err(old), Err(new)) => assert_eq!(old.to_string(), new.to_string()),
-                other => panic!("unused marker changed interpolation: {other:?}"),
-            }
-            old
+        fn interpolate_with_context(
+            doc: Value,
+            context: &Value,
+            env: &dyn Env,
+        ) -> Result<Value, InterpError> {
+            interpolate_with_options(doc, Some(context), env, &InterpOptions::default())
         }
 
         fn err(doc: Value) -> String {
@@ -80,182 +70,13 @@ macro_rules! common_tests {
             interp_env(doc, vars).expect_err("should fail").to_string()
         }
 
-        fn interpolate_with_options(doc: Value, context: Option<&Value>, env: &dyn Env, options: &InterpOptions) -> Result<Value, InterpError> {
+        fn interpolate_with_options(
+            doc: Value,
+            context: Option<&Value>,
+            env: &dyn Env,
+            options: &InterpOptions,
+        ) -> Result<Value, InterpError> {
             merge_interpolate([doc], context, env, options)
-        }
-
-        fn inherit(doc: Value, context: Option<&Value>, shallow: Option<&str>) -> Result<Value, InterpError> {
-            interpolate_with_options(doc, context, &StubEnv::default(), &InterpOptions {
-                merge_key: Some("extends".into()),
-                shallow: shallow.map(|pattern| pattern.parse().unwrap()),
-            })
-        }
-
-        #[test]
-        fn inheritance_copies_defaults_and_exposes_destination_paths_in_any_order() {
-            for local in [
-                vec![("c", s("${bar.a}")), ("extends", s("${foo}"))],
-                vec![("extends", s("${foo}")), ("c", s("${bar.a}"))],
-            ] {
-                let doc = obj(vec![
-                    ("bar", obj(local)),
-                    ("foo", obj(vec![("a", n(1)), ("b", n(2)), ("c", n(3))])),
-                    ("read", s("${bar.b}")),
-                    ("copy", s("${bar}")),
-                ]);
-                let out = inherit(doc, None, None).unwrap();
-                let expected = obj(vec![("a", n(1)), ("b", n(2)), ("c", n(1))]);
-                assert_eq!(out.as_object().unwrap()["bar"], expected);
-                assert_eq!(out.as_object().unwrap()["copy"], expected);
-                assert_eq!(out.as_object().unwrap()["read"], n(2));
-            }
-        }
-
-        #[test]
-        fn inheritance_is_lazy_for_overridden_context_fields_and_keeps_absolute_references() {
-            let context = obj(vec![
-                ("unused", obj(vec![("extends", n(42))])),
-                ("base", obj(vec![
-                    ("bad", s("${missing}")),
-                    ("c", n(3)),
-                    ("absolute", s("${base.c}")),
-                    ("db", obj(vec![("host", s("shared")), ("port", n(80))])),
-                    ("items", Value::array(vec![n(1), n(2)])),
-                ])),
-            ]);
-            let doc = obj(vec![("bar", obj(vec![
-                ("extends", s("${base}")), ("bad", s("fixed")), ("c", n(4)),
-                ("db", obj(vec![("port", n(90))])),
-                ("items", Value::array(vec![n(3)])),
-            ]))]);
-            let out = inherit(doc, Some(&context), None).unwrap();
-            assert_eq!(out, obj(vec![("bar", obj(vec![
-                ("bad", s("fixed")), ("c", n(4)), ("absolute", n(3)),
-                ("db", obj(vec![("host", s("shared")), ("port", n(90))])),
-                ("items", Value::array(vec![n(3)])),
-            ]))]));
-        }
-
-        #[test]
-        fn inheritance_shallow_selectors_use_destination_paths_and_stop_at_ancestors() {
-            let context = obj(vec![("base", obj(vec![
-                ("a", n(1)), ("db", obj(vec![("host", s("shared")), ("port", n(80))])),
-            ]))]);
-            let doc = obj(vec![("bar", obj(vec![
-                ("extends", s("${base}")), ("db", obj(vec![("port", n(90))])),
-            ]))]);
-            let out = inherit(doc.clone(), Some(&context), Some("bar.db")).unwrap();
-            assert_eq!(out, obj(vec![("bar", obj(vec![
-                ("a", n(1)), ("db", obj(vec![("port", n(90))])),
-            ]))]));
-            for glob in ["bar", "*"] {
-                let out = inherit(doc.clone(), Some(&context), Some(glob)).unwrap();
-                assert_eq!(out, obj(vec![("bar", obj(vec![("db", obj(vec![("port", n(90))]))]))]));
-            }
-            let out = inherit(doc, Some(&context), Some("base.db")).unwrap();
-            assert_eq!(out.as_object().unwrap()["bar"].as_object().unwrap()["db"],
-                obj(vec![("host", s("shared")), ("port", n(90))]));
-        }
-
-        #[test]
-        fn inheritance_chains_aliases_indexed_bases_and_array_contained_objects() {
-            let context = obj(vec![
-                ("bases", Value::array(vec![obj(vec![("a", n(1)), ("c", n(3))])])),
-                ("alias", s("${bases[0]}")),
-                ("middle", obj(vec![("extends", s("${alias}")), ("b", n(2))])),
-            ]);
-            let doc = obj(vec![("items", Value::array(vec![obj(vec![
-                ("extends", s("${middle}")), ("c", s("${items[0].a}")),
-            ])])), ("read", s("${items[0].b}"))]);
-            let out = inherit(doc, Some(&context), Some("items.c")).unwrap();
-            assert_eq!(out, obj(vec![
-                ("items", Value::array(vec![obj(vec![("a", n(1)), ("b", n(2)), ("c", n(1))])])),
-                ("read", n(2)),
-            ]));
-        }
-
-        #[test]
-        fn inherited_environment_values_and_escaping_are_not_rescanned() {
-            let base_text = if Value::FORMAT == crate::Format::Json {
-                r#"{"extends":"${missing}","raw":"${missing}","nested":{"extends":"${missing}"},"a":1}"#
-            } else {
-                r#"{extends="${missing}", raw="${missing}", nested={extends="${missing}"}, a=1}"#
-            };
-            let env = StubEnv::new(&[("BASE", base_text), ("TEXT", "${missing}")]);
-            let context = obj(vec![
-                ("alias", s("${env:BASE}")),
-                ("base", obj(vec![("literal", s("$${missing}")), ("raw", s("${env:TEXT}"))])),
-            ]);
-            let doc = obj(vec![
-                ("bar", obj(vec![("extends", s("${alias}")), ("a", n(2))])),
-                ("copy", obj(vec![("extends", s("${base}"))])),
-            ]);
-            let out = interpolate_with_options(doc, Some(&context), &env, &InterpOptions {
-                merge_key: Some("extends".into()), ..Default::default()
-            }).unwrap();
-            assert_eq!(out.as_object().unwrap()["bar"], obj(vec![
-                ("extends", s("${missing}")), ("raw", s("${missing}")),
-                ("nested", obj(vec![("extends", s("${missing}"))])), ("a", n(2)),
-            ]));
-            assert_eq!(out.as_object().unwrap()["copy"], obj(vec![
-                ("literal", s("${missing}")), ("raw", s("${missing}")),
-            ]));
-        }
-
-        #[test]
-        fn inheritance_reports_invalid_shapes_and_types_at_the_directive() {
-            for directive in [n(1), obj(vec![]), Value::array(vec![s("${base}")]), s("base"), s("x${base}"), s("$${base}")] {
-                let doc = obj(vec![("bar", obj(vec![("extends", directive)]))]);
-                let err = inherit(doc, None, None).unwrap_err().to_string();
-                assert_eq!(err, "invalid object inheritance\n  --> bar.extends: expected one whole-string reference to an object");
-                assert!(!err.ends_with('\n'));
-            }
-            let doc = obj(vec![("base", n(1)), ("bar", obj(vec![("extends", s("${base}"))]))]);
-            assert_eq!(inherit(doc, None, None).unwrap_err().to_string(),
-                "invalid object inheritance\n  --> bar.extends: expected an object, found number");
-            let doc = obj(vec![("bar", obj(vec![("extends", s("${missing}"))]))]);
-            assert_eq!(inherit(doc, None, None).unwrap_err().to_string(),
-                "unresolved reference\n  --> bar.extends: `missing`");
-        }
-
-        #[test]
-        fn inheritance_cycles_and_value_cycles_cross_sources() {
-            for doc in [
-                obj(vec![("a", obj(vec![("inner", obj(vec![("extends", s("${a}"))]))]))]),
-                obj(vec![
-                    ("a", obj(vec![("extends", s("${b}"))])),
-                    ("b", obj(vec![("inner", obj(vec![("extends", s("${a}"))]))])),
-                ]),
-                obj(vec![("a", obj(vec![("extends", s("${a}"))]))]),
-                obj(vec![("a", obj(vec![("extends", s("${b}"))])), ("b", obj(vec![("extends", s("${a}"))]))]),
-                obj(vec![("a", obj(vec![("extends", s("${b}"))])), ("b", s("${c}")), ("c", s("${b}"))]),
-                obj(vec![("a", obj(vec![("extends", s("${b}"))])), ("b", obj(vec![("x", s("${a.x}"))]))]),
-            ] {
-                assert!(matches!(inherit(doc, None, None), Err(InterpError::Cycle(_))));
-            }
-            let doc = obj(vec![("a", obj(vec![("extends", s("${b}"))]))]);
-            let context = obj(vec![("b", obj(vec![("extends", s("${a}"))]))]);
-            assert!(matches!(inherit(doc, Some(&context), None), Err(InterpError::Cycle(_))));
-        }
-
-        #[test]
-        fn unused_merge_key_preserves_existing_context_lookup_and_errors() {
-            let context = obj(vec![
-                ("base", obj(vec![("a", s("${host}")), ("bad", s("${missing}"))])),
-                ("db", obj(vec![("host", s("shared")), ("port", n(80))])),
-            ]);
-            for doc in [
-                obj(vec![("host", s("prod")), ("db", obj(vec![("host", s("local"))])), ("port", s("${db.port}"))]),
-                obj(vec![("host", s("prod")), ("copy", s("${base}"))]),
-            ] {
-                let old = interpolate_with_context(doc.clone(), &context, &StubEnv::default());
-                let new = inherit(doc, Some(&context), None);
-                match (old, new) {
-                    (Ok(old), Ok(new)) => assert_eq!(old, new),
-                    (Err(old), Err(new)) => assert_eq!(old.to_string(), new.to_string()),
-                    other => panic!("results differ: {other:?}"),
-                }
-            }
         }
 
         #[test]
@@ -410,11 +231,20 @@ macro_rules! common_tests {
             fold_with(layers, None, None, &StubEnv::default())
         }
 
-        fn fold_with(layers: Vec<Value>, context: Option<&Value>, shallow: Option<&str>, env: &dyn Env) -> Result<Value, InterpError> {
-            merge_interpolate(layers, context, env, &InterpOptions {
-                merge_key: Some("extends".into()),
-                shallow: shallow.map(|pattern| pattern.parse().unwrap()),
-            })
+        fn fold_with(
+            layers: Vec<Value>,
+            context: Option<&Value>,
+            shallow: Option<&str>,
+            env: &dyn Env,
+        ) -> Result<Value, InterpError> {
+            merge_interpolate(
+                layers,
+                context,
+                env,
+                &InterpOptions {
+                    shallow: shallow.map(|pattern| pattern.parse().unwrap()),
+                },
+            )
         }
 
         #[test]
@@ -434,9 +264,19 @@ macro_rules! common_tests {
         #[test]
         fn an_object_merges_with_a_later_reference_and_two_references_merge() {
             let out = fold(vec![
-                obj(vec![("foo", obj(vec![("x", n(1)), ("y", n(1))])), ("a", obj(vec![("p", n(1))])), ("c", s("${a}"))]),
-                obj(vec![("foo", s("${bar}")), ("bar", obj(vec![("y", n(2)), ("z", n(2))])), ("b", obj(vec![("q", n(2))])), ("c", s("${b}"))]),
-            ]).unwrap();
+                obj(vec![
+                    ("foo", obj(vec![("x", n(1)), ("y", n(1))])),
+                    ("a", obj(vec![("p", n(1))])),
+                    ("c", s("${a}")),
+                ]),
+                obj(vec![
+                    ("foo", s("${bar}")),
+                    ("bar", obj(vec![("y", n(2)), ("z", n(2))])),
+                    ("b", obj(vec![("q", n(2))])),
+                    ("c", s("${b}")),
+                ]),
+            ])
+            .unwrap();
             assert_eq!(out["foo"], obj(vec![("x", n(1)), ("y", n(2)), ("z", n(2))]));
             assert_eq!(out["c"], obj(vec![("p", n(1)), ("q", n(2))]));
         }
@@ -445,9 +285,14 @@ macro_rules! common_tests {
         fn non_object_referents_replace_on_either_side() {
             for referent in [n(1), s("text"), Value::array(vec![n(1)])] {
                 let out = fold(vec![
-                    obj(vec![("r", referent.clone()), ("left", s("${r}")), ("right", obj(vec![("x", n(1))]))]),
+                    obj(vec![
+                        ("r", referent.clone()),
+                        ("left", s("${r}")),
+                        ("right", obj(vec![("x", n(1))])),
+                    ]),
                     obj(vec![("left", obj(vec![("y", n(2))])), ("right", s("${r}"))]),
-                ]).unwrap();
+                ])
+                .unwrap();
                 assert_eq!(out["left"], obj(vec![("y", n(2))]));
                 assert_eq!(out["right"], referent);
             }
@@ -456,32 +301,75 @@ macro_rules! common_tests {
         #[test]
         fn a_replaced_operand_is_never_resolved_but_a_deciding_reference_must_resolve() {
             let replaced = fold(vec![
-                obj(vec![("a", s("${missing}")), ("b", s("${env:UNSET}")), ("c", s("x${missing}"))]),
-                obj(vec![("a", n(1)), ("b", Value::array(vec![])), ("c", obj(vec![("k", n(1))]))]),
-            ]).unwrap();
+                obj(vec![
+                    ("a", s("${missing}")),
+                    ("b", s("${env:UNSET}")),
+                    ("c", s("x${missing}")),
+                ]),
+                obj(vec![
+                    ("a", n(1)),
+                    ("b", Value::array(vec![])),
+                    ("c", obj(vec![("k", n(1))])),
+                ]),
+            ])
+            .unwrap();
             assert_eq!(replaced["c"], obj(vec![("k", n(1))]));
             let err = fold(vec![
-                obj(vec![("a", s("${missing}")), ("b", s("${env:UNSET}")), ("c", s("${gone}")), ("d", s("${}"))]),
-                obj(vec![("a", obj(vec![("k", n(1))])), ("b", obj(vec![])), ("c", n(2)), ("d", obj(vec![]))]),
-            ]).unwrap_err();
-            assert_eq!(err.to_string(), "unresolved reference\n  --> a: `missing`\n  --> b: `env:UNSET`");
+                obj(vec![
+                    ("a", s("${missing}")),
+                    ("b", s("${env:UNSET}")),
+                    ("c", s("${gone}")),
+                    ("d", s("${}")),
+                ]),
+                obj(vec![
+                    ("a", obj(vec![("k", n(1))])),
+                    ("b", obj(vec![])),
+                    ("c", n(2)),
+                    ("d", obj(vec![])),
+                ]),
+            ])
+            .unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "unresolved reference\n  --> a: `missing`\n  --> b: `env:UNSET`"
+            );
         }
 
         #[test]
         fn shallow_destinations_replace_without_resolving_the_earlier_value() {
             let layers = vec![
-                obj(vec![("bar", obj(vec![("db", obj(vec![("host", s("h")), ("port", n(1))]))])), ("foo", s("${bar}")), ("gone", s("${missing}"))]),
-                obj(vec![("foo", obj(vec![("db", obj(vec![("port", n(2))]))])), ("gone", obj(vec![]))]),
+                obj(vec![
+                    (
+                        "bar",
+                        obj(vec![("db", obj(vec![("host", s("h")), ("port", n(1))]))]),
+                    ),
+                    ("foo", s("${bar}")),
+                    ("gone", s("${missing}")),
+                ]),
+                obj(vec![
+                    ("foo", obj(vec![("db", obj(vec![("port", n(2))]))])),
+                    ("gone", obj(vec![])),
+                ]),
             ];
             let deep = fold_with(layers.clone(), None, Some("gone"), &StubEnv::default()).unwrap();
-            assert_eq!(deep["foo"], obj(vec![("db", obj(vec![("host", s("h")), ("port", n(2))]))]));
+            assert_eq!(
+                deep["foo"],
+                obj(vec![("db", obj(vec![("host", s("h")), ("port", n(2))]))])
+            );
             for glob in ["foo.db", "{foo.db,gone}", "*"] {
                 let out = fold_with(layers.clone(), None, Some(glob), &StubEnv::default());
                 let out = match out {
                     Ok(out) => out,
-                    Err(err) => { assert_eq!(glob, "foo.db", "{err}"); continue; }
+                    Err(err) => {
+                        assert_eq!(glob, "foo.db", "{err}");
+                        continue;
+                    }
                 };
-                assert_eq!(out["foo"], obj(vec![("db", obj(vec![("port", n(2))]))]), "{glob}");
+                assert_eq!(
+                    out["foo"],
+                    obj(vec![("db", obj(vec![("port", n(2))]))]),
+                    "{glob}"
+                );
             }
         }
 
@@ -496,8 +384,12 @@ macro_rules! common_tests {
                     ("alias", s("${bar}")),
                     ("through", s("${alias.a}")),
                 ]),
-                obj(vec![("foo", obj(vec![("b", obj(vec![("a", n(4))])), ("c", s("${foo.b.a}"))]))]),
-            ]).unwrap();
+                obj(vec![(
+                    "foo",
+                    obj(vec![("b", obj(vec![("a", n(4))])), ("c", s("${foo.b.a}"))]),
+                )]),
+            ])
+            .unwrap();
             assert_eq!(out["read"], n(1));
             assert_eq!(out["copy"], obj(vec![("a", n(4)), ("d", n(1))]));
             assert_eq!(out["through"], n(1));
@@ -507,8 +399,17 @@ macro_rules! common_tests {
         #[test]
         fn a_merged_reference_that_expands_into_itself_is_a_cycle() {
             for layers in [
-                vec![obj(vec![("foo", obj(vec![("x", n(1))]))]), obj(vec![("foo", s("${bar}")), ("bar", obj(vec![("child", s("${foo}"))]))])],
-                vec![obj(vec![("a", obj(vec![("x", n(1))]))]), obj(vec![("a", s("${b}")), ("b", s("${a}"))])],
+                vec![
+                    obj(vec![("foo", obj(vec![("x", n(1))]))]),
+                    obj(vec![
+                        ("foo", s("${bar}")),
+                        ("bar", obj(vec![("child", s("${foo}"))])),
+                    ]),
+                ],
+                vec![
+                    obj(vec![("a", obj(vec![("x", n(1))]))]),
+                    obj(vec![("a", s("${b}")), ("b", s("${a}"))]),
+                ],
             ] {
                 assert!(matches!(fold(layers), Err(InterpError::Cycle(_))));
             }
@@ -517,40 +418,44 @@ macro_rules! common_tests {
         #[test]
         fn environment_objects_merge_with_overrides_and_stay_terminal() {
             let text = if Value::FORMAT == crate::Format::Json {
-                r#"{"raw":"${missing}","extends":"${missing}","port":1}"#
+                r#"{"raw":"${missing}","other":"${missing}","port":1}"#
             } else {
-                r#"{raw="${missing}", extends="${missing}", port=1}"#
+                r#"{raw="${missing}", other="${missing}", port=1}"#
             };
             let env = StubEnv::new(&[("CONF", text)]);
-            let out = fold_with(vec![
-                obj(vec![("conf", s("${env:CONF}"))]),
-                obj(vec![("conf", obj(vec![("port", n(2))]))]),
-            ], None, None, &env).unwrap();
-            assert_eq!(out["conf"], obj(vec![("raw", s("${missing}")), ("extends", s("${missing}")), ("port", n(2))]));
-        }
-
-        #[test]
-        fn markers_stay_last_wins_and_combine_with_reference_merges() {
-            let out = fold(vec![
+            let out = fold_with(
+                vec![
+                    obj(vec![("conf", s("${env:CONF}"))]),
+                    obj(vec![("conf", obj(vec![("port", n(2))]))]),
+                ],
+                None,
+                None,
+                &env,
+            )
+            .unwrap();
+            assert_eq!(
+                out["conf"],
                 obj(vec![
-                    ("one", obj(vec![("a", n(1))])),
-                    ("two", obj(vec![("b", n(2))])),
-                    ("item", obj(vec![("extends", s("${one}")), ("c", n(3))])),
-                    ("copy", s("${item}")),
-                ]),
-                obj(vec![("item", obj(vec![("extends", s("${two}"))])), ("copy", obj(vec![("e", n(5))]))]),
-            ]).unwrap();
-            assert_eq!(out["item"], obj(vec![("b", n(2)), ("c", n(3))]));
-            assert_eq!(out["copy"], obj(vec![("b", n(2)), ("c", n(3)), ("e", n(5))]));
+                    ("raw", s("${missing}")),
+                    ("other", s("${missing}")),
+                    ("port", n(2))
+                ])
+            );
         }
 
         #[test]
         fn context_referents_merge_with_later_layers() {
             let context = obj(vec![("shared", obj(vec![("a", n(1)), ("b", n(1))]))]);
-            let out = fold_with(vec![
-                obj(vec![("foo", s("${shared}"))]),
-                obj(vec![("foo", obj(vec![("a", n(2))]))]),
-            ], Some(&context), None, &StubEnv::default()).unwrap();
+            let out = fold_with(
+                vec![
+                    obj(vec![("foo", s("${shared}"))]),
+                    obj(vec![("foo", obj(vec![("a", n(2))]))]),
+                ],
+                Some(&context),
+                None,
+                &StubEnv::default(),
+            )
+            .unwrap();
             assert_eq!(out, obj(vec![("foo", obj(vec![("a", n(2)), ("b", n(1))]))]));
         }
 
@@ -1073,13 +978,16 @@ macro_rules! common_tests {
         fn a_nested_whole_string_reference_merges_as_its_referent() {
             let doc = with(
                 regions(),
-                vec![
-                    ("region", s("eu")),
-                    ("pick", s("${regions.${region}}")),
-                ],
+                vec![("region", s("eu")), ("pick", s("${regions.${region}}"))],
             );
             let over = obj(vec![("pick", obj(vec![("extra", n(1))]))]);
-            let out = merge_interpolate([doc, over], None, &StubEnv::default(), &InterpOptions::default()).unwrap();
+            let out = merge_interpolate(
+                [doc, over],
+                None,
+                &StubEnv::default(),
+                &InterpOptions::default(),
+            )
+            .unwrap();
             assert_eq!(
                 out.as_object().unwrap()["pick"],
                 obj(vec![("endpoint", s("eu.example")), ("extra", n(1))])
@@ -1088,9 +996,21 @@ macro_rules! common_tests {
 
         #[test]
         fn an_inner_reference_binds_to_the_final_document() {
-            let base = with(regions(), vec![("region", s("eu")), ("e", s("${regions.${region}.endpoint}"))]);
+            let base = with(
+                regions(),
+                vec![
+                    ("region", s("eu")),
+                    ("e", s("${regions.${region}.endpoint}")),
+                ],
+            );
             let over = obj(vec![("region", s("us"))]);
-            let out = merge_interpolate([base, over], None, &StubEnv::default(), &InterpOptions::default()).unwrap();
+            let out = merge_interpolate(
+                [base, over],
+                None,
+                &StubEnv::default(),
+                &InterpOptions::default(),
+            )
+            .unwrap();
             assert_eq!(out.as_object().unwrap()["e"], s("us.example"));
         }
 
@@ -1136,8 +1056,14 @@ macro_rules! common_tests {
         #[test]
         fn a_failed_inner_reference_is_reported_once_whatever_the_order() {
             for entries in [
-                vec![("selector", s("${missing}")), ("result", s("${root.${selector}}"))],
-                vec![("result", s("${root.${selector}}")), ("selector", s("${missing}"))],
+                vec![
+                    ("selector", s("${missing}")),
+                    ("result", s("${root.${selector}}")),
+                ],
+                vec![
+                    ("result", s("${root.${selector}}")),
+                    ("selector", s("${missing}")),
+                ],
             ] {
                 assert_eq!(
                     err(obj(entries)),
@@ -1160,26 +1086,6 @@ macro_rules! common_tests {
             let doc = obj(vec![("a", s("${${a}}"))]);
             assert!(err(doc).starts_with("reference cycle"));
         }
-
-        #[test]
-        fn a_merge_directive_may_have_a_nested_body() {
-            let doc = obj(vec![
-                ("kind", s("small")),
-                (
-                    "bases",
-                    obj(vec![("small", obj(vec![("a", n(1)), ("b", n(2))]))]),
-                ),
-                (
-                    "svc",
-                    obj(vec![("extends", s("${bases.${kind}}")), ("b", n(3))]),
-                ),
-            ]);
-            let out = inherit(doc, None, None).unwrap();
-            assert_eq!(
-                out.as_object().unwrap()["svc"],
-                obj(vec![("a", n(1)), ("b", n(3))])
-            );
-        }
     };
 }
 
@@ -1195,16 +1101,6 @@ mod json {
         assert_eq!(
             err(doc),
             "reference cannot be rendered into a string\n  --> t: `z` is a null"
-        );
-    }
-    #[test]
-    fn inheritance_preserves_unsigned_values_and_null_overwrites() {
-        let doc = serde_json::json!({"bar":{"extends":"${base}","nested":null}});
-        let context = serde_json::json!({"base":{"big":u64::MAX,"null":null,"nested":{"a":1}}});
-        let out = inherit(doc, Some(&context), None).unwrap();
-        assert_eq!(
-            out,
-            serde_json::json!({"bar":{"big":u64::MAX,"null":null,"nested":null}})
         );
     }
     #[test]
@@ -1241,18 +1137,6 @@ mod toml {
     use ::toml::Value;
     type Map = ::toml::Table;
     common_tests!();
-    #[test]
-    fn inheritance_preserves_native_datetime_and_nonfinite_values() {
-        let doc = Value::parse_document("[bar]\nextends='${base}'\n").unwrap();
-        let context = Value::parse_document(
-            "[base]\nat=1979-05-27T07:32:00.123456789+05:45\ninfinite=inf\nnan=nan\n",
-        )
-        .unwrap();
-        let out = inherit(doc, Some(&context), None).unwrap();
-        assert_eq!(out["bar"]["at"], context["base"]["at"]);
-        assert_eq!(out["bar"]["infinite"], context["base"]["infinite"]);
-        assert!(out["bar"]["nan"].as_float().unwrap().is_nan());
-    }
     #[test]
     fn context_preserves_native_datetimes_and_nonfinite_floats() {
         let doc = Value::parse_document("date = '${day}'\nfloat = '${infinite}'\n").unwrap();

@@ -167,11 +167,10 @@ fn resolve_native<V: ConfigFormat>(
     // References merge as the values they name, so they fold with the layers.
     if cli.interpolate {
         let options = InterpOptions {
-            merge_key: cli.merge_key.clone(),
             shallow: cli.shallow.clone(),
         };
         merge_interpolate(layers, context.as_ref(), &ProcessEnv, &options)
-            .map_err(|err| explain::explain_interp(err, context.is_some(), cli.merge_key.is_some()))
+            .map_err(|err| explain::explain_interp(err, context.is_some()))
     } else {
         Ok(merge(layers, opts))
     }

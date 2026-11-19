@@ -53,7 +53,7 @@ pub fn explain_pipeline(err: impl Into<anyhow::Error>, context: Option<&Path>) -
         Err(err) => err,
     };
     match err.downcast::<InterpError>() {
-        Ok(err) => explain_interp(err, false, false),
+        Ok(err) => explain_interp(err, false),
         Err(err) => err,
     }
 }
@@ -96,7 +96,7 @@ pub fn name_the_inline_layer_flag(err: PathError) -> anyhow::Error {
 }
 
 /// Adds `--interpolate` help to interpolation errors.
-pub fn explain_interp(err: InterpError, has_context: bool, has_merge_key: bool) -> anyhow::Error {
+pub fn explain_interp(err: InterpError, has_context: bool) -> anyhow::Error {
     let mut help = String::new();
     match &err {
         InterpError::Cycle(_) => {
@@ -128,22 +128,8 @@ pub fn explain_interp(err: InterpError, has_context: bool, has_merge_key: bool) 
                     "\nhelp: an object or array reference must be the whole string, not embedded in one",
                 );
             }
-            if has(|p| {
-                matches!(
-                    p,
-                    Problem::MergeReference { .. } | Problem::MergeObject { .. }
-                )
-            }) {
-                help.push_str(
-                    "\nhelp: --merge-key selects a literal key whose value must be one whole-string reference to an object/table",
-                );
-            }
             if syntax || unresolved {
-                if has_merge_key && has_context {
-                    help.push_str("\nhelp: drop --interpolate, --merge-key and --with to pass `${...}` through untouched");
-                } else if has_merge_key {
-                    help.push_str("\nhelp: drop --interpolate and --merge-key to pass `${...}` through untouched");
-                } else if has_context {
+                if has_context {
                     help.push_str(
                         "\nhelp: drop --interpolate and --with to pass `${...}` through untouched",
                     );

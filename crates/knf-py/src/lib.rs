@@ -123,21 +123,15 @@ fn discovery_os_error(py: Python<'_>, path: Option<&Path>, source: io::Error) ->
 /// document and a whole-string reference merges as the value it names.
 /// `context` is one filepath used only for interpolation, with output-first
 /// lookup; it requires `interpolate=True`.
-/// `merge_key` selects a literal inheritance key containing one whole-string
-/// object reference; requires `interpolate=True` and honors `shallow`.
 #[pyfunction]
-#[pyo3(signature = (files, *, interpolate = false, shallow = None, context = None, merge_key = None))]
+#[pyo3(signature = (files, *, interpolate = false, shallow = None, context = None))]
 fn load<'py>(
     py: Python<'py>,
     files: Vec<PathBuf>,
     interpolate: bool,
     shallow: Option<&str>,
     context: Option<PathBuf>,
-    merge_key: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    if merge_key.is_some() && !interpolate {
-        return Err(PyValueError::new_err("merge_key requires interpolate=True"));
-    }
     if let Some(path) = &context {
         if !interpolate {
             return Err(PyValueError::new_err("context requires interpolate=True"));
@@ -152,7 +146,6 @@ fn load<'py>(
         .map_err(|err: KeyGlobError| PyValueError::new_err(err.to_string()))?;
     let opts = MergeOptions { shallow };
     let interp_options = InterpOptions {
-        merge_key,
         shallow: opts.shallow.clone(),
     };
     let merged = py

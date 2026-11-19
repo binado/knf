@@ -7,7 +7,7 @@ use crate::merge::{merge_fields, shallow_at};
 use crate::{ConfigFormat, ConfigObject, Seg};
 
 use super::scan::{Piece, scan};
-use super::{Cycle, ENV, Problem, Resolver, child};
+use super::{Cycle, ENV, Resolver, child};
 
 pub(super) type Id = usize;
 
@@ -34,12 +34,12 @@ pub(super) struct Node<V> {
     pub path: Vec<Seg>,
 }
 
-/// A node's structure after following references, merges and inheritance.
+/// A node's structure after following references and merges.
 #[derive(Clone)]
 pub(super) enum Shape {
     Object(Fields),
     Array(Rc<[Id]>),
-    Scalar(&'static str),
+    Scalar,
     /// A reference that names nothing; the problem is already recorded.
     Missing,
 }
@@ -140,13 +140,9 @@ impl<V: ConfigFormat> Resolver<'_, V> {
     }
 
     /// Merges `over` onto `base` at `dest`, deciding now whenever a kind is
-    /// known. A replaced operand is never resolved. Markers are directives,
-    /// not values, so the last one wins.
+    /// known. A replaced operand is never resolved.
     pub(super) fn combine(&mut self, base: Id, over: Id, dest: Vec<Seg>) -> Id {
-        let marker =
-            matches!(dest.last(), Some(Seg::Key(key)) if Some(key.as_str()) == self.merge_key);
-        if marker
-            || shallow_at(self.shallow, &dest)
+        if shallow_at(self.shallow, &dest)
             || self.hint(over) == Hint::Other
             || self.hint(base) == Hint::Other
         {
@@ -212,9 +208,7 @@ impl<V: ConfigFormat> Resolver<'_, V> {
             return Ok(shape.clone());
         }
         let shape = match &self.nodes[id].expr {
-            Expr::Value(value) if value.as_str().and_then(whole_ref).is_none() => {
-                Shape::Scalar(value.kind())
-            }
+            Expr::Value(value) if value.as_str().and_then(whole_ref).is_none() => Shape::Scalar,
             // Aliases can chain back to themselves.
             Expr::Value(_) => match self.resolve_ref(id)? {
                 Some(target) => {
@@ -230,38 +224,16 @@ impl<V: ConfigFormat> Resolver<'_, V> {
                 self.terminal_shape(id, value)
             }
             Expr::Array(items) => Shape::Array(items.as_slice().into()),
-            // Markers fold like any field, so apply only the surviving one.
-            Expr::Object(_) | Expr::Merge { .. } => match self.raw(id)? {
-                Shape::Object(fields) => {
-                    self.enter(id)?;
-                    let shape = self.view(id, &fields)?;
-                    self.shaping.pop();
-                    shape
-                }
-                other => other,
-            },
-        };
-        self.shapes.insert(id, shape.clone());
-        Ok(shape)
-    }
-
-    /// Structure before inheritance: literal operands keep their markers,
-    /// while a reference contributes its referent's final shape.
-    fn raw(&mut self, id: Id) -> Result<Shape, Cycle> {
-        match &self.nodes[id].expr {
-            Expr::Object(fields) => Ok(Shape::Object(fields.as_slice().into())),
+            Expr::Object(fields) => Shape::Object(fields.as_slice().into()),
             &Expr::Merge { base, over } => {
-                if let Some(shape) = self.raws.get(&id) {
-                    return Ok(shape.clone());
-                }
                 self.enter(id)?;
                 let shape = self.merge_shape(id, base, over)?;
                 self.shaping.pop();
-                self.raws.insert(id, shape.clone());
-                Ok(shape)
+                shape
             }
-            _ => self.shape(id),
-        }
+        };
+        self.shapes.insert(id, shape.clone());
+        Ok(shape)
     }
 
     fn terminal_shape(&mut self, id: Id, value: V) -> Shape {
@@ -287,79 +259,17 @@ impl<V: ConfigFormat> Resolver<'_, V> {
                     .collect(),
             )
         } else {
-            Shape::Scalar(value.kind())
+            Shape::Scalar
         }
-    }
-
-    /// An object's fields, under its marker's base when it has one. Keys from
-    /// environment values are data, never markers.
-    fn view(&mut self, id: Id, fields: &Fields) -> Result<Shape, Cycle> {
-        let marker = self.merge_key.and_then(|key| {
-            fields.iter().position(|&(ref name, field)| {
-                name == key && !matches!(self.nodes[field].expr, Expr::Terminal(_))
-            })
-        });
-        let Some(index) = marker else {
-            return Ok(Shape::Object(fields.clone()));
-        };
-        let mut fields = fields.to_vec();
-        let directive = fields.remove(index).1;
-        let path = self.nodes[id].path.clone();
-        if let Some(base) = self.directive(directive)?
-            && !shallow_at(self.shallow, &path)
-        {
-            fields = self.overlay(&base, fields, &path);
-        }
-        Ok(Shape::Object(fields.into()))
-    }
-
-    /// The base fields a marker names, recording why when it names none.
-    fn directive(&mut self, id: Id) -> Result<Option<Fields>, Cycle> {
-        let path = self.nodes[id].path.clone();
-        let text = match &self.nodes[id].expr {
-            Expr::Value(value) => value.as_str().map(str::to_owned),
-            _ => None,
-        };
-        let Some(text) = text else {
-            self.problems.push(Problem::MergeReference { path });
-            return Ok(None);
-        };
-        if whole_ref(&text).is_none() {
-            let mut malformed = false;
-            for piece in scan(&text) {
-                if let Piece::Malformed { error, .. } = piece {
-                    malformed = true;
-                    self.problems.push(Problem::Syntax {
-                        path: path.clone(),
-                        error,
-                    });
-                }
-            }
-            if !malformed {
-                self.problems.push(Problem::MergeReference { path });
-            }
-            return Ok(None);
-        }
-        let Some(target) = self.resolve_ref(id)? else {
-            return Ok(None);
-        };
-        let kind = match self.shape(target)? {
-            Shape::Object(fields) => return Ok(Some(fields)),
-            Shape::Missing => return Ok(None),
-            Shape::Array(_) => "array",
-            Shape::Scalar(kind) => kind,
-        };
-        self.problems.push(Problem::MergeObject { path, kind });
-        Ok(None)
     }
 
     /// Right operand first: only an object there needs the left one.
     fn merge_shape(&mut self, id: Id, base: Id, over: Id) -> Result<Shape, Cycle> {
-        let over_shape = self.raw(over)?;
+        let over_shape = self.shape(over)?;
         let Shape::Object(over_fields) = &over_shape else {
             return Ok(over_shape);
         };
-        let Shape::Object(base_fields) = self.raw(base)? else {
+        let Shape::Object(base_fields) = self.shape(base)? else {
             return Ok(over_shape);
         };
         let path = self.nodes[id].path.clone();
@@ -420,9 +330,7 @@ impl<V: ConfigFormat> Resolver<'_, V> {
     /// written locally; anything else is absent from the output.
     fn explicit(&self, id: Id, seg: &Seg) -> Option<Id> {
         match (&self.nodes[id].expr, seg) {
-            (Expr::Object(fields), Seg::Key(key)) if self.merge_key != Some(key.as_str()) => {
-                ConfigObject::get(fields, key).copied()
-            }
+            (Expr::Object(fields), Seg::Key(key)) => ConfigObject::get(fields, key).copied(),
             (&Expr::Merge { base, over }, _) => self.explicit(over, seg).or_else(|| {
                 matches!(self.nodes[over].expr, Expr::Object(_))
                     .then(|| self.explicit(base, seg))

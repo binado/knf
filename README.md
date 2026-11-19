@@ -143,7 +143,8 @@ d = 1
 
 A later layer changing `bar.d` changes `foo.b.d` too. `--shallow 'foo.b'`
 replaces instead. A value that is replaced is never resolved, but a reference
-whose type decides a merge must resolve.
+whose type decides a merge must resolve. To inherit and override, reference
+the base in one layer (`bar = "${foo}"`) and write the overrides in a later one.
 
 **`--with FILE`**: use one context file for interpolation without merging it
 into output; requires `-i`. Each complete reference path prefers the merged
@@ -158,31 +159,6 @@ generate-config | knf foo.toml bar.toml -i --with - -f toml
 Context uses the same format as inputs, including `-f`. `--with -` reads stdin
 and requires `-f`; stdin cannot also supply a merge layer.
 Filtering, accumulation and `--list-files` apply only to merge inputs.
-
-**`-m/--merge-key KEY`**: use one whole-string object reference as defaults for
-its parent; requires `-i`. Local fields win and the directive is removed.
-
-```toml
-[foo]
-a = 1
-b = 2
-c = 3
-
-[bar]
-extends = "${foo}"
-c = 4
-```
-
-```bash
-knf config.toml -i -m extends # bar becomes {a=1, b=2, c=4}
-```
-
-The last layer's directive wins; honors `--shallow` at destination key paths.
-Use it to inherit and override in one file.
-Inherited fields can be referenced as `${bar.a}`; references remain absolute.
-Context bases and chained inheritance work. Environment bases must parse as
-objects/tables, and their contents remain terminal. Without `-m`, `KEY` is
-ordinary data.
 
 **`-f/--format json|toml`**: set the input format for parsing and `-c` typing.
 Required for stdin. Mixed input formats are an error without an override.
@@ -219,7 +195,6 @@ from knf import accumulate, deep_merge, dump, dumps, filter_paths, load
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
 config = load(["foo.toml", "bar.toml"], interpolate=True, context="config.toml")
-config = load(["config.toml"], interpolate=True, merge_key="extends")
 
 files = accumulate("services/api/prod.toml", base_dir=project_root)
 files = filter_paths(files, "{defaults,prod}.toml", filename_only=True)

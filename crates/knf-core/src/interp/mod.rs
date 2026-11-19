@@ -36,14 +36,11 @@ pub trait Env {
     fn lookup(&self, name: &str) -> Option<String>;
 }
 
-/// Options for reference-aware merging and opt-in object inheritance.
+/// Options for reference-aware merging options.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InterpOptions {
-    /// Literal key whose whole-string reference supplies an object's defaults.
-    /// `None` leaves every key as ordinary data.
-    pub merge_key: Option<String>,
-    /// Destination key paths to replace wholesale, in layer and inheritance
-    /// merges. Matching ancestors stop merging; paths with indices never match.
+    /// Destination key paths to replace wholesale, in layer merges. Matching
+    /// ancestors stop merging; paths with indices never match.
     pub shallow: Option<KeyGlobPattern>,
 }
 
@@ -56,10 +53,6 @@ pub struct InterpOptions {
 /// replace wholesale. An operand that is replaced is never resolved, but a
 /// reference whose kind decides a merge must resolve.
 ///
-/// With `merge_key`, an object's marker must hold one whole-string reference
-/// to an object, which supplies defaults beneath the object's own fields. The
-/// marker is removed from the result.
-///
 /// Context values are resolved only when referenced. Environment values are
 /// terminal. Invalid directives and reference problems are reported together;
 /// cycles are reported alone.
@@ -71,14 +64,12 @@ pub fn merge_interpolate<V: ConfigFormat>(
 ) -> Result<V, InterpError> {
     let mut resolver = Resolver {
         env,
-        merge_key: options.merge_key.as_deref(),
         shallow: options.shallow.as_ref(),
         nodes: Vec::new(),
         doc: 0,
         context: None,
         merges: HashMap::new(),
         shapes: HashMap::new(),
-        raws: HashMap::new(),
         targets: HashMap::new(),
         shaping: Vec::new(),
         values: HashMap::new(),
@@ -126,14 +117,12 @@ pub fn interpolate_with_context<V: ConfigFormat>(
 /// Expression graph and caches. `nodes` is append-only so ids are stable cache keys.
 struct Resolver<'a, V: ConfigFormat> {
     env: &'a dyn Env,
-    merge_key: Option<&'a str>,
     shallow: Option<&'a KeyGlobPattern>,
     nodes: Vec<Node<V>>,
     doc: Id,
     context: Option<Id>,
     merges: HashMap<(Id, Id, Vec<Seg>), Id>,
     shapes: HashMap<Id, Shape>,
-    raws: HashMap<Id, Shape>,
     targets: HashMap<Id, Option<Id>>,
     /// Nodes whose structure or target is being decided, innermost last.
     shaping: Vec<Id>,
