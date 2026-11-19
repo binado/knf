@@ -289,46 +289,6 @@ fn exec_does_not_launch_after_merge_error() {
 }
 
 #[test]
-fn a_reference_layer_inherits_and_a_later_layer_overrides_in_both_formats() {
-    let dir = tree(&[
-        (
-            "base.json",
-            r#"{"defaults":{"port":1,"host":"h"},"staging":"${defaults}","prod":"${staging}"}"#,
-        ),
-        (
-            "over.json",
-            r#"{"staging":{"port":2},"read":"${staging.port}"}"#,
-        ),
-        (
-            "base.toml",
-            "staging='${defaults}'\nprod='${staging}'\n[defaults]\nport=1\nhost='h'\n",
-        ),
-        ("over.toml", "read='${staging.port}'\n[staging]\nport=2\n"),
-    ]);
-    let inherited = r#"{"defaults":{"port":1,"host":"h"},"staging":{"port":2,"host":"h"},"prod":{"port":2,"host":"h"},"read":2}"#;
-    let shallow =
-        r#"{"defaults":{"port":1,"host":"h"},"staging":{"port":2},"prod":{"port":2},"read":2}"#;
-    for (base, over) in [("base.json", "over.json"), ("base.toml", "over.toml")] {
-        for (extra, expected) in [
-            (&[][..], inherited),
-            (&["--shallow", "staging"][..], shallow),
-        ] {
-            let mut args = vec![base, over, "-i"];
-            args.extend(extra);
-            let text = run(&dir, &args);
-            if base.ends_with("toml") {
-                assert_toml_eq_json(&text, expected);
-            } else {
-                assert_eq!(
-                    serde_json::from_str::<serde_json::Value>(&text).unwrap(),
-                    serde_json::from_str::<serde_json::Value>(expected).unwrap()
-                );
-            }
-        }
-    }
-}
-
-#[test]
 fn context_supplies_values_without_merging_and_sees_final_overrides() {
     let dir = tree(&[
         (
@@ -795,54 +755,6 @@ fn toml_datetime_survives_set() {
 }
 
 #[test]
-fn key_order_is_preserved_in_both_formats() {
-    let dir = tree(&[
-        ("a.json", r#"{"zebra":1,"apple":2,"middle":3}"#),
-        ("a.toml", "zebra = 1\napple = 2\nmiddle = 3\n"),
-    ]);
-    assert_eq!(
-        run(&dir, &["a.json", "--compact"]),
-        "{\"zebra\":1,\"apple\":2,\"middle\":3}\n"
-    );
-    assert_eq!(run(&dir, &["a.toml"]), "zebra = 1\napple = 2\nmiddle = 3\n");
-}
-
-#[test]
-fn integers_above_i64_max_are_exact() {
-    let doc = r#"{"id":10000000000000000001,"max":18446744073709551615}"#;
-    let dir = tree(&[("a.json", doc)]);
-    assert_eq!(run(&dir, &["a.json", "--compact"]), format!("{doc}\n"));
-}
-
-#[test]
-fn a_single_layer_is_a_no_op() {
-    let doc = r#"{"a":{"b":1},"n":null,"xs":[1,2]}"#;
-    let dir = tree(&[("a.json", doc)]);
-    assert_eq!(run(&dir, &["a.json", "--compact"]), format!("{doc}\n"));
-}
-
-#[test]
-fn homogeneous_layers_merge_in_both_formats() {
-    let dir = tree(&[
-        (
-            "base.toml",
-            "[server]
-port = 80
-host = 'local'",
-        ),
-        (
-            "over.toml",
-            "[server]
-port = 443",
-        ),
-    ]);
-    assert_toml_eq_json(
-        &run(&dir, &["base.toml", "over.toml"]),
-        r#"{"server":{"port":443,"host":"local"}}"#,
-    );
-}
-
-#[test]
 fn paths_without_a_known_extension_are_rejected_with_a_rename_hint() {
     let dir = tree(&[("app.conf", "{}")]);
     for name in ["app.conf", "-"] {
@@ -855,32 +767,10 @@ fn paths_without_a_known_extension_are_rejected_with_a_rename_hint() {
     }
 }
 
-#[test]
-fn inline_configs_apply_last() {
-    let dir = tree(&[("a.json", r#"{"server":{"port":80}}"#)]);
-    assert_eq!(
-        run(&dir, &["a.json", "-c", "server.port=8080", "--compact"]),
-        "{\"server\":{\"port\":8080}}\n"
-    );
-    // With no file inputs, --to selects the format.
-    assert_eq!(
-        run(&dir, &["-c", "a.b=1", "--to", "json", "--compact"]),
-        "{\"a\":{\"b\":1}}\n"
-    );
-}
-
 // --- deep and shallow merge ----------------------------------------------
 
 const BASE: &str = "plugins = [\"auth\"]\n[db]\nhost = \"local\"\nport = 5432\n";
 const PROD: &str = "plugins = [\"metrics\"]\n[db]\nhost = \"prod\"\n";
-
-#[test]
-fn by_default_arrays_replace_and_tables_merge() {
-    let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
-    let out = run(&dir, &["base.toml", "prod.toml"]);
-    assert!(out.contains("plugins = [\"metrics\"]"), "{out}");
-    assert!(out.contains("port = 5432"), "{out}");
-}
 
 #[test]
 fn shallow_takes_top_level_tables_whole() {

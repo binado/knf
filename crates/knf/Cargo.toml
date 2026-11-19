@@ -25,3 +25,10 @@ serde_json.workspace = true
 toml.workspace = true
 assert_cmd = "2"
 insta = "1"
+datatest-stable = "0.3.3"
+shlex = "2.0.1"
+similar = "3.2.1"
+
+[[test]]
+name = "mdtest"
+harness = false

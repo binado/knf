@@ -13,6 +13,10 @@ test:
 test-py:
     maturin develop && pytest python/tests
 
+# Rewrite expected output in crates/knf/resources/mdtest/*.md from actual runs.
+bless:
+    MDTEST_UPDATE=1 cargo test -p knf-cli --test mdtest
+
 review:
     cargo insta review
 
