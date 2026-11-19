@@ -1,13 +1,9 @@
-//! Paths into a document: [`Seg`] steps, the parsed [`RefPath`] (`a.b[2].c`),
-//! and their renderings.
-//!
-//! Writers take keys only; [`RefPath::try_into_keys`] rejects index steps.
-//! Merge selectors use [`crate::glob`] instead.
+//! Document paths ([`Seg`], [`RefPath`]) and path rendering.
 
 use std::fmt;
 use std::str::FromStr;
 
-/// Why a path expression was rejected. Carries only the path text.
+/// Why a path expression was rejected.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PathError {
     /// No `=` in a `key.path=value` expression.
@@ -282,7 +278,6 @@ mod tests {
             RefPath::from_keys(vec!["a".into(), "".into()]).unwrap_err(),
             PathError::EmptySegment { path: "a.".into() }
         );
-        // from_keys and parsing agree on the dotted all-key grammar.
         assert_eq!(
             RefPath::from_keys(vec!["db".into(), "plugins".into()]).unwrap(),
             "db.plugins".parse().unwrap()

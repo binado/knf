@@ -70,8 +70,7 @@ fn encode(byte: u8) -> u8 {
 }
 
 impl KeyGlobPattern {
-    /// Match actual key segments, never a dotted diagnostic rendering.
-    /// The empty slice denotes the document root and is never selected.
+    /// Match key segments. The empty slice (document root) never matches.
     pub fn matches_keys(&self, keys: &[String]) -> bool {
         if keys.is_empty() {
             return false;
@@ -111,7 +110,7 @@ impl Normalizer<'_> {
         KeyGlobError::Glob(GlobError { kind, index })
     }
 
-    // Decode exactly fast-glob's escapes outside quoted literal spans.
+    // Mirror fast-glob's escape decoding outside quoted literal spans.
     fn escaped(&self, index: &mut usize) -> Result<u8, KeyGlobError> {
         let offset = *index;
         let mut byte = self.source[*index];
@@ -339,12 +338,9 @@ mod tests {
             "[-]", "[z-a]", "[!z-a]", "['.]", r"[\n]",
         ] {
             let selector: KeyGlobPattern = pattern.parse().unwrap();
-            // A class always selects one byte within a key. Unlike filesystem
-            // matching, slash and backslash are ordinary key bytes here.
             for byte in 0..=127_u8 {
                 let reference = pattern.as_bytes().to_vec();
-                // Compare the original class against a non-separator byte;
-                // separators are checked explicitly below instead.
+                // fast-glob treats `/` and `\` as path separators; those are checked separately below.
                 if matches!(byte, b'/' | b'\\') {
                     continue;
                 }

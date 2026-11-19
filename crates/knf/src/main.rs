@@ -23,16 +23,12 @@ use knf_convert::{Converted, Policy};
 /// Set while an `--exec` child runs, so Ctrl-C is left to the child.
 static CHILD_RUNNING: AtomicBool = AtomicBool::new(false);
 
-// Entry point for the `knf-cli` binary. `knf-py` includes this file and calls
-// `main_from` instead, so the function is unused in that compilation.
+// Unused when included by `knf-py`, which calls `main_from` directly and keeps
+// Python's SIGINT handler.
 #[allow(dead_code)]
 fn main() {
-    // The pyknf wheel calls `main_from` with `sys.argv` instead, and keeps
-    // Python's own SIGINT handling.
-    //
-    // A terminal Ctrl-C reaches `knf` and its child together. While a child
-    // runs, `knf` outlives it so the snapshot is removed on drop; otherwise it
-    // exits as a default SIGINT would.
+    // Terminal Ctrl-C hits parent and child together; stay alive while a child
+    // runs so the snapshot tempfile is removed on drop.
     if let Err(err) = ctrlc::set_handler(|| {
         if !CHILD_RUNNING.load(Ordering::SeqCst) {
             std::process::exit(130);
@@ -49,14 +45,12 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
 {
-    // clap handles --help/--version and exits 2 on usage errors.
     let (cli, command) = Cli::parse_command(args.into_iter().map(Into::into));
 
     match run(cli, &command) {
         Ok(0) => (),
         Ok(code) => std::process::exit(code),
         Err(err) => {
-            // Frontend help is added by `explain`; library errors remain flag-free.
             eprintln!("error: {err}");
             for cause in err.chain().skip(1) {
                 eprintln!("  caused by: {cause}");
@@ -66,7 +60,6 @@ where
     }
 }
 
-/// Prepare explicit file inputs and terminal overlays for the shared pipeline.
 fn run(cli: Cli, command: &[OsString]) -> anyhow::Result<i32> {
     // Validate -c paths before any file I/O.
     for leaf in &cli.set {
@@ -106,7 +99,6 @@ fn run(cli: Cli, command: &[OsString]) -> anyhow::Result<i32> {
     }
 }
 
-/// Resolve natively and convert only the final document when requested.
 fn run_pipeline(
     cli: &Cli,
     files: &[PathBuf],
@@ -146,7 +138,6 @@ fn run_pipeline(
     Ok((text.map_err(|err| explain_pipeline(err, None))?, format))
 }
 
-/// Warns when the conversion was lossy, then serializes the converted value.
 fn emit_converted<V: ConfigFormat>(
     converted: Converted<V>,
     pretty: bool,
@@ -216,8 +207,7 @@ fn run_child(
     Ok(status.code().unwrap_or(1))
 }
 
-/// Writes to stdout, treating a closed pipe as success so `knf big.json | head`
-/// does not report an error the user cannot act on.
+/// Writes to stdout, ignoring `BrokenPipe` (e.g. `knf big.json | head`).
 fn write_stdout(text: &str) -> anyhow::Result<()> {
     match std::io::stdout().write_all(text.as_bytes()) {
         Ok(()) => Ok(()),

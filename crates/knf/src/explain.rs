@@ -1,5 +1,4 @@
-//! Adds `help:` lines naming CLI flags to library errors. The only place flag
-//! names appear in error messages.
+//! Adds CLI flag `help:` lines to library errors.
 
 use std::path::Path;
 
@@ -11,7 +10,7 @@ pub fn context_stdin_conflict() -> &'static str {
     "stdin cannot supply both a merge layer and --with context"
 }
 
-/// Preserve the command-line vocabulary for target validation.
+/// Formats target validation errors using `--accumulate`.
 pub fn explain_accumulate_target(err: AccumulateTargetError) -> String {
     match err {
         AccumulateTargetError::Stdin => "--accumulate does not accept stdin",
@@ -43,11 +42,10 @@ pub fn explain_accumulate(err: AccumulateError) -> anyhow::Error {
     }
 }
 
-/// Adds CLI help to a pipeline error by downcasting it.
+/// Adds CLI help to unwrapped `LoadError` or `InterpError` pipeline errors.
 ///
-/// `context` is the `--with` path for load failures, and `None` for later
-/// stages. If `knf-core` starts wrapping these errors, the downcasts silently
-/// miss; the stderr snapshot tests catch that.
+/// `context` is the `--with` path for load failures (`None` for later stages).
+/// Uses `anyhow::Error::downcast`, so wrapped errors pass through unchanged.
 pub fn explain_pipeline(err: impl Into<anyhow::Error>, context: Option<&Path>) -> anyhow::Error {
     let err = err.into();
     let err = match err.downcast::<LoadError>() {

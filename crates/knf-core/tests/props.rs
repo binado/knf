@@ -62,20 +62,17 @@ fn without(doc: &Value, key: &str) -> Value {
 }
 
 proptest! {
-    /// A layer merged over itself changes nothing.
     #[test]
     fn merging_a_layer_with_itself_is_a_no_op(a in arb_doc()) {
         prop_assert_eq!(merged(a.clone(), a.clone()), a);
     }
 
-    /// Applying the same override twice is the same as applying it once.
     #[test]
     fn overriding_twice_is_the_same_as_once(a in arb_doc(), b in arb_doc()) {
         let once = merged(a, b.clone());
         prop_assert_eq!(merged(once.clone(), b), once);
     }
 
-    /// One layer is unchanged under shallow merge.
     #[test]
     fn a_single_layer_is_identity_under_shallow(a in arb_doc()) {
         let got = merge([a.clone()], &MergeOptions::shallow_root());
@@ -93,7 +90,6 @@ proptest! {
         prop_assert_eq!(shallow(a, b), Value::object(want));
     }
 
-    /// A shallow path no layer reaches (`z`) is a deep merge.
     #[test]
     fn an_unreached_shallow_path_is_a_deep_merge(a in arb_doc(), b in arb_doc()) {
         prop_assert_eq!(shallow_at(a.clone(), b.clone(), &["z"]), merged(a, b));
@@ -111,7 +107,6 @@ proptest! {
         }
     }
 
-    /// Unlike the deep merge, root-shallow merge is associative.
     #[test]
     fn shallow_is_associative(a in arb_doc(), b in arb_doc(), c in arb_doc()) {
         let left = shallow(shallow(a.clone(), b.clone()), c.clone());

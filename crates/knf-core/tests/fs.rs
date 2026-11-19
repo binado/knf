@@ -16,7 +16,7 @@ fn tree(files: &[&str]) -> tempfile::TempDir {
     for file in files {
         let path = dir.path().join(file);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        // Discovery must not parse contents.
+        // Invalid contents ensure discovery does not parse files.
         std::fs::write(path, "not a document").unwrap();
     }
     dir

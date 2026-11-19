@@ -6,14 +6,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-# crates.io already has an unrelated `knf`; the library is still `knf`, so a
-# consumer writes `knf-core` in their manifest and `use knf::…` in their code.
+# Package is knf-core because crates.io already has an unrelated knf; consumers still `use knf::...`.
 [lib]
 name = "knf"
 
-# No clap: the flag vocabulary is `knf-cli`'s, and an error raised in this crate
-# names key paths and file paths but never a command-line flag.
-# `cargo tree -p knf-core --depth 1` is the enforcement.
 [dependencies]
 anyhow.workspace = true
 fast-glob.workspace = true

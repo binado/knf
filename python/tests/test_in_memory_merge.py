@@ -47,7 +47,6 @@ def test_deep_merge_copies_merged_dicts_but_shares_other_values():
     merged["solver"]["steps"] = -1
     assert cfg["solver"]["steps"] == 100
     assert overrides["solver"]["steps"] == 10
-    # Values outside a recursive merge are shared, as documented.
     assert merged["solver"]["items"] is shared_list
     assert merged["table"] is shared_table
 

@@ -1,4 +1,4 @@
-//! What a downstream crate can name and compose without an IR.
+//! Public API surface smoke tests for `knf`.
 use knf::{
     ConfigFormat, ConfigObject, ConfigValue, Cycle, Env, Format, InterpError, InterpOptions,
     Layers, LoadError, MergeOptions, PathError, PathLeaf, Problem, ProcessEnv, RefPath, STDIN, Seg,
