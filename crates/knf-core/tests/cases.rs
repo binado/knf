@@ -133,7 +133,6 @@ fn table() {
     }
 }
 
-/// `merge_into` and `merge` agree.
 #[test]
 fn merge_into_matches_merge() {
     for case in CASES {
@@ -146,7 +145,6 @@ fn merge_into_matches_merge() {
     }
 }
 
-/// Parses a JSON fixture.
 fn ir(s: &str) -> Value {
     serde_json::from_str(s).unwrap_or_else(|e| panic!("bad JSON literal `{s}`: {e}"))
 }

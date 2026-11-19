@@ -1,4 +1,4 @@
-//! Interpolation errors. They name key paths only, never files or flags.
+//! Interpolation error types and formatting.
 
 use std::fmt;
 
@@ -19,7 +19,7 @@ impl fmt::Display for InterpError {
         match self {
             Self::Cycle(cycle) => write!(f, "{cycle}"),
             Self::Problems(problems) => {
-                // Grouped by kind in a fixed order. No trailing newline.
+                // No trailing newline.
                 let mut lines: Vec<String> = Vec::new();
                 for group in Group::ALL {
                     let members = problems.iter().filter(|p| p.group() == group);

@@ -3,7 +3,7 @@
 use crate::glob::KeyGlobPattern;
 use crate::{ConfigObject, ConfigValue, Seg};
 
-/// Inheritance uses full key segments too; array descendants have no selector.
+/// Matches `path` or any ancestor against `glob`; paths containing an index never match.
 pub(crate) fn shallow_at(glob: Option<&KeyGlobPattern>, path: &[Seg]) -> bool {
     let Some(glob) = glob else {
         return false;
@@ -21,7 +21,6 @@ pub(crate) fn shallow_at(glob: Option<&KeyGlobPattern>, path: &[Seg]) -> bool {
     (1..=keys.len()).any(|end| glob.matches_keys(&keys[..end]))
 }
 
-/// Ordered object overlay shared by native layers and inherited projections.
 pub(crate) fn merge_fields<V, O: ConfigObject<V>>(
     base: &mut O,
     over: O,
@@ -64,7 +63,7 @@ pub fn merge_into<V: ConfigValue>(base: &mut V, over: V, opts: &MergeOptions) {
 
 /// Left-folds layers into one document, starting from an empty object.
 ///
-/// The merge is not associative, so never merge subgroups and combine them:
+/// Merging is not associative (a scalar layer shadows earlier objects):
 ///
 /// ```text
 /// {a:{b:1}} * {a:5} * {a:{c:2}}
@@ -81,7 +80,6 @@ pub fn merge<V: ConfigValue>(layers: impl IntoIterator<Item = V>, opts: &MergeOp
     acc
 }
 
-/// The recursive worker. `path` is the current key path, for selector matching.
 fn merge_at<V: ConfigValue>(base: &mut V, over: V, opts: &MergeOptions, path: &mut Vec<String>) {
     let over = match base.as_object_mut() {
         Some(base_map) => match over.into_object() {

@@ -125,7 +125,6 @@ fn load_layers_accepts_borrowed_paths() {
     assert_eq!(merged, json!({"a": 1}));
 }
 
-/// Load failures are typed and name no CLI flags.
 #[test]
 fn load_errors_are_typed_and_flag_free() {
     let dir = tree(&[("layer", "{}")]);
@@ -149,7 +148,6 @@ fn load_errors_are_typed_and_flag_free() {
     ));
 }
 
-/// `${env:...}` resolves against a caller-supplied `Env`.
 #[test]
 fn interpolate_resolves_against_a_supplied_environment() {
     struct StubEnv;
@@ -171,7 +169,6 @@ fn interpolate_resolves_against_a_supplied_environment() {
     assert_eq!(merged, json!({"port": 8080, "url": "x:8080"}));
 }
 
-/// `merge` alone leaves `${...}` untouched.
 #[test]
 fn merge_does_not_interpolate() {
     let dir = tree(&[("base.json", r#"{"a":"${b}","b":"literal"}"#)]);

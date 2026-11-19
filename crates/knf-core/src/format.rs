@@ -1,6 +1,4 @@
 //! Format detection, parsing and emission.
-//!
-//! Values remain native throughout parsing, merging and emission.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -8,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::ConfigValue;
 use anyhow::{Context, bail};
 
-/// The two supported native formats. A pipeline selects one for every stage.
+/// Supported configuration formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     Json,
@@ -16,8 +14,7 @@ pub enum Format {
 }
 
 impl Format {
-    /// Infers a format from a file extension. `None` means "no opinion" — the
-    /// caller decides whether that is an error or a cue to fall back.
+    /// Infers a format from a file extension, case-insensitively.
     pub fn from_path(path: &Path) -> Option<Self> {
         let ext = path.extension()?.to_str()?;
         if ext.eq_ignore_ascii_case("json") {
@@ -66,9 +63,7 @@ mod private {
     impl Sealed for toml::Value {}
 }
 
-/// Parsing and emission for the two supported native formats.
-///
-/// Sealed to JSON and TOML; structural algorithms use [`ConfigValue`].
+/// Parsing and emission for the two supported native formats (sealed).
 pub trait ConfigFormat: ConfigValue + private::Sealed {
     /// The format represented by this native value.
     const FORMAT: Format;

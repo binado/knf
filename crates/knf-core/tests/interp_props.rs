@@ -47,8 +47,6 @@ macro_rules! properties {
         }
 
         proptest! {
-            /// Inheritance follows the native merge contract, including
-            /// destination selectors, nested objects and wholesale arrays.
             #[test]
             fn inheritance_agrees_with_native_merge(
                 base in arb_doc(),
@@ -69,8 +67,6 @@ macro_rules! properties {
                 prop_assert_eq!(out, expected);
             }
 
-            /// Without references, layers fold exactly like native merge,
-            /// including its non-associative replacements.
             #[test]
             fn layers_without_references_fold_like_native_merge(
                 layers in prop::collection::vec(arb_doc(), 0..4),
@@ -82,8 +78,6 @@ macro_rules! properties {
                 prop_assert_eq!(out, expected);
             }
 
-            /// Replacing a value with a reference to it never changes a merge,
-            /// on either side and for every kind.
             #[test]
             fn a_reference_merges_exactly_like_its_referent(
                 left in arb_value(),
@@ -104,7 +98,6 @@ macro_rules! properties {
                 prop_assert_eq!(out, expected);
             }
 
-            /// A document with no `$` is unchanged, even with `{}` and `:`.
             #[test]
             fn a_document_without_a_dollar_is_unchanged(doc in arb_doc()) {
                 prop_assert_eq!(interpolate(doc.clone(), &NoEnv).expect("nothing to resolve"), doc);

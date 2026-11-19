@@ -123,8 +123,7 @@ pub fn interpolate_with_context<V: ConfigFormat>(
     merge_interpolate([doc], Some(context), env, &InterpOptions::default())
 }
 
-/// The expression graph and every cache over it. Node ids are stable, so
-/// each cache is keyed by id alone.
+/// Expression graph and caches. `nodes` is append-only so ids are stable cache keys.
 struct Resolver<'a, V: ConfigFormat> {
     env: &'a dyn Env,
     merge_key: Option<&'a str>,
@@ -351,7 +350,7 @@ fn parse_target(body: &str, path: &[Seg], problems: &mut Vec<Problem>) -> Option
             });
             return None;
         }
-        // `EmptyPath` is unreachable: the scanner rejects `${}` first.
+        // `EmptyPath` occurs when a nested reference expands to `""`.
         Err(PathError::EmptySegment { .. } | PathError::EmptyPath) => {
             problems.push(Problem::Syntax {
                 path: path.to_vec(),

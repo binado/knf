@@ -54,7 +54,7 @@ impl TryFrom<PathBuf> for AccumulateTarget {
     }
 }
 
-/// A filesystem failure during discovery. Paths are structured diagnostic data.
+/// A filesystem failure during discovery.
 #[derive(Debug, thiserror::Error)]
 pub enum AccumulateError {
     /// The working directory could not be obtained for a relative base.

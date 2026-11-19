@@ -1,8 +1,8 @@
-//! The only process environment reader; interpolation receives raw text.
+//! Process environment adapter.
 
 use crate::Env;
 
-/// Reads raw text for `${env:NAME}`. The selected native adapter types it.
+/// [`Env`] implementation backed by `std::env::var`.
 pub struct ProcessEnv;
 
 impl Env for ProcessEnv {

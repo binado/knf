@@ -1,7 +1,6 @@
 [workspace]
 members = ["crates/*"]
-# Edition 2024 implies resolver 3, but a *virtual* manifest has no edition of its
-# own and does not inherit one from its members, so it must be stated explicitly.
+# Virtual manifests have no edition, so resolver 3 must be explicit.
 resolver = "3"
 
 [workspace.package]
@@ -11,25 +10,19 @@ license = "MIT"
 repository = "https://github.com/binado/knf"
 
 [workspace.dependencies]
-# `preserve_order` is declared here rather than in a member so that the
-# indexmap-backed Map is the workspace-wide behaviour. Cargo unifies features
-# across the graph anyway; making it explicit avoids the failure mode where key
-# ordering depends on which members happen to be in the build.
+# Declared at workspace level so key order doesn't depend on which members are built.
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 fast-glob = "1.1.2"
-# `preserve_order` is needed here as well as on serde_json: `toml`'s document
-# serializer buffers into its own map type, which is a BTreeMap by default and
-# alphabetises the output regardless of what the native values preserved.
+# Needed alongside serde_json: toml's serializer otherwise buffers into a BTreeMap and sorts keys.
 toml = { version = "1", features = ["preserve_order"] }
 serde = "1"
 tempfile = "3"
 ctrlc = "3"
 
-# version is required so `cargo publish` can rewrite the path dep to a crates.io
-# requirement. Keep it equal to [workspace.package].version.
+# Version is required so cargo publish can rewrite path deps for crates.io.
 knf-core = { path = "crates/knf-core", version = "0.7.1" }
 knf-convert = { path = "crates/knf-convert", version = "0.7.1" }
 

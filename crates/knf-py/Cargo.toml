@@ -1,9 +1,5 @@
 [package]
-# `import knf`, published to PyPI as `pyknf` (see the root pyproject.toml) and never
-# to crates.io. The wheel's `knf` command is a Python entry point that calls
-# into the same source as `crates/knf` (included from `src/lib.rs`). `cargo
-# install knf-cli` still builds that crate on its own, free of pyo3 (`cargo
-# tree -p knf-cli` is the enforcement in CI).
+# Published to PyPI as pyknf (via root pyproject.toml), never to crates.io.
 name = "knf-py"
 description = "Python bindings for knf-core, with the knf command line"
 publish = false
@@ -12,19 +8,16 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-# `_knf` rather than `knf`: the Python package re-exports from it, and a lib
-# named `knf` would collide with knf-core's in `cargo doc --workspace --lib`.
+# Named _knf to avoid colliding with knf-core's lib in cargo doc.
 [lib]
 name = "_knf"
 crate-type = ["cdylib"]
-# A test harness is an executable, and an extension module has no libpython to
-# link one against. Everything here is exercised from Python instead.
+# Extension modules don't link libpython, so Rust test binaries can't run; tested via pytest.
 test = false
 doctest = false
 
-# No `extension-module` feature: pyo3 deprecated it in favour of the
-# PYO3_BUILD_EXTENSION_MODULE environment variable, which maturin sets.
-# `clap` serves the included CLI. JSON and TOML values convert directly to Python.
+# pyo3 deprecated the `extension-module` feature in favor of PYO3_BUILD_EXTENSION_MODULE (set by maturin).
+# `clap` is used by the included CLI.
 [dependencies]
 knf-core.workspace = true
 knf-convert.workspace = true

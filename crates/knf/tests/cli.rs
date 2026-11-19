@@ -1311,7 +1311,6 @@ name = \"svc\"
 date = 1979-05-27T07:32:00Z
 ";
 
-/// TOML datetimes remain native throughout the pipeline.
 #[test]
 fn toml_datetime_survives_a_toml_round_trip() {
     let dir = tree(&[("f.toml", DATED)]);
@@ -1326,7 +1325,6 @@ fn toml_datetime_survives_a_toml_round_trip() {
     );
 }
 
-/// A datetime stays native when inline layers are appended.
 #[test]
 fn toml_datetime_survives_set() {
     let dir = tree(&[("f.toml", DATED)]);
@@ -1366,7 +1364,6 @@ b = 2
     );
 }
 
-/// Key order is preserved from input to output.
 #[test]
 fn key_order_is_preserved_in_both_formats() {
     let dir = tree(&[
@@ -1380,7 +1377,6 @@ fn key_order_is_preserved_in_both_formats() {
     assert_eq!(run(&dir, &["a.toml"]), "zebra = 1\napple = 2\nmiddle = 3\n");
 }
 
-/// A JSON integer above `i64::MAX` round-trips exactly.
 #[test]
 fn integers_above_i64_max_are_exact() {
     let doc = r#"{"id":10000000000000000001,"max":18446744073709551615}"#;
@@ -1388,7 +1384,6 @@ fn integers_above_i64_max_are_exact() {
     assert_eq!(run(&dir, &["a.json", "--compact"]), format!("{doc}\n"));
 }
 
-/// One argument is a no-op, nulls included.
 #[test]
 fn a_single_layer_is_a_no_op() {
     let doc = r#"{"a":{"b":1},"n":null,"xs":[1,2]}"#;
@@ -1451,7 +1446,6 @@ fn inline_configs_apply_last() {
 const BASE: &str = "plugins = [\"auth\"]\n[db]\nhost = \"local\"\nport = 5432\n";
 const PROD: &str = "plugins = [\"metrics\"]\n[db]\nhost = \"prod\"\n";
 
-/// The default is jq's `*`: the array replaces, the table merges.
 #[test]
 fn by_default_arrays_replace_and_tables_merge() {
     let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
@@ -1460,7 +1454,6 @@ fn by_default_arrays_replace_and_tables_merge() {
     assert!(out.contains("port = 5432"), "{out}");
 }
 
-/// `--shallow '*'` is jq's `+`: the overlay's table replaces the base's.
 #[test]
 fn shallow_takes_top_level_tables_whole() {
     let dir = tree(&[("base.toml", BASE), ("prod.toml", PROD)]);
@@ -1474,7 +1467,6 @@ fn shallow_takes_top_level_tables_whole() {
     );
 }
 
-/// One layer is still a no-op under `--shallow`.
 #[test]
 fn shallow_single_layer_is_identity() {
     let dir = tree(&[("base.toml", BASE)]);
@@ -1484,7 +1476,6 @@ fn shallow_single_layer_is_identity() {
     );
 }
 
-/// `--shallow` applies to `-c` layers too.
 #[test]
 fn shallow_applies_to_set_layers_too() {
     let dir = tree(&[("base.toml", BASE)]);
@@ -1505,7 +1496,6 @@ max = 5
 ";
 const NESTED_PROD: &str = "[db.pool]\nmax = 9\n[app.pool]\nmax = 9\n";
 
-/// `--shallow 'db.*'` is shallow inside `db` and deep elsewhere.
 #[test]
 fn shallow_at_a_path_keeps_everything_else_deep() {
     let dir = tree(&[("base.toml", NESTED_BASE), ("prod.toml", NESTED_PROD)]);
@@ -1802,7 +1792,6 @@ url = \"http://localhost:${env:KNF_TEST_PORT}/health\"
 literal = \"$${NOT_A_REF}\"
 ";
 
-/// Without `--interpolate`, references pass through unchanged.
 #[test]
 fn references_pass_through_untouched_without_the_flag() {
     let dir = tree(&[("f.toml", REFS)]);
@@ -1813,7 +1802,6 @@ fn references_pass_through_untouched_without_the_flag() {
     assert_eq!(out, REFS);
 }
 
-/// Document and environment references in both positions, plus `$$`.
 #[test]
 fn interpolate_resolves_documents_and_the_environment() {
     let dir = tree(&[("f.toml", REFS)]);
@@ -1832,7 +1820,6 @@ fn interpolate_resolves_documents_and_the_environment() {
     );
 }
 
-/// Whole-string references keep their type; embedded ones stringify.
 #[test]
 fn whole_string_references_keep_the_referents_type() {
     let dir = tree(&[(
@@ -1846,7 +1833,6 @@ fn whole_string_references_keep_the_referents_type() {
     );
 }
 
-/// A reference body is interpolated first, so the environment can pick a subtree.
 #[test]
 fn nested_references_select_a_subtree_from_the_environment() {
     let dir = tree(&[(
@@ -1869,7 +1855,6 @@ fn an_unresolved_nested_reference_names_the_looked_up_path() {
     insta::assert_snapshot!("nested_unresolved", run_err(&dir, &["a.json", "-i"]));
 }
 
-/// References can read array elements.
 #[test]
 fn references_read_array_elements() {
     let dir = tree(&[(
@@ -1883,7 +1868,6 @@ fn references_read_array_elements() {
     );
 }
 
-/// References resolve against the merged document.
 #[test]
 fn references_read_the_merged_document() {
     let dir = tree(&[
@@ -1899,7 +1883,6 @@ fn references_read_the_merged_document() {
     );
 }
 
-/// `-c` is an ordinary layer, so its values interpolate like any other.
 #[test]
 fn set_layers_interpolate_too() {
     let dir = tree(&[("f.json", r#"{"root":"/srv"}"#)]);
@@ -1918,7 +1901,6 @@ fn set_layers_interpolate_too() {
     );
 }
 
-/// A whole-string reference merges as its referent, against the final layers.
 #[test]
 fn a_referenced_table_merges_with_a_later_table() {
     let dir = tree(&[
@@ -1955,7 +1937,6 @@ fn a_null_referent_remains_native_json_null() {
 
 // --- --interpolate errors (snapshotted) -----------------------------------
 
-/// All unresolved references are reported together, with their paths.
 #[test]
 fn unresolved_reference_error() {
     let dir = tree(&[(
@@ -2001,7 +1982,7 @@ fn reference_cycle_error() {
 
 // --- exit codes -----------------------------------------------------------
 
-/// clap's own usage errors exit 2; everything else exits 1.
+// clap usage errors exit 2; runtime errors exit 1.
 #[test]
 fn usage_errors_exit_two() {
     let dir = tree(&[]);
@@ -2032,7 +2013,6 @@ fn a_missing_file_exits_one() {
     assert!(err.contains("nope.json"), "{err}");
 }
 
-/// A top-level array is rejected.
 #[test]
 fn a_non_object_root_is_rejected_by_name() {
     let dir = tree(&[("a.json", "[1,2]")]);
@@ -2043,14 +2023,12 @@ fn a_non_object_root_is_rejected_by_name() {
 
 // --- multi-line error messages (snapshotted) ------------------------------
 
-/// A directory input is rejected with a runnable hint.
 #[test]
 fn directory_in_the_default_command_error() {
     let dir = tree(&[("config/base.toml", "a = 1\n")]);
     insta::assert_snapshot!(run_err(&dir, &["config"]));
 }
 
-/// A directory merge input keeps the layer hint when `--with` names a file.
 #[test]
 fn directory_merge_input_keeps_layer_hint_with_context() {
     let dir = tree(&[("config/base.toml", "a = 1\n"), ("context.toml", "b = 1\n")]);
@@ -2062,7 +2040,6 @@ fn directory_merge_input_keeps_layer_hint_with_context() {
     assert!(!err.contains("--with takes one file"), "{err}");
 }
 
-/// A directory passed to `--with` is one file, not a layer glob.
 #[test]
 fn context_directory_error() {
     let dir = tree(&[("a.json", "{}"), ("config/base.toml", "a = 1\n")]);
@@ -2075,21 +2052,18 @@ fn mixed_input_formats_error() {
     insta::assert_snapshot!(run_err(&dir, &["a.toml", "b.json"]));
 }
 
-/// Mixed formats with `--with` name the context file instead of merge layers.
 #[test]
 fn context_mixed_input_formats_error() {
     let dir = tree(&[("a.toml", "a = 1\n"), ("b.json", "{}")]);
     insta::assert_snapshot!(run_err(&dir, &["a.toml", "-i", "--with", "b.json"]));
 }
 
-/// Mixed formats fail before interpolation.
 #[test]
 fn mixed_input_formats_error_precedes_interpolation_errors() {
     let dir = tree(&[("a.json", r#"{"a":"${nope}"}"#), ("b.toml", "b = 1\n")]);
     insta::assert_snapshot!(run_err(&dir, &["a.json", "b.toml", "--interpolate"]));
 }
 
-/// A bracketed `-c` path fails before file I/O.
 #[test]
 fn set_with_an_array_index_errors_before_file_io() {
     let dir = tree(&[]);

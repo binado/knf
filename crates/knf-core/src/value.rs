@@ -18,8 +18,8 @@ pub trait ConfigObject<V>: Sized + IntoIterator<Item = (String, V)> {
 
 /// Structural operations on a native configuration value.
 ///
-/// Scalars stay opaque to merge and traversal. Implementations classify
-/// integers and floats as `number`, and render scalars without quoting strings.
+/// Implementations classify integers and floats as `number` and render
+/// scalars without quoting strings.
 pub trait ConfigValue: Clone {
     /// The native object type.
     type Object: ConfigObject<Self>;

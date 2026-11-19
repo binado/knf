@@ -1,9 +1,7 @@
 //! Load, merge and interpolate homogeneous JSON or TOML configuration layers.
 //!
 //! [`load_layers`] returns native [`Layers`]. Match its variant, then call
-//! [`merge`], or [`merge_interpolate`] to resolve references while merging,
-//! and [`format::emit`] on that same value type. No stage converts JSON to
-//! TOML or TOML to JSON.
+//! [`merge`] or [`merge_interpolate`] and [`format::emit`] on that value type.
 
 pub mod format;
 pub mod fs;
@@ -37,10 +35,7 @@ use format::SourceName;
 /// The positional that means "read stdin".
 pub const STDIN: &str = "-";
 
-/// Why a positional could not be turned into a layer.
-///
-/// Reports source selection failures without frontend flag vocabulary.
-/// Format mismatches have no single source path; other input failures do.
+/// Why input paths could not be turned into layers.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LoadError {
     /// `-` was given without an explicit input format.

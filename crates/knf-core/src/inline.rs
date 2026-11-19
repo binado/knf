@@ -52,7 +52,6 @@ impl<V> PathLeaf<V> {
         })
     }
 
-    /// Nests the leaf under every key in the path, innermost first.
     fn try_into_nested(self, nest: impl Fn(String, V) -> V) -> Result<V, PathError> {
         let keys = self.path.try_into_keys()?;
         Ok(keys
@@ -234,7 +233,6 @@ mod tests {
         assert_eq!(path_leaf.to_string(), "port=8080");
     }
 
-    /// The grammar accepts bracket steps; only writers reject them.
     #[test]
     fn path_leaf_accepts_brackets_its_writers_reject() {
         let parsed: PathLeaf<String> = "a[0]=1".parse().unwrap();
@@ -330,7 +328,6 @@ mod tests {
         );
     }
 
-    /// Bracket steps parse but never expand into a layer.
     #[test]
     fn bracketed_paths_parse_but_cannot_write() {
         let err = Value::try_from(parse("servers[0].host=x")).unwrap_err();

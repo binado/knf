@@ -95,7 +95,7 @@ def config() -> dict[str, Any]:
         raise RuntimeError(
             "knf.config() requires a run launched with knf [FILES] --exec -- COMMAND"
         )
-    # The snapshot is already resolved, so skip interpolation; it may be JSON or TOML.
+    # Snapshot is already resolved; skip interpolation to avoid re-expanding literal ${...}.
     try:
         return load([path], interpolate=False)
     except (OSError, ValueError) as exc:
