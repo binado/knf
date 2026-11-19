@@ -66,25 +66,9 @@ Keep only inputs whose whole path matches a case-sensitive glob. Supports *,
         long_help = "\
 Like --glob, but match only the filename.
 
-  knf -a services/api/prod.toml -G '{defaults,prod}.toml'"
+  knf services/api/*.toml -G '{defaults,prod}.toml'"
     )]
     pub glob_filename: Option<knf::glob::GlobPattern>,
-
-    /// Accumulate same-format layers along one relative target path
-    #[arg(
-        short = 'a',
-        long = "accumulate",
-        value_name = "TARGET",
-        value_parser = super::accumulate::parser(),
-        conflicts_with = "files",
-        long_help = "\
-Collect same-format files from each directory along a relative target path,
-shallowest first, sorted by filename, with the target last. Files directly in
-the working directory are excluded.
-
-  knf -a foo/bar/config.toml --list-files"
-    )]
-    pub accumulate: Option<knf::fs::AccumulateTarget>,
 
     /// Print the file list in merge order without reading contents
     #[arg(short = 'l', long)]

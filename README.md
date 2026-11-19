@@ -47,20 +47,7 @@ knf config/**/*.toml -g 'config/**/prod.toml'
 knf config/**/*.toml -G '*.prod.toml'
 ```
 
-**`-a/--accumulate`**: collect same-format files in each directory along a
-relative target path, shallowest first, with the target last. **`-l/--list-files`**
-prints the resulting list without reading files.
-
-```text
-foo/conf1.toml
-foo/conf2.toml
-foo/bar/conf4.toml
-```
-
-```bash
-knf -a foo/bar/conf4.toml               # = knf foo/conf1.toml foo/conf2.toml foo/bar/conf4.toml
-knf -a foo/bar/conf4.toml -G '{conf1,conf4}.toml' --list-files
-```
+**`-l/--list-files`**: print the (filtered) input list without reading files.
 
 **`-c KEY.PATH=VALUE`**: inline layer applied after all files. The value is
 parsed in the selected format and falls back to a string.
@@ -158,7 +145,7 @@ generate-config | knf foo.toml bar.toml -i --with - -f toml
 
 Context uses the same format as inputs, including `-f`. `--with -` reads stdin
 and requires `-f`; stdin cannot also supply a merge layer.
-Filtering, accumulation and `--list-files` apply only to merge inputs.
+Filtering and `--list-files` apply only to merge inputs.
 
 **`-f/--format json|toml`**: set the input format for parsing and `-c` typing.
 Required for stdin. Mixed input formats are an error without an override.
