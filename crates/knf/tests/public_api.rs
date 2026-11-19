@@ -63,7 +63,12 @@ fn native_pipeline<V: ConfigFormat + std::fmt::Debug>(env: &dyn Env) {
         Some("5432")
     );
     assert!(out.as_object().unwrap().get("port").is_none());
-    let doc = "service.extends=${defaults}"
+    let base = "service=${defaults}"
+        .parse::<PathLeaf<String>>()
+        .unwrap()
+        .into_layer::<V>()
+        .unwrap();
+    let over = "service.host=x"
         .parse::<PathLeaf<String>>()
         .unwrap()
         .into_layer::<V>()
@@ -73,16 +78,8 @@ fn native_pipeline<V: ConfigFormat + std::fmt::Debug>(env: &dyn Env) {
         .unwrap()
         .into_layer::<V>()
         .unwrap();
-    let out = merge_interpolate(
-        [doc],
-        Some(&context),
-        env,
-        &InterpOptions {
-            merge_key: Some("extends".into()),
-            shallow: None,
-        },
-    )
-    .unwrap();
+    let out =
+        merge_interpolate([base, over], Some(&context), env, &InterpOptions::default()).unwrap();
     let service = out
         .as_object()
         .unwrap()
@@ -90,7 +87,10 @@ fn native_pipeline<V: ConfigFormat + std::fmt::Debug>(env: &dyn Env) {
         .unwrap()
         .as_object()
         .unwrap();
-    assert!(service.get("extends").is_none());
+    assert_eq!(
+        service.get("host").unwrap().stringify().as_deref(),
+        Some("x")
+    );
     assert_eq!(
         service.get("port").unwrap().stringify().as_deref(),
         Some("5432")
