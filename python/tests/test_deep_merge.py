@@ -277,15 +277,14 @@ def test_the_knf_executable_comes_with_the_wheel(write):
     assert out.stdout.strip() == '{"a":1,"b":2}'
 
 
-def test_the_knf_executable_accumulates_and_lists_files(tmp_path):
+def test_the_knf_executable_merges_and_lists_files(tmp_path):
     knf = shutil.which("knf")
     assert knf is not None
     (tmp_path / "foo" / "bar").mkdir(parents=True)
     (tmp_path / "foo" / "base.toml").write_text("base = 1\nvalue = 1\n")
     (tmp_path / "foo" / "bar" / "target.toml").write_text("value = 2\n")
-    (tmp_path / "ignored.toml").write_text("invalid ignored root")
     out = subprocess.run(
-        [knf, "-a", "foo/bar/target.toml", "--compact"],
+        [knf, "foo/base.toml", "foo/bar/target.toml", "--compact"],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -293,7 +292,7 @@ def test_the_knf_executable_accumulates_and_lists_files(tmp_path):
     )
     assert out.stdout == "base = 1\nvalue = 2\n"
     out = subprocess.run(
-        [knf, "-a", "foo/bar/target.toml", "--list-files"],
+        [knf, "foo/base.toml", "foo/bar/target.toml", "--list-files"],
         cwd=tmp_path,
         capture_output=True,
         text=True,
