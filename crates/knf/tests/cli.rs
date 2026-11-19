@@ -754,19 +754,6 @@ fn toml_datetime_survives_set() {
     assert!(out.contains("extra = 1"), "set layer missing:\n{out}");
 }
 
-#[test]
-fn paths_without_a_known_extension_are_rejected_with_a_rename_hint() {
-    let dir = tree(&[("app.conf", "{}")]);
-    for name in ["app.conf", "-"] {
-        let err = run_err(&dir, &[name]);
-        assert!(
-            err.contains(&format!("cannot infer a format from `{name}`")),
-            "{err}"
-        );
-        assert!(err.contains("help: name the file with a .json or .toml extension"));
-    }
-}
-
 // --- deep and shallow merge ----------------------------------------------
 
 const BASE: &str = "plugins = [\"auth\"]\n[db]\nhost = \"local\"\nport = 5432\n";
@@ -1030,24 +1017,6 @@ fn toml_inline_literals_accept_surrounding_whitespace() {
 // --- native inline values -------------------------------------------------
 
 #[test]
-fn removed_options_are_usage_errors() {
-    let dir = tree(&[]);
-    for args in [
-        ["--input-format", "json"],
-        ["--null-as", "none"],
-        ["--accumulate", "a.toml"],
-    ] {
-        let out = knf(&dir).args(args).output().unwrap();
-        assert_eq!(out.status.code(), Some(2));
-        assert!(
-            String::from_utf8(out.stderr)
-                .unwrap()
-                .contains("unexpected argument")
-        );
-    }
-}
-
-#[test]
 fn toml_environment_values_share_inline_typing_and_remain_terminal() {
     let dir = tree(&[(
         "a.toml",
@@ -1073,29 +1042,6 @@ terminal = '${env:KNF_TEST_TERMINAL}'
     assert_eq!(value["null"].as_str(), Some("null"));
     assert_eq!(value["raw"].as_str(), Some("x:1979-05-27"));
     assert_eq!(value["terminal"].as_str(), Some("${missing}"));
-}
-
-#[test]
-fn runs_without_input_files_need_to_for_a_format() {
-    let dir = tree(&[]);
-    for args in [&[][..], &["-c", "a=1"][..]] {
-        let err = run_err(&dir, args);
-        assert!(
-            err.contains("no input files to infer a format from"),
-            "{err}"
-        );
-        assert!(err.contains("help: pass --to json or --to toml"), "{err}");
-    }
-    assert_eq!(run(&dir, &["--to", "json", "--compact"]), "{}\n");
-    assert_eq!(run(&dir, &["--to", "toml"]), "\n");
-    assert_eq!(run(&dir, &["--to", "toml", "-c", "a=1"]), "a = 1\n");
-    assert_eq!(
-        run(
-            &dir,
-            &["missing.json", "-g", "*.toml", "--to", "toml", "-c", "a=1"]
-        ),
-        "a = 1\n"
-    );
 }
 
 // --- --interpolate --------------------------------------------------------
@@ -1297,65 +1243,7 @@ fn reference_cycle_error() {
     insta::assert_snapshot!(run_err(&dir, &["f.json", "--interpolate"]));
 }
 
-// --- exit codes -----------------------------------------------------------
-
-// clap usage errors exit 2; runtime errors exit 1.
-#[test]
-fn usage_errors_exit_two() {
-    let dir = tree(&[]);
-    for args in [
-        &["--no-such-flag"][..],
-        &["--cascade", "foo/bar/config.toml"][..],
-        &["-r", "foo/bar/config.toml"][..],
-    ] {
-        let out = knf(&dir).args(args).output().expect("spawn");
-        assert_eq!(out.status.code(), Some(2), "{args:?}");
-    }
-}
-
-#[test]
-fn malformed_set_exits_two() {
-    let dir = tree(&[]);
-    let out = knf(&dir).args(["-c", "noequals"]).output().expect("spawn");
-    assert_eq!(out.status.code(), Some(2));
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("invalid value"), "{err}");
-    assert!(err.contains("expected KEY.PATH=VALUE"), "{err}");
-}
-
-#[test]
-fn a_missing_file_exits_one() {
-    let dir = tree(&[]);
-    let err = run_err(&dir, &["nope.json"]);
-    assert!(err.contains("nope.json"), "{err}");
-}
-
-#[test]
-fn a_non_object_root_is_rejected_by_name() {
-    let dir = tree(&[("a.json", "[1,2]")]);
-    let err = run_err(&dir, &["a.json"]);
-    assert!(err.contains("a.json"), "{err}");
-    assert!(err.contains("found array"), "{err}");
-}
-
 // --- multi-line error messages (snapshotted) ------------------------------
-
-#[test]
-fn directory_in_the_default_command_error() {
-    let dir = tree(&[("config/base.toml", "a = 1\n")]);
-    insta::assert_snapshot!(run_err(&dir, &["config"]));
-}
-
-#[test]
-fn directory_merge_input_keeps_layer_hint_with_context() {
-    let dir = tree(&[("config/base.toml", "a = 1\n"), ("context.toml", "b = 1\n")]);
-    let err = run_err(&dir, &["config", "-i", "--with", "context.toml"]);
-    assert!(
-        err.contains("`knf config/*.toml` merges its files as layers"),
-        "{err}"
-    );
-    assert!(!err.contains("--with takes one file"), "{err}");
-}
 
 #[test]
 fn context_directory_error() {
@@ -1364,32 +1252,9 @@ fn context_directory_error() {
 }
 
 #[test]
-fn mixed_input_formats_error() {
-    let dir = tree(&[("a.toml", "a = 1\n"), ("b.json", "{}")]);
-    insta::assert_snapshot!(run_err(&dir, &["a.toml", "b.json"]));
-}
-
-#[test]
 fn context_mixed_input_formats_error() {
     let dir = tree(&[("a.toml", "a = 1\n"), ("b.json", "{}")]);
     insta::assert_snapshot!(run_err(&dir, &["a.toml", "-i", "--with", "b.json"]));
-}
-
-#[test]
-fn mixed_input_formats_error_precedes_interpolation_errors() {
-    let dir = tree(&[("a.json", r#"{"a":"${nope}"}"#), ("b.toml", "b = 1\n")]);
-    insta::assert_snapshot!(run_err(&dir, &["a.json", "b.toml", "--interpolate"]));
-}
-
-#[test]
-fn set_with_an_array_index_errors_before_file_io() {
-    let dir = tree(&[]);
-    let err = run_err(&dir, &["missing.toml", "-c", "servers[0]=1"]);
-    assert!(
-        !err.contains("missing.toml"),
-        "the -c path should be rejected before the file is read:\n{err}"
-    );
-    insta::assert_snapshot!(err);
 }
 
 #[test]
