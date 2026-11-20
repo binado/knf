@@ -37,9 +37,10 @@ dump(config, "merged.toml")
   `"db.*"`).
 - `accumulate` collects same-format files along a relative target path, with
   the target last. `filter_paths` filters a list by glob without I/O.
-- `dumps` returns JSON or TOML text. `dump` infers the format from the path
-  extension and requires an explicit format for text streams. See
-  `dumps_toml` docs for TOML limits.
+- `dumps` returns JSON, TOML, or YAML text. `dump` infers the format from
+  `.json`, `.toml`, `.yaml`, or `.yml` and requires an explicit format for text
+  streams. YAML accepts the same Python value types as JSON and requires
+  `pretty=True`. See `dumps_toml` docs for TOML limits.
 - Errors: `knf.ParseError` and `knf.InterpolationError` (both `ValueError`s),
   `ValueError` for bad arguments, and `OSError` subclasses for I/O failures.
 - TOML datetimes become `datetime`, `date` or `time` objects.

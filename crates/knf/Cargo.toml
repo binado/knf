@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [features]
 # YAML output. serde-saphyr needs Rust 1.89.
-yaml = ["dep:serde", "dep:serde-saphyr"]
+yaml = ["knf-convert/yaml"]
 
 [dependencies]
 knf-core.workspace = true
@@ -25,8 +25,6 @@ serde_json.workspace = true
 tempfile.workspace = true
 # Keeps --exec alive across Ctrl-C so the temp snapshot is deleted on drop.
 ctrlc.workspace = true
-serde = { workspace = true, optional = true }
-serde-saphyr = { workspace = true, optional = true }
 
 [dev-dependencies]
 toml.workspace = true

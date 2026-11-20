@@ -21,7 +21,7 @@ doctest = false
 # `clap` is used by the included CLI.
 # Mirrors knf-cli; the published wheels enable it through pyproject.toml.
 [features]
-yaml = ["dep:serde", "dep:serde-saphyr"]
+yaml = ["knf-convert/yaml"]
 
 [dependencies]
 knf-core.workspace = true
@@ -34,5 +34,3 @@ ctrlc.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 pyo3 = { version = "0.29", features = ["abi3-py311"] }
-serde = { workspace = true, optional = true }
-serde-saphyr = { workspace = true, optional = true }

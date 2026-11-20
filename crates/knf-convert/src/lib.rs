@@ -62,6 +62,13 @@ pub fn toml_to_yaml_ready(value: Toml, policy: Policy) -> Result<Converted<Toml>
     Ok(converter.finish(value))
 }
 
+/// Serializes a JSON value or a YAML-ready TOML value as YAML.
+#[cfg(feature = "yaml")]
+pub fn emit_yaml(value: &impl serde::Serialize) -> anyhow::Result<String> {
+    use anyhow::Context;
+    serde_saphyr::to_string(value).context("emitting YAML")
+}
+
 /// Converts JSON to TOML. Under [`Policy::Lossy`], null object fields are
 /// omitted and integers above `i64::MAX` become floats. Strict conversion
 /// rejects those mappings. Null array entries and root null always fail.

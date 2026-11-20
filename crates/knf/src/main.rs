@@ -17,6 +17,8 @@ use knf::{
 
 use cli::{Cli, ExecFormat, OutputFormat};
 use explain::{explain_pipeline, name_the_inline_layer_flag};
+#[cfg(feature = "yaml")]
+use knf_convert::emit_yaml;
 use knf_convert::{Converted, Policy};
 
 /// Set while an `--exec` child runs, so Ctrl-C is left to the child.
@@ -153,11 +155,6 @@ fn run_pipeline(
         }
     };
     Ok((text.map_err(|err| explain_pipeline(err, None))?, format))
-}
-
-#[cfg(feature = "yaml")]
-fn emit_yaml(value: &impl serde::Serialize) -> anyhow::Result<String> {
-    serde_saphyr::to_string(value).context("emitting YAML")
 }
 
 fn converted_value<V>(converted: Converted<V>) -> V {

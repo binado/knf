@@ -14,7 +14,7 @@ The same Rust pipeline the ``knf`` command line runs, called natively::
 ``accumulate`` discovers ordered input paths; ``filter_paths`` selects from an
 existing list without filesystem access. Both return ``pathlib.Path`` objects
 that can be passed directly to ``load``. ``deep_merge`` applies in-memory
-overrides. ``dumps`` and ``dump`` serialize a dict as JSON or TOML. Under
+overrides. ``dumps`` and ``dump`` serialize a dict as JSON, TOML, or YAML. Under
 ``knf --exec``, ``config()`` returns the resolved configuration.
 """
 
@@ -35,16 +35,16 @@ from ._knf import (
 def dump(data, target, *, format=None, pretty=True):
     """Write a dict to a UTF-8 path or text stream after serialization succeeds.
 
-    If omitted, the format is inferred from a path's .json or .toml extension.
-    Text streams require an explicit format.
+    If omitted, the format is inferred from a path's .json, .toml, .yaml,
+    or .yml extension. Text streams require an explicit format.
     """
     if isinstance(target, (str, _os.PathLike)):
         path = _os.fspath(target)
         if format is None:
             suffix = _os.path.splitext(path)[1].lower()
-            if suffix not in (".json", ".toml"):
-                raise ValueError("cannot infer format from path; pass format='json' or 'toml'")
-            format = suffix[1:]
+            if suffix not in (".json", ".toml", ".yaml", ".yml"):
+                raise ValueError("cannot infer format from path; pass format explicitly")
+            format = "yaml" if suffix == ".yml" else suffix[1:]
         text = dumps(data, format=format, pretty=pretty)
         with open(path, "w", encoding="utf-8") as fp:
             fp.write(text)
