@@ -359,7 +359,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "knf-cli"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -376,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "knf-convert"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "knf-core",
@@ -389,7 +389,7 @@ dependencies = [
 
 [[package]]
 name = "knf-core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "fast-glob",
@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "knf-mdtest"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "shlex",
  "similar",
@@ -411,7 +411,7 @@ dependencies = [
 
 [[package]]
 name = "knf-py"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "clap",

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/binado/knf/compare/knf-convert-v0.8.0...knf-convert-v0.8.1) - 2026-11-20
+
+### Fixed
+
+- support YAML output in the Python API ([#79](https://github.com/binado/knf/pull/79))
+
 ## [0.8.0](https://github.com/binado/knf/compare/knf-convert-v0.7.1...knf-convert-v0.8.0) - 2026-11-20
 
 ### Added
