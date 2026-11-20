@@ -187,7 +187,7 @@ $ knf lossy.toml --to json --strict
 `stderr`:
 
 ```text
-error: nested.date: JSON cannot represent TOML dates, times or datetimes
+error: nested.date: the JSON data model cannot represent TOML dates, times or datetimes
 ```
 
 ### JSON nulls are dropped in TOML

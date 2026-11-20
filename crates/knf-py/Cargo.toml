@@ -5,6 +5,7 @@ description = "Python bindings for knf-core, with the knf command line"
 publish = false
 version.workspace = true
 edition.workspace = true
+rust-version = "1.88"
 license.workspace = true
 repository.workspace = true
 
@@ -18,6 +19,10 @@ doctest = false
 
 # pyo3 deprecated the `extension-module` feature in favor of PYO3_BUILD_EXTENSION_MODULE (set by maturin).
 # `clap` is used by the included CLI.
+# Mirrors knf-cli; the published wheels enable it through pyproject.toml.
+[features]
+yaml = ["dep:serde", "dep:serde-saphyr"]
+
 [dependencies]
 knf-core.workspace = true
 knf-convert.workspace = true
@@ -29,3 +34,5 @@ ctrlc.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 pyo3 = { version = "0.29", features = ["abi3-py311"] }
+serde = { workspace = true, optional = true }
+serde-saphyr = { workspace = true, optional = true }

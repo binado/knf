@@ -11,11 +11,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, bail};
 use knf::{
-    ConfigFormat, Format, InterpOptions, Layers, MergeOptions, ProcessEnv, format, load_layers,
-    merge, merge_interpolate,
+    ConfigFormat, InterpOptions, Layers, MergeOptions, ProcessEnv, format, load_layers, merge,
+    merge_interpolate,
 };
 
-use cli::Cli;
+use cli::{Cli, ExecFormat, OutputFormat};
 use explain::{explain_pipeline, name_the_inline_layer_flag};
 use knf_convert::{Converted, Policy};
 
@@ -86,6 +86,7 @@ fn run(cli: Cli, command: &[OsString]) -> anyhow::Result<i32> {
 
     let (text, format) = run_pipeline(&cli, &files, &opts)?;
     if let Some((program, args)) = command.split_first() {
+        let format = ExecFormat::try_from(format).map_err(anyhow::Error::msg)?;
         run_child(program, args, &text, format)
     } else {
         write_stdout(&text)?;
@@ -97,14 +98,15 @@ fn run_pipeline(
     cli: &Cli,
     files: &[PathBuf],
     opts: &MergeOptions,
-) -> anyhow::Result<(String, Format)> {
+) -> anyhow::Result<(String, OutputFormat)> {
     let mut inputs = files.to_vec();
     inputs.extend(cli.with.iter().cloned());
-    let to = cli.to.map(Format::from);
     let layers = if inputs.is_empty() {
-        match to {
-            Some(Format::Json) => Layers::Json(Vec::new()),
-            Some(Format::Toml) => Layers::Toml(Vec::new()),
+        match cli.to {
+            Some(OutputFormat::Json) => Layers::Json(Vec::new()),
+            #[cfg(feature = "yaml")]
+            Some(OutputFormat::Yaml) => Layers::Json(Vec::new()),
+            Some(OutputFormat::Toml) => Layers::Toml(Vec::new()),
             None => {
                 bail!("no input files to infer a format from\nhelp: pass --to json or --to toml")
             }
@@ -121,34 +123,48 @@ fn run_pipeline(
     let (format, text) = match layers {
         Layers::Json(layers) => {
             let merged = resolve_native(cli, layers, opts)?;
-            if to == Some(Format::Toml) {
-                let converted = knf_convert::json_to_toml(merged, policy)?;
-                (Format::Toml, emit_converted(converted, pretty))
-            } else {
-                (Format::Json, format::emit(merged, pretty))
-            }
+            let output = cli.to.unwrap_or(OutputFormat::Json);
+            let text = match output {
+                OutputFormat::Json => format::emit(merged, pretty),
+                OutputFormat::Toml => format::emit(
+                    converted_value(knf_convert::json_to_toml(merged, policy)?),
+                    pretty,
+                ),
+                #[cfg(feature = "yaml")]
+                OutputFormat::Yaml => emit_yaml(&merged),
+            };
+            (output, text)
         }
         Layers::Toml(layers) => {
             let merged = resolve_native(cli, layers, opts)?;
-            if to == Some(Format::Json) {
-                let converted = knf_convert::toml_to_json(merged, policy)?;
-                (Format::Json, emit_converted(converted, pretty))
-            } else {
-                (Format::Toml, format::emit(merged, pretty))
-            }
+            let output = cli.to.unwrap_or(OutputFormat::Toml);
+            let text = match output {
+                OutputFormat::Toml => format::emit(merged, pretty),
+                OutputFormat::Json => format::emit(
+                    converted_value(knf_convert::toml_to_json(merged, policy)?),
+                    pretty,
+                ),
+                #[cfg(feature = "yaml")]
+                OutputFormat::Yaml => emit_yaml(&converted_value(knf_convert::toml_to_yaml_ready(
+                    merged, policy,
+                )?)),
+            };
+            (output, text)
         }
     };
     Ok((text.map_err(|err| explain_pipeline(err, None))?, format))
 }
 
-fn emit_converted<V: ConfigFormat>(
-    converted: Converted<V>,
-    pretty: bool,
-) -> anyhow::Result<String> {
+#[cfg(feature = "yaml")]
+fn emit_yaml(value: &impl serde::Serialize) -> anyhow::Result<String> {
+    serde_saphyr::to_string(value).context("emitting YAML")
+}
+
+fn converted_value<V>(converted: Converted<V>) -> V {
     if converted.lossy {
         eprintln!("warning: conversion was lossy; rerun with --strict to find the affected keys");
     }
-    format::emit(converted.value, pretty)
+    converted.value
 }
 
 fn resolve_native<V: ConfigFormat>(
@@ -183,7 +199,7 @@ fn run_child(
     program: &OsString,
     args: &[OsString],
     text: &str,
-    format: Format,
+    format: ExecFormat,
 ) -> anyhow::Result<i32> {
     let mut snapshot = tempfile::Builder::new()
         .prefix("knf-")

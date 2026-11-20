@@ -10,7 +10,12 @@ jobs:
   test:
     strategy:
       matrix:
-        rust: ["1.88", stable]
+        include:
+          # serde-saphyr (the `yaml` feature) needs Rust 1.89.
+          - rust: "1.88"
+            features: ""
+          - rust: stable
+            features: --all-features
     runs-on: ubuntu-latest
     env:
       # knf-py is a pyo3 extension module: its Python symbols come from the
@@ -24,9 +29,9 @@ jobs:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
-      - run: cargo build --workspace
+      - run: cargo clippy --workspace ${{ matrix.features }} --all-targets -- -D warnings
+      - run: cargo test --workspace ${{ matrix.features }}
+      - run: cargo build --workspace ${{ matrix.features }}
       # Enforce crate boundaries: knf-core stays clap-free, knf-cli stays pyo3-free.
       - name: Dependency boundary
         run: |
@@ -41,7 +46,7 @@ jobs:
             exit 1
           fi
       # --lib avoids target/doc/knf collision between knf-core's lib and knf-cli's bin.
-      - run: cargo doc --workspace --no-deps --lib
+      - run: cargo doc --workspace --no-deps --lib ${{ matrix.features }}
         env:
           RUSTDOCFLAGS: -D warnings
 

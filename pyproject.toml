@@ -36,6 +36,7 @@ module-name = "knf._knf"
 python-source = "python"
 exclude = ["**/__pycache__/**"]
 locked = true
+features = ["yaml"]
 strip = true
 compatibility = "pypi"
 

@@ -8,10 +8,10 @@ Repo-wide guidance for AI agents. Crate-specific rules live in `crates/<crate>/A
 
 ## Commands
 
-MSRV is Rust 1.88.
+MSRV is Rust 1.88; the opt-in `yaml` feature (`knf-cli`, `knf-py`) needs 1.89.
 
 ```bash
-just ci                                 # format-check + lint + test + build + doc
+just ci                                 # format-check + lint + test + build + doc (all features)
 just test-py                            # maturin develop + pytest in active venv
 just bless                              # rewrite expected output in Markdown fixtures (MDTEST_UPDATE=1)
 cargo test -p knf-core --lib            # fast inner loop: unit tests only

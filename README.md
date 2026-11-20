@@ -11,12 +11,13 @@ pip install pyknf
 ```
 
 Installs the `knf` module and the `knf` executable. Wheels for Linux, macOS and
-Windows (x86-64 and ARM64); CPython 3.11+.
+Windows (x86-64 and ARM64); CPython 3.11+. The wheels include `--to yaml`.
 
 ### Rust
 
 ```bash
-cargo install knf-cli  # the executable
+cargo install knf-cli                  # the executable
+cargo install knf-cli --features yaml  # with `--to yaml` (Rust 1.89+)
 cargo add knf-core     # the library, imported as `knf`
 ```
 
@@ -51,8 +52,8 @@ knf config/**/*.toml -G '*.prod.toml'
 **`-l/--list-files`**: print the (filtered) input list without reading files.
 
 **`-c KEY.PATH=VALUE`**: inline layer applied after all files. The value is
-parsed in the input format (`--to` when there are no files) and falls back to
-a string.
+parsed in the format of the input files or context and falls back to a string.
+With neither, `--to` selects the inline format (`yaml` parses as JSON).
 
 | RHS | JSON | TOML |
 | --- | --- | --- |
@@ -147,27 +148,28 @@ knf foo.toml bar.toml -i --with config.toml
 Context uses the same format as inputs.
 Filtering and `--list-files` apply only to merge inputs.
 
-**`--to json|toml`**: convert the final document after merging and interpolation.
-Required when there are no input files, where it also selects the format of `-c`
-values.
+**`--to json|toml`** (`yaml` with the `yaml` feature): convert the final document after merging and
+interpolation. Required when there are no input or context files. YAML is
+output-only and uses block style.
 
 ```bash
-knf base.toml prod.toml --to json
+knf base.toml prod.toml --to yaml
 knf base.json prod.json --to toml --strict
 ```
 
-TOML dates, times and datetimes become strings in TOML notation. Non-finite
-floats become `"nan"`, `"inf"` or `"-inf"`. JSON null object fields are omitted
-and integers above the TOML signed range become floats. JSON null array entries
-are errors. A lossy conversion warns on stderr; add **`--strict`** to reject it.
+TOML dates, times and datetimes become strings in TOML notation. For JSON
+output, non-finite TOML floats become `"nan"`, `"inf"` or `"-inf"`; YAML keeps
+them as `.nan`, `.inf` and `-.inf`. For TOML output, JSON null object fields are omitted and integers above the
+TOML signed range become floats. JSON null array entries are errors.
+A lossy conversion warns on stderr. Add **`--strict`** to reject it.
 
-**`--compact`**: disable pretty-printing.
+**`--compact`**: disable pretty-printing. Incompatible with `--to yaml`.
 
 **`--exec -- COMMAND [ARGS...]`**: run a command with the merged configuration.
 The child inherits standard streams and returns its exit status. Its
 `KNF_CONFIG_PATH` environment variable points to a private temporary JSON or
 TOML file that is removed when the command finishes; `--to` selects its format.
-Cannot be combined with `--list-files`.
+Cannot be combined with `--list-files` or `--to yaml`.
 
 ```bash
 knf base.toml pilot.toml -c seed=42 --exec -- python fit.py --replicate 2

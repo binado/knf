@@ -99,3 +99,16 @@ sys.exit(23)
     snapshot = Path(result.stdout.strip())
     assert snapshot.is_absolute()
     assert not snapshot.exists()
+
+
+def test_installed_cli_emits_yaml():
+    scripts = Path(sysconfig.get_path("scripts"))
+    executable = scripts / ("knf.exe" if os.name == "nt" else "knf")
+    result = subprocess.run(
+        [executable, "-c", "smoke=true", "--to", "yaml"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout == "smoke: true\n"
+    assert result.stderr == ""

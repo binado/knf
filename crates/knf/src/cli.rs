@@ -3,24 +3,70 @@
 use std::{ffi::OsString, path::PathBuf};
 
 use clap::{CommandFactory, Parser, error::ErrorKind};
+use knf::PathLeaf;
 use knf::glob::KeyGlobPattern;
-use knf::{Format, PathLeaf};
 
-/// `--to` values. Mirrors [`Format`] because the orphan rule forbids deriving
-/// `ValueEnum` on it here.
+/// Formats accepted by `--to`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum FormatArg {
+pub enum OutputFormat {
+    Json,
+    Toml,
+    #[cfg(feature = "yaml")]
+    Yaml,
+}
+
+/// Formats a configuration snapshot for `--exec` can be written in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecFormat {
     Json,
     Toml,
 }
 
-impl From<FormatArg> for Format {
-    fn from(arg: FormatArg) -> Self {
-        match arg {
-            FormatArg::Json => Format::Json,
-            FormatArg::Toml => Format::Toml,
+impl ExecFormat {
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Toml => "toml",
         }
     }
+}
+
+impl TryFrom<OutputFormat> for ExecFormat {
+    type Error = &'static str;
+
+    fn try_from(output: OutputFormat) -> Result<Self, Self::Error> {
+        match output {
+            OutputFormat::Json => Ok(Self::Json),
+            OutputFormat::Toml => Ok(Self::Toml),
+            #[cfg(feature = "yaml")]
+            OutputFormat::Yaml => Err("--to yaml cannot be combined with --exec"),
+        }
+    }
+}
+
+fn to_long_help() -> String {
+    let (yaml_note, yaml_floats, example) = if cfg!(feature = "yaml") {
+        (
+            " YAML is output-only, parses inline -c values as JSON, and cannot be combined\nwith --compact or --exec.",
+            "; YAML keeps\nthem as .nan, .inf or -.inf",
+            "yaml",
+        )
+    } else {
+        ("", "", "json")
+    };
+    format!(
+        "\
+Convert the document after merging and interpolation. Output defaults to
+the input format. Required when there are no input or context files.{yaml_note}
+
+TOML dates, times and datetimes become strings in TOML notation. For JSON
+output, non-finite TOML floats become strings: nan, inf or -inf{yaml_floats}. For TOML
+output, JSON null object fields are omitted, and integers above the TOML signed
+range become floats. A JSON null array entry is an error. A lossy conversion
+prints a warning on stderr; use --strict to reject it and name the key.
+
+  knf base.toml prod.toml --to {example}"
+    )
 }
 
 #[derive(Parser, Debug)]
@@ -80,7 +126,8 @@ Like --glob, but match only the filename.
         value_name = "KEY.PATH=VALUE",
         long_help = "\
 Inline layer applied after all files; repeatable. The value is parsed in the
-input format (--to when there are no files), falling back to a string.
+format of the input files or context, falling back to a string. With neither,
+--to selects the inline format.
 
   -c port=8080  -c name=foo  -c version='\"1.0\"'"
     )]
@@ -104,20 +151,9 @@ separate keys; single-quoted spans are literal.
     #[arg(
         long,
         value_name = "FORMAT",
-        long_help = "\
-Convert the document after merging and interpolation. Output defaults to
-the input format. Required when there are no input files, where it also
-selects the format of -c values.
-
-TOML dates, times and datetimes become strings in TOML notation. Non-finite
-TOML floats become strings: nan, inf or -inf. JSON null object fields are
-omitted, and integers above the TOML signed range become floats. A JSON null
-array entry is an error. A lossy conversion prints a warning on stderr; use
---strict to reject it and name the key.
-
-  knf base.toml prod.toml --to json"
+        long_help = to_long_help()
     )]
-    pub to: Option<FormatArg>,
+    pub to: Option<OutputFormat>,
 
     /// Reject lossy output conversions
     #[arg(long, requires = "to")]
@@ -192,6 +228,22 @@ impl Cli {
                 Vec::new()
             };
         let cli = Self::parse_from(args);
+        #[cfg(feature = "yaml")]
+        if cli.to == Some(OutputFormat::Yaml) && cli.compact {
+            Self::command()
+                .error(
+                    ErrorKind::ArgumentConflict,
+                    "--to yaml cannot be combined with --compact",
+                )
+                .exit();
+        }
+        if let (true, Some(to)) = (cli.exec, cli.to)
+            && let Err(message) = ExecFormat::try_from(to)
+        {
+            Self::command()
+                .error(ErrorKind::ArgumentConflict, message)
+                .exit();
+        }
         if cli.exec && command.is_empty() {
             Self::command()
                 .error(

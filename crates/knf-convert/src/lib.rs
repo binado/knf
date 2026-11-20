@@ -52,6 +52,16 @@ pub fn toml_to_json(value: Toml, policy: Policy) -> Result<Converted<Json>> {
     Ok(converter.finish(value))
 }
 
+/// Prepares TOML for YAML output. Under [`Policy::Lossy`], dates, times and
+/// datetimes become strings in TOML's standard notation. Every other value,
+/// including non-finite floats, is kept, and the result contains no
+/// datetimes. [`Policy::Strict`] rejects the date mapping.
+pub fn toml_to_yaml_ready(value: Toml, policy: Policy) -> Result<Converted<Toml>> {
+    let mut converter = Converter::new(policy);
+    let value = converter.stringify_datetimes(value)?;
+    Ok(converter.finish(value))
+}
+
 /// Converts JSON to TOML. Under [`Policy::Lossy`], null object fields are
 /// omitted and integers above `i64::MAX` become floats. Strict conversion
 /// rejects those mappings. Null array entries and root null always fail.
@@ -107,6 +117,36 @@ impl Converter {
         result
     }
 
+    fn stringify_datetimes(&mut self, value: Toml) -> Result<Toml> {
+        Ok(match value {
+            Toml::Datetime(value) => {
+                self.allow_loss("YAML output writes TOML dates, times and datetimes as strings")?;
+                Toml::String(value.to_string())
+            }
+            Toml::Array(values) => Toml::Array(
+                values
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        self.at(Seg::Index(index), |this| this.stringify_datetimes(value))
+                    })
+                    .collect::<Result<_>>()?,
+            ),
+            Toml::Table(values) => Toml::Table(
+                values
+                    .into_iter()
+                    .map(|(key, value)| {
+                        let value = self.at(Seg::Key(key.clone()), |this| {
+                            this.stringify_datetimes(value)
+                        })?;
+                        Ok((key, value))
+                    })
+                    .collect::<Result<_>>()?,
+            ),
+            other => other,
+        })
+    }
+
     fn convert_to_json(&mut self, value: Toml) -> Result<Json> {
         Ok(match value {
             Toml::Boolean(value) => Json::Bool(value),
@@ -114,7 +154,7 @@ impl Converter {
             Toml::Float(value) => match Number::from_f64(value) {
                 Some(number) => Json::Number(number),
                 None => {
-                    self.allow_loss("JSON cannot represent non-finite floats")?;
+                    self.allow_loss("the JSON data model cannot represent non-finite floats")?;
                     let text = if value.is_nan() {
                         "nan"
                     } else if value.is_sign_negative() {
@@ -127,7 +167,9 @@ impl Converter {
             },
             Toml::String(value) => Json::String(value),
             Toml::Datetime(value) => {
-                self.allow_loss("JSON cannot represent TOML dates, times or datetimes")?;
+                self.allow_loss(
+                    "the JSON data model cannot represent TOML dates, times or datetimes",
+                )?;
                 Json::String(value.to_string())
             }
             Toml::Array(values) => Json::Array(
@@ -227,6 +269,34 @@ mod tests {
                 "offset": "1979-05-27T07:32:00-07:00",
                 "floats": ["nan", "inf", "-inf", "nan"]
             }})
+        );
+    }
+
+    #[test]
+    fn yaml_ready_toml_keeps_floats_and_stringifies_datetimes() {
+        let converted = toml_to_yaml_ready(
+            toml("a = nan\nb = [inf, 1979-05-27]\n[t]\nc = 07:32:00"),
+            Policy::Lossy,
+        )
+        .unwrap();
+        assert!(converted.lossy);
+        let table = converted.value.as_table().unwrap();
+        assert!(table["a"].as_float().unwrap().is_nan());
+        assert_eq!(table["b"][0].as_float(), Some(f64::INFINITY));
+        assert_eq!(table["b"][1].as_str(), Some("1979-05-27"));
+        assert_eq!(table["t"]["c"].as_str(), Some("07:32:00"));
+    }
+
+    #[test]
+    fn yaml_ready_toml_without_datetimes_is_lossless_and_strict_names_the_key() {
+        let converted = toml_to_yaml_ready(toml("a = nan"), Policy::Strict).unwrap();
+        assert!(!converted.lossy);
+        assert_eq!(
+            err(toml_to_yaml_ready(
+                toml("[n]\nd = 1979-05-27"),
+                Policy::Strict
+            )),
+            "n.d: YAML output writes TOML dates, times and datetimes as strings"
         );
     }
 
