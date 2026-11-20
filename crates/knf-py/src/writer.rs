@@ -17,7 +17,7 @@ pub(super) fn dumps(data: &Bound<'_, PyDict>, format: &str, pretty: bool) -> PyR
             if !pretty {
                 return Err(PyValueError::new_err("format='yaml' requires pretty=True"));
             }
-            crate::cli_bin::emit_yaml(&dict_to_json(data)?)
+            knf_convert::emit_yaml(&dict_to_json(data)?)
         }
         _ => {
             let message = if cfg!(feature = "yaml") {
