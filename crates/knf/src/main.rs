@@ -156,7 +156,7 @@ fn run_pipeline(
 }
 
 #[cfg(feature = "yaml")]
-fn emit_yaml(value: &impl serde::Serialize) -> anyhow::Result<String> {
+pub(crate) fn emit_yaml(value: &impl serde::Serialize) -> anyhow::Result<String> {
     serde_saphyr::to_string(value).context("emitting YAML")
 }
 

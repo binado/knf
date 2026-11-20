@@ -130,6 +130,24 @@ def test_dump_formats(format, data, parse_text, pretty, tmp_path):
     assert stream.getvalue() == text
 
 
+def test_dump_yaml(tmp_path):
+    data = {"port": 443, "nested": {"missing": None, "label": "true"}}
+    text = 'port: 443\nnested:\n  missing: null\n  label: "true"\n'
+    assert dumps(data, format="yaml") == text
+
+    for suffix in (".YAML", ".yml"):
+        path = tmp_path / f"config{suffix}"
+        dump(data, path)
+        assert path.read_text(encoding="utf-8") == text
+
+    stream = StringIO()
+    dump(data, stream, format="yaml")
+    assert stream.getvalue() == text
+
+    with pytest.raises(ValueError, match="pretty=True"):
+        dumps(data, format="yaml", pretty=False)
+
+
 @pytest.mark.parametrize(
     ("format", "value", "error"),
     [
@@ -151,9 +169,9 @@ def test_dump_requires_a_known_format(tmp_path):
     with pytest.raises(TypeError):
         dumps({})
     with pytest.raises(ValueError, match="format"):
-        dumps({}, format="yaml")
+        dumps({}, format="xml")
     with pytest.raises(ValueError, match="format"):
-        dump({}, tmp_path / "config.yaml")
+        dump({}, tmp_path / "config.xml")
     with pytest.raises(ValueError, match="format"):
         dump({}, StringIO())
 

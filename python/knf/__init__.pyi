@@ -6,27 +6,27 @@ from typing import Any, Literal, Optional, TextIO, Union
 def dumps(
     data: dict[str, Any],
     *,
-    format: Literal["json", "toml"],
+    format: Literal["json", "toml", "yaml"],
     pretty: bool = True,
 ) -> str:
-    """Serialize a dict as JSON or TOML with a trailing newline.
+    """Serialize a dict as JSON, TOML, or YAML with a trailing newline.
 
-    JSON supports None, bool, str, finite floats, integers from -2**63 through
-    2**64 - 1, lists, tuples, and dicts with string keys. For TOML, see
-    dumps_toml. Unsupported types and invalid values raise TypeError or
-    ValueError with the key path.
+    JSON and YAML support None, bool, str, finite floats, integers from -2**63
+    through 2**64 - 1, lists, tuples, and dicts with string keys. YAML requires
+    pretty=True. For TOML, see dumps_toml. Unsupported types and invalid values
+    raise TypeError or ValueError with the key path.
     """
 
 def dump(
     data: dict[str, Any],
     target: Union[str, os.PathLike[str], TextIO],
     *,
-    format: Optional[Literal["json", "toml"]] = None,
+    format: Optional[Literal["json", "toml", "yaml"]] = None,
     pretty: bool = True,
 ) -> None:
     """Serialize with dumps before writing to a UTF-8 path or text stream.
 
-    Infer the format from a path's .json or .toml extension when omitted.
+    Infer the format from a path's .json, .toml, .yaml, or .yml extension.
     Text streams require an explicit format. I/O errors propagate unchanged.
     """
 
