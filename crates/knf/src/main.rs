@@ -15,7 +15,7 @@ use knf::{
     merge_interpolate,
 };
 
-use cli::{Cli, FormatArg};
+use cli::{Cli, ExecFormat, OutputFormat};
 use explain::{explain_pipeline, name_the_inline_layer_flag};
 use knf_convert::{Converted, Policy};
 
@@ -86,6 +86,7 @@ fn run(cli: Cli, command: &[OsString]) -> anyhow::Result<i32> {
 
     let (text, format) = run_pipeline(&cli, &files, &opts)?;
     if let Some((program, args)) = command.split_first() {
+        let format = ExecFormat::try_from(format).map_err(anyhow::Error::msg)?;
         run_child(program, args, &text, format)
     } else {
         write_stdout(&text)?;
@@ -97,13 +98,13 @@ fn run_pipeline(
     cli: &Cli,
     files: &[PathBuf],
     opts: &MergeOptions,
-) -> anyhow::Result<(String, FormatArg)> {
+) -> anyhow::Result<(String, OutputFormat)> {
     let mut inputs = files.to_vec();
     inputs.extend(cli.with.iter().cloned());
     let layers = if inputs.is_empty() {
         match cli.to {
-            Some(FormatArg::Json | FormatArg::Yaml) => Layers::Json(Vec::new()),
-            Some(FormatArg::Toml) => Layers::Toml(Vec::new()),
+            Some(OutputFormat::Json | OutputFormat::Yaml) => Layers::Json(Vec::new()),
+            Some(OutputFormat::Toml) => Layers::Toml(Vec::new()),
             None => {
                 bail!(
                     "no input files to infer a format from\nhelp: pass --to json, --to toml or --to yaml"
@@ -122,29 +123,29 @@ fn run_pipeline(
     let (format, text) = match layers {
         Layers::Json(layers) => {
             let merged = resolve_native(cli, layers, opts)?;
-            let output = cli.to.unwrap_or(FormatArg::Json);
+            let output = cli.to.unwrap_or(OutputFormat::Json);
             let text = match output {
-                FormatArg::Json => format::emit(merged, pretty),
-                FormatArg::Toml => format::emit(
+                OutputFormat::Json => format::emit(merged, pretty),
+                OutputFormat::Toml => format::emit(
                     converted_value(knf_convert::json_to_toml(merged, policy)?),
                     pretty,
                 ),
-                FormatArg::Yaml => emit_yaml(&merged),
+                OutputFormat::Yaml => emit_yaml(&merged),
             };
             (output, text)
         }
         Layers::Toml(layers) => {
             let merged = resolve_native(cli, layers, opts)?;
-            let output = cli.to.unwrap_or(FormatArg::Toml);
+            let output = cli.to.unwrap_or(OutputFormat::Toml);
             let text = match output {
-                FormatArg::Toml => format::emit(merged, pretty),
-                FormatArg::Json => format::emit(
+                OutputFormat::Toml => format::emit(merged, pretty),
+                OutputFormat::Json => format::emit(
                     converted_value(knf_convert::toml_to_json(merged, policy)?),
                     pretty,
                 ),
-                FormatArg::Yaml => {
-                    emit_yaml(&converted_value(knf_convert::toml_to_json(merged, policy)?))
-                }
+                OutputFormat::Yaml => emit_yaml(&converted_value(knf_convert::toml_to_yaml_ready(
+                    merged, policy,
+                )?)),
             };
             (output, text)
         }
@@ -152,7 +153,7 @@ fn run_pipeline(
     Ok((text.map_err(|err| explain_pipeline(err, None))?, format))
 }
 
-fn emit_yaml(value: &serde_json::Value) -> anyhow::Result<String> {
+fn emit_yaml(value: &impl serde::Serialize) -> anyhow::Result<String> {
     serde_saphyr::to_string(value).context("emitting YAML")
 }
 
@@ -195,7 +196,7 @@ fn run_child(
     program: &OsString,
     args: &[OsString],
     text: &str,
-    format: FormatArg,
+    format: ExecFormat,
 ) -> anyhow::Result<i32> {
     let mut snapshot = tempfile::Builder::new()
         .prefix("knf-")

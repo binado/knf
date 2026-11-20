@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 knf-core.workspace = true
 knf-convert.workspace = true
+serde.workspace = true
 serde-saphyr.workspace = true
 anyhow.workspace = true
 clap.workspace = true

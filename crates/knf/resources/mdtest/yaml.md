@@ -149,9 +149,9 @@ nested:
   noon: "12:30:00"
   stamp: "1979-05-27T07:32:00Z"
   limits:
-  - "nan"
-  - "inf"
-  - "-inf"
+  - .nan
+  - .inf
+  - -.inf
 ```
 
 `stderr`:
@@ -170,7 +170,28 @@ $ knf lossy.toml --to yaml --strict
 `stderr`:
 
 ```text
-error: nested.day: the JSON data model cannot represent TOML dates, times or datetimes
+error: nested.day: YAML output writes TOML dates, times and datetimes as strings
+```
+
+### Non-finite floats are native and lossless
+
+`floats.toml`:
+
+```toml
+limits = [nan, inf, -inf]
+```
+
+```console
+$ knf floats.toml --to yaml --strict
+```
+
+`stdout`:
+
+```text
+limits:
+- .nan
+- .inf
+- -.inf
 ```
 
 ## Compact YAML is a usage error before reading files

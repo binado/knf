@@ -156,9 +156,9 @@ knf base.toml prod.toml --to yaml
 knf base.json prod.json --to toml --strict
 ```
 
-For JSON and YAML output, TOML dates, times and datetimes become strings in
-TOML notation. Non-finite TOML floats become `"nan"`, `"inf"` or `"-inf"`.
-For TOML output, JSON null object fields are omitted and integers above the
+TOML dates, times and datetimes become strings in TOML notation. For JSON
+output, non-finite TOML floats become `"nan"`, `"inf"` or `"-inf"`; YAML keeps
+them as `.nan`, `.inf` and `-.inf`. For TOML output, JSON null object fields are omitted and integers above the
 TOML signed range become floats. JSON null array entries are errors.
 A lossy conversion warns on stderr. Add **`--strict`** to reject it.
 
