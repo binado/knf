@@ -103,12 +103,12 @@ fn run_pipeline(
     inputs.extend(cli.with.iter().cloned());
     let layers = if inputs.is_empty() {
         match cli.to {
-            Some(OutputFormat::Json | OutputFormat::Yaml) => Layers::Json(Vec::new()),
+            Some(OutputFormat::Json) => Layers::Json(Vec::new()),
+            #[cfg(feature = "yaml")]
+            Some(OutputFormat::Yaml) => Layers::Json(Vec::new()),
             Some(OutputFormat::Toml) => Layers::Toml(Vec::new()),
             None => {
-                bail!(
-                    "no input files to infer a format from\nhelp: pass --to json, --to toml or --to yaml"
-                )
+                bail!("no input files to infer a format from\nhelp: pass --to json or --to toml")
             }
         }
     } else {
@@ -130,6 +130,7 @@ fn run_pipeline(
                     converted_value(knf_convert::json_to_toml(merged, policy)?),
                     pretty,
                 ),
+                #[cfg(feature = "yaml")]
                 OutputFormat::Yaml => emit_yaml(&merged),
             };
             (output, text)
@@ -143,6 +144,7 @@ fn run_pipeline(
                     converted_value(knf_convert::toml_to_json(merged, policy)?),
                     pretty,
                 ),
+                #[cfg(feature = "yaml")]
                 OutputFormat::Yaml => emit_yaml(&converted_value(knf_convert::toml_to_yaml_ready(
                     merged, policy,
                 )?)),
@@ -153,6 +155,7 @@ fn run_pipeline(
     Ok((text.map_err(|err| explain_pipeline(err, None))?, format))
 }
 
+#[cfg(feature = "yaml")]
 fn emit_yaml(value: &impl serde::Serialize) -> anyhow::Result<String> {
     serde_saphyr::to_string(value).context("emitting YAML")
 }

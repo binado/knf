@@ -11,6 +11,7 @@ use knf::glob::KeyGlobPattern;
 pub enum OutputFormat {
     Json,
     Toml,
+    #[cfg(feature = "yaml")]
     Yaml,
 }
 
@@ -37,9 +38,35 @@ impl TryFrom<OutputFormat> for ExecFormat {
         match output {
             OutputFormat::Json => Ok(Self::Json),
             OutputFormat::Toml => Ok(Self::Toml),
+            #[cfg(feature = "yaml")]
             OutputFormat::Yaml => Err("--to yaml cannot be combined with --exec"),
         }
     }
+}
+
+fn to_long_help() -> String {
+    let (yaml_note, yaml_floats, example) = if cfg!(feature = "yaml") {
+        (
+            " YAML is output-only, parses inline -c values as JSON, and cannot be combined\nwith --compact or --exec.",
+            "; YAML keeps\nthem as .nan, .inf or -.inf",
+            "yaml",
+        )
+    } else {
+        ("", "", "json")
+    };
+    format!(
+        "\
+Convert the document after merging and interpolation. Output defaults to
+the input format. Required when there are no input or context files.{yaml_note}
+
+TOML dates, times and datetimes become strings in TOML notation. For JSON
+output, non-finite TOML floats become strings: nan, inf or -inf{yaml_floats}. For TOML
+output, JSON null object fields are omitted, and integers above the TOML signed
+range become floats. A JSON null array entry is an error. A lossy conversion
+prints a warning on stderr; use --strict to reject it and name the key.
+
+  knf base.toml prod.toml --to {example}"
+    )
 }
 
 #[derive(Parser, Debug)]
@@ -100,7 +127,7 @@ Like --glob, but match only the filename.
         long_help = "\
 Inline layer applied after all files; repeatable. The value is parsed in the
 format of the input files or context, falling back to a string. With neither,
---to selects the inline format (yaml parses as JSON).
+--to selects the inline format.
 
   -c port=8080  -c name=foo  -c version='\"1.0\"'"
     )]
@@ -124,19 +151,7 @@ separate keys; single-quoted spans are literal.
     #[arg(
         long,
         value_name = "FORMAT",
-        long_help = "\
-Convert the document after merging and interpolation. Output defaults to
-the input format. Required when there are no input or context files. YAML
-is output-only and cannot be combined with --compact or --exec.
-
-TOML dates, times and datetimes become strings in TOML notation. For JSON
-output, non-finite TOML floats become strings: nan, inf or -inf; YAML keeps
-them as .nan, .inf or -.inf. For TOML output, JSON null object fields are
-omitted, and integers above the TOML signed range become floats. A JSON null
-array entry is an error. A lossy conversion prints a warning on stderr; use
---strict to reject it and name the key.
-
-  knf base.toml prod.toml --to yaml"
+        long_help = to_long_help()
     )]
     pub to: Option<OutputFormat>,
 
@@ -189,7 +204,7 @@ Run the command and arguments after --. KNF_CONFIG_PATH points to a private
 temporary JSON or TOML file containing the merged configuration. The file is
 removed when the command finishes. The command inherits standard streams and
 its exit status is returned. With --to, the file is in the converted format.
-Cannot be combined with --list-files or --to yaml.
+Cannot be combined with --list-files.
 
   knf base.toml -c seed=42 --exec -- python fit.py --replicate 2"
     )]
@@ -213,6 +228,7 @@ impl Cli {
                 Vec::new()
             };
         let cli = Self::parse_from(args);
+        #[cfg(feature = "yaml")]
         if cli.to == Some(OutputFormat::Yaml) && cli.compact {
             Self::command()
                 .error(

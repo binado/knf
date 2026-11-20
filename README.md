@@ -11,12 +11,13 @@ pip install pyknf
 ```
 
 Installs the `knf` module and the `knf` executable. Wheels for Linux, macOS and
-Windows (x86-64 and ARM64); CPython 3.11+.
+Windows (x86-64 and ARM64); CPython 3.11+. The wheels include `--to yaml`.
 
 ### Rust
 
 ```bash
-cargo install knf-cli  # the executable
+cargo install knf-cli                  # the executable
+cargo install knf-cli --features yaml  # with `--to yaml` (Rust 1.89+)
 cargo add knf-core     # the library, imported as `knf`
 ```
 
@@ -147,7 +148,7 @@ knf foo.toml bar.toml -i --with config.toml
 Context uses the same format as inputs.
 Filtering and `--list-files` apply only to merge inputs.
 
-**`--to json|toml|yaml`**: convert the final document after merging and
+**`--to json|toml`** (`yaml` with the `yaml` feature): convert the final document after merging and
 interpolation. Required when there are no input or context files. YAML is
 output-only and uses block style.
 
