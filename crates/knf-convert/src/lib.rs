@@ -114,7 +114,7 @@ impl Converter {
             Toml::Float(value) => match Number::from_f64(value) {
                 Some(number) => Json::Number(number),
                 None => {
-                    self.allow_loss("JSON cannot represent non-finite floats")?;
+                    self.allow_loss("the JSON data model cannot represent non-finite floats")?;
                     let text = if value.is_nan() {
                         "nan"
                     } else if value.is_sign_negative() {
@@ -127,7 +127,9 @@ impl Converter {
             },
             Toml::String(value) => Json::String(value),
             Toml::Datetime(value) => {
-                self.allow_loss("JSON cannot represent TOML dates, times or datetimes")?;
+                self.allow_loss(
+                    "the JSON data model cannot represent TOML dates, times or datetimes",
+                )?;
                 Json::String(value.to_string())
             }
             Toml::Array(values) => Json::Array(

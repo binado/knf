@@ -82,7 +82,7 @@ Like --glob, but match only the filename.
         long_help = "\
 Inline layer applied after all files; repeatable. The value is parsed in the
 format of the input files or context, falling back to a string. With neither,
---to selects the inline format; YAML output uses JSON inline rules.
+--to selects the inline format (yaml parses as JSON).
 
   -c port=8080  -c name=foo  -c version='\"1.0\"'"
     )]
@@ -111,13 +111,14 @@ Convert the document after merging and interpolation. Output defaults to
 the input format. Required when there are no input or context files. YAML
 is output-only and cannot be combined with --compact or --exec.
 
-TOML dates, times and datetimes become strings in TOML notation. Non-finite
-TOML floats become strings: nan, inf or -inf. JSON null object fields are
+TOML to YAML follows the TOML to JSON rules. TOML dates, times and datetimes
+become strings in TOML notation. Non-finite TOML floats become strings: nan,
+inf or -inf. JSON null object fields are
 omitted, and integers above the TOML signed range become floats. A JSON null
 array entry is an error. A lossy conversion prints a warning on stderr; use
 --strict to reject it and name the key.
 
-  knf base.toml prod.toml --to json"
+  knf base.toml prod.toml --to yaml"
     )]
     pub to: Option<FormatArg>,
 
@@ -170,7 +171,7 @@ Run the command and arguments after --. KNF_CONFIG_PATH points to a private
 temporary JSON or TOML file containing the merged configuration. The file is
 removed when the command finishes. The command inherits standard streams and
 its exit status is returned. With --to, the file is in the converted format.
-Cannot be combined with --list-files.
+Cannot be combined with --list-files or --to yaml.
 
   knf base.toml -c seed=42 --exec -- python fit.py --replicate 2"
     )]

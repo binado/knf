@@ -52,8 +52,7 @@ knf config/**/*.toml -G '*.prod.toml'
 
 **`-c KEY.PATH=VALUE`**: inline layer applied after all files. The value is
 parsed in the format of the input files or context and falls back to a string.
-With neither, `--to` selects the inline format. YAML output uses JSON inline
-rules.
+With neither, `--to` selects the inline format (`yaml` parses as JSON).
 
 | RHS | JSON | TOML |
 | --- | --- | --- |

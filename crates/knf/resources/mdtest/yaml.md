@@ -129,6 +129,7 @@ value: "null"
 [nested]
 day = 1979-05-27
 time = 07:32:00
+noon = 12:30:00
 stamp = 1979-05-27T07:32:00Z
 limits = [nan, inf, -inf]
 ```
@@ -145,6 +146,7 @@ $ knf lossy.toml --to yaml
 nested:
   day: "1979-05-27"
   time: 07:32:00
+  noon: "12:30:00"
   stamp: "1979-05-27T07:32:00Z"
   limits:
   - "nan"
@@ -168,7 +170,7 @@ $ knf lossy.toml --to yaml --strict
 `stderr`:
 
 ```text
-error: nested.day: JSON cannot represent TOML dates, times or datetimes
+error: nested.day: the JSON data model cannot represent TOML dates, times or datetimes
 ```
 
 ## Compact YAML is a usage error before reading files
@@ -239,4 +241,54 @@ $ knf -i --with config.yaml --to yaml
 ```text
 error: cannot infer a format from `config.yaml`
 help: name the file with a .json or .toml extension
+```
+
+## Strings that YAML readers could misread stay strings
+
+`tricky.json`:
+
+```json
+{"y":"yes","off":"off","tilde":"~","hex":"0x1F","empty":"","padded":" a ","colon":"a: b","dash":"-","multi":"one\ntwo","é":"☃","null":1,"true":2,"e":[],"o":{},"seq":[{"k":1},[2]],"big":18446744073709551615,"f":1.5}
+```
+
+```console
+$ knf tricky.json --to yaml
+```
+
+`stdout`:
+
+```text
+"y": "yes"
+"off": "off"
+tilde: "~"
+hex: "0x1F"
+empty: ""
+padded: " a "
+colon: "a: b"
+dash: '-'
+multi: |-
+  one
+  two
+é: ☃
+"null": 1
+"true": 2
+e: []
+o: {}
+seq:
+- k: 1
+- - 2
+big: 18446744073709551615
+f: 1.5
+```
+
+## List files ignores the output format
+
+```console
+$ knf tricky.json -l --to yaml
+```
+
+`stdout`:
+
+```text
+tricky.json
 ```

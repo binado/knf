@@ -138,13 +138,12 @@ fn run_pipeline(
             let output = cli.to.unwrap_or(FormatArg::Toml);
             let text = match output {
                 FormatArg::Toml => format::emit(merged, pretty),
-                FormatArg::Json | FormatArg::Yaml => {
-                    let value = converted_value(knf_convert::toml_to_json(merged, policy)?);
-                    if output == FormatArg::Yaml {
-                        emit_yaml(&value)
-                    } else {
-                        format::emit(value, pretty)
-                    }
+                FormatArg::Json => format::emit(
+                    converted_value(knf_convert::toml_to_json(merged, policy)?),
+                    pretty,
+                ),
+                FormatArg::Yaml => {
+                    emit_yaml(&converted_value(knf_convert::toml_to_json(merged, policy)?))
                 }
             };
             (output, text)
@@ -154,7 +153,7 @@ fn run_pipeline(
 }
 
 fn emit_yaml(value: &serde_json::Value) -> anyhow::Result<String> {
-    Ok(serde_saphyr::to_string(value)?)
+    serde_saphyr::to_string(value).context("emitting YAML")
 }
 
 fn converted_value<V>(converted: Converted<V>) -> V {
