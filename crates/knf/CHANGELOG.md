@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/binado/knf/compare/knf-cli-v0.7.1...knf-cli-v0.8.0) - 2026-11-20
+
+### Added
+
+- *(cli)* add YAML output ([#78](https://github.com/binado/knf/pull/78))
+- run commands with resolved config and add conversion and Python helpers ([#69](https://github.com/binado/knf/pull/69))
+
+### Other
+
+- *(cli)* Markdown fixture harness and ported CLI tests ([#77](https://github.com/binado/knf/pull/77))
+- *(cli)* [**breaking**] select input format by file extension only ([#76](https://github.com/binado/knf/pull/76))
+- *(cli)* [**breaking**] remove --accumulate flag ([#75](https://github.com/binado/knf/pull/75))
+- [**breaking**] remove merge-key object inheritance ([#74](https://github.com/binado/knf/pull/74))
+- split AGENTS.md and clean up invariant-enforcing comments ([#72](https://github.com/binado/knf/pull/72))
+- *(python)* move Python sources and pyproject to repo root ([#71](https://github.com/binado/knf/pull/71))
+
 ## [0.7.1](https://github.com/binado/knf/compare/knf-cli-v0.7.0...knf-cli-v0.7.1) - 2026-11-13
 
 ### Added

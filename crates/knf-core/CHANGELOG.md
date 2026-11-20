@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/binado/knf/compare/knf-core-v0.7.1...knf-core-v0.8.0) - 2026-11-20
+
+### Other
+
+- *(cli)* [**breaking**] select input format by file extension only ([#76](https://github.com/binado/knf/pull/76))
+- [**breaking**] remove merge-key object inheritance ([#74](https://github.com/binado/knf/pull/74))
+- split AGENTS.md and clean up invariant-enforcing comments ([#72](https://github.com/binado/knf/pull/72))
+
 ## [0.7.0](https://github.com/binado/knf/compare/knf-core-v0.6.0...knf-core-v0.7.0) - 2026-09-30
 
 ### Added
