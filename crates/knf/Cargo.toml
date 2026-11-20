@@ -4,6 +4,7 @@ name = "knf-cli"
 description = "Merge layered configuration files and print the result"
 version.workspace = true
 edition.workspace = true
+rust-version = "1.89"
 license.workspace = true
 repository.workspace = true
 
@@ -14,14 +15,16 @@ path = "src/main.rs"
 [dependencies]
 knf-core.workspace = true
 knf-convert.workspace = true
+serde-saphyr.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 tempfile.workspace = true
 # Keeps --exec alive across Ctrl-C so the temp snapshot is deleted on drop.
 ctrlc.workspace = true
 
-[dev-dependencies]
 serde_json.workspace = true
+
+[dev-dependencies]
 toml.workspace = true
 assert_cmd = "2"
 datatest-stable = "0.3.3"

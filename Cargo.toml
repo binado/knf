@@ -19,6 +19,7 @@ fast-glob = "1.1.2"
 # Needed alongside serde_json: toml's serializer otherwise buffers into a BTreeMap and sorts keys.
 toml = { version = "1", features = ["preserve_order"] }
 serde = "1"
+serde-saphyr = { version = "2.2", default-features = false, features = ["serialize"] }
 tempfile = "3"
 ctrlc = "3"
 

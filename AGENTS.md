@@ -8,7 +8,7 @@ Repo-wide guidance for AI agents. Crate-specific rules live in `crates/<crate>/A
 
 ## Commands
 
-MSRV is Rust 1.88.
+MSRV is Rust 1.89.
 
 ```bash
 just ci                                 # format-check + lint + test + build + doc

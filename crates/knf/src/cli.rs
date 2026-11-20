@@ -3,22 +3,23 @@
 use std::{ffi::OsString, path::PathBuf};
 
 use clap::{CommandFactory, Parser, error::ErrorKind};
+use knf::PathLeaf;
 use knf::glob::KeyGlobPattern;
-use knf::{Format, PathLeaf};
 
-/// `--to` values. Mirrors [`Format`] because the orphan rule forbids deriving
-/// `ValueEnum` on it here.
+/// Formats accepted by `--to`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum FormatArg {
     Json,
     Toml,
+    Yaml,
 }
 
-impl From<FormatArg> for Format {
-    fn from(arg: FormatArg) -> Self {
-        match arg {
-            FormatArg::Json => Format::Json,
-            FormatArg::Toml => Format::Toml,
+impl FormatArg {
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Toml => "toml",
+            Self::Yaml => "yaml",
         }
     }
 }
@@ -80,7 +81,8 @@ Like --glob, but match only the filename.
         value_name = "KEY.PATH=VALUE",
         long_help = "\
 Inline layer applied after all files; repeatable. The value is parsed in the
-input format (--to when there are no files), falling back to a string.
+format of the input files or context, falling back to a string. With neither,
+--to selects the inline format; YAML output uses JSON inline rules.
 
   -c port=8080  -c name=foo  -c version='\"1.0\"'"
     )]
@@ -106,8 +108,8 @@ separate keys; single-quoted spans are literal.
         value_name = "FORMAT",
         long_help = "\
 Convert the document after merging and interpolation. Output defaults to
-the input format. Required when there are no input files, where it also
-selects the format of -c values.
+the input format. Required when there are no input or context files. YAML
+is output-only and cannot be combined with --compact or --exec.
 
 TOML dates, times and datetimes become strings in TOML notation. Non-finite
 TOML floats become strings: nan, inf or -inf. JSON null object fields are
@@ -192,6 +194,18 @@ impl Cli {
                 Vec::new()
             };
         let cli = Self::parse_from(args);
+        if cli.to == Some(FormatArg::Yaml) {
+            for (enabled, flag) in [(cli.compact, "--compact"), (cli.exec, "--exec")] {
+                if enabled {
+                    Self::command()
+                        .error(
+                            ErrorKind::ArgumentConflict,
+                            format!("--to yaml cannot be combined with {flag}"),
+                        )
+                        .exit();
+                }
+            }
+        }
         if cli.exec && command.is_empty() {
             Self::command()
                 .error(

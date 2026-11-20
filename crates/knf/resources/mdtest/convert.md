@@ -74,7 +74,7 @@ $ knf
 
 ```text
 error: no input files to infer a format from
-help: pass --to json or --to toml
+help: pass --to json, --to toml or --to yaml
 ```
 
 ### Inline layers alone need `--to`
@@ -88,7 +88,7 @@ $ knf -c a=1
 
 ```text
 error: no input files to infer a format from
-help: pass --to json or --to toml
+help: pass --to json, --to toml or --to yaml
 ```
 
 ### An empty JSON document

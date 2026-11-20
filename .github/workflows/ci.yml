@@ -10,7 +10,7 @@ jobs:
   test:
     strategy:
       matrix:
-        rust: ["1.88", stable]
+        rust: ["1.89", stable]
     runs-on: ubuntu-latest
     env:
       # knf-py is a pyo3 extension module: its Python symbols come from the

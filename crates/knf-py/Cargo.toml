@@ -5,6 +5,7 @@ description = "Python bindings for knf-core, with the knf command line"
 publish = false
 version.workspace = true
 edition.workspace = true
+rust-version = "1.89"
 license.workspace = true
 repository.workspace = true
 
@@ -21,6 +22,7 @@ doctest = false
 [dependencies]
 knf-core.workspace = true
 knf-convert.workspace = true
+serde-saphyr.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 tempfile.workspace = true
