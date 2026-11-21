@@ -9,14 +9,30 @@ name = "knf-cli"
 # The library and the Python module live in sibling crates; their commits
 # belong in the CLI changelog, since knf-cli is what ships both.
 changelog_include = ["knf-core", "knf-convert", "knf-py"]
+git_tag_name = "v{{ version }}"
+
+# The CLI is the canonical GitHub release for the workspace version. Keep
+# publishing these libraries to crates.io without creating separate tags/releases.
+[[package]]
+name = "knf-core"
+git_tag_enable = false
+git_release_enable = false
+
+[[package]]
+name = "knf-convert"
+git_tag_enable = false
+git_release_enable = false
 
 # The Python module, the only PyPI package. Track its changes so Python-only
-# updates bump the shared workspace version and produce a knf-cli release tag.
-# Git-only mode does not publish the crate to crates.io. The workflow publishes
-# the PyPI wheels from the knf-cli tag; its changelog includes these commits.
+# updates bump the shared workspace version and produce the canonical v<version> tag.
+# Keep it enabled so Python-only changes can trigger a shared version bump.
+# Use the canonical CLI tag as its version baseline without creating its own.
 [[package]]
 name = "knf-py"
 git_only = true
+git_tag_name = "v{{ version }}"
+git_tag_enable = false
+git_release_enable = false
 publish = false
 changelog_update = false
 

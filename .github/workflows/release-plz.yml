@@ -4,10 +4,10 @@ on:
   push:
     branches:
       - main
-    # release-plz tags knf-cli-v<version> when a Release PR merges. A tag push
+    # release-plz tags v<version> when a Release PR merges. A tag push
     # from GITHUB_TOKEN does not start a run, so the release job dispatches
     # this workflow on that tag. A tag pushed by a person starts it directly.
-    tags: ["knf-cli-v*"]
+    tags: ["v*"]
   workflow_dispatch:
 
 jobs:
@@ -57,13 +57,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.knf-release.outputs.version }}
-        run: gh workflow run release-plz.yml --ref "knf-cli-v${VERSION}"
+        run: gh workflow run release-plz.yml --ref "v${VERSION}"
 
   # The workspace version the pyknf wheels must match.
   resolve-pypi:
     name: Resolve PyPI publish
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'binado' && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/knf-cli-v')) }}
+    if: ${{ github.repository_owner == 'binado' && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')) }}
     outputs:
       version: ${{ steps.plan.outputs.version }}
     permissions:
@@ -75,10 +75,10 @@ jobs:
         id: plan
         run: |
           version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          if [[ "$GITHUB_REF" == refs/tags/knf-cli-v* ]]; then
-            tag="${GITHUB_REF_NAME#knf-cli-v}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME#v}"
             if [[ "$tag" != "$version" ]]; then
-              echo "::error::tag knf-cli-v${tag} does not match Cargo.toml version ${version}"
+              echo "::error::tag v${tag} does not match Cargo.toml version ${version}"
               exit 1
             fi
           fi
