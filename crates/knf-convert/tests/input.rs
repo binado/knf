@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use knf::Value;
-use knf_convert::{InputFormat, LoadError, resolve_format};
+use knf_convert::{InputFormat, LoadError, ReadError, resolve_format};
 use tempfile::TempDir;
 
 fn string(text: &str) -> Value {
@@ -113,30 +113,24 @@ fn documents_must_have_an_object_root() {
 }
 
 #[test]
-fn load_names_the_file_in_diagnostics() {
+fn load_reports_read_and_parse_failures() {
     let dir = TempDir::new().unwrap();
     let missing = dir.path().join("missing.json");
-    let err = format!("{:#}", InputFormat::Json.load(&missing).unwrap_err());
+    let err = InputFormat::Json.load(&missing).unwrap_err();
     assert!(
-        err.starts_with(&format!("reading `{}`", missing.display())),
-        "{err}"
+        matches!(&err, ReadError::Io(io) if io.kind() == std::io::ErrorKind::NotFound),
+        "{err:?}"
     );
 
     let array = dir.path().join("array.json");
     std::fs::write(&array, "[1]").unwrap();
     let err = InputFormat::Json.load(&array).unwrap_err().to_string();
-    assert_eq!(
-        err,
-        format!(
-            "{}: expected an object at the top level, found array",
-            array.display()
-        )
-    );
+    assert_eq!(err, "expected an object at the top level, found array");
 
     let broken = dir.path().join("broken.toml");
     std::fs::write(&broken, "a = ").unwrap();
     let err = InputFormat::Toml.load(&broken).unwrap_err().to_string();
-    assert_eq!(err, format!("{}: invalid TOML", broken.display()));
+    assert_eq!(err, "invalid TOML");
 }
 
 #[test]

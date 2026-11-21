@@ -171,14 +171,18 @@ fn file_errors_name_the_failing_path() {
         panic!("expected a file error, got {err:?}");
     };
     assert_eq!(*path, broken);
+    let chain: Vec<String> =
+        std::iter::successors(Some(&err as &dyn std::error::Error), |cause| cause.source())
+            .map(ToString::to_string)
+            .collect();
     assert_eq!(
-        err.to_string(),
-        format!("{}: invalid JSON", broken.display())
+        chain[..2],
+        [
+            format!("loading `{}`", broken.display()),
+            "invalid JSON".into()
+        ]
     );
-    assert!(
-        std::error::Error::source(&err).is_some(),
-        "keeps the parser cause"
-    );
+    assert_eq!(chain.len(), 3, "keeps the parser cause: {chain:?}");
 
     let missing = dir.path().join("missing.json");
     let err = knf_convert::load_layers(

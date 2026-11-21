@@ -141,7 +141,7 @@ $ knf nope.json
 `stderr`:
 
 ```text
-error: reading `nope.json`
+error: loading `nope.json`
   caused by: No such file or directory (os error 2)
 ```
 
@@ -161,7 +161,8 @@ $ knf a.json
 `stderr`:
 
 ```text
-error: a.json: expected an object at the top level, found array
+error: loading `a.json`
+  caused by: expected an object at the top level, found array
 ```
 
 ## Directories

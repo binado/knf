@@ -137,9 +137,9 @@ def test_non_finite_floats_pass_through(write):
 @pytest.mark.parametrize(
     ("name", "text", "message"),
     [
-        ("a.json", "{", "a.json: invalid JSON"),
-        ("a.toml", "x = ", "a.toml: invalid TOML"),
-        ("a.json", "[1, 2]", "a.json: expected an object"),
+        ("a.json", "{", "a.json`: invalid JSON"),
+        ("a.toml", "x = ", "a.toml`: invalid TOML"),
+        ("a.json", "[1, 2]", "a.json`: expected an object"),
     ],
 )
 def test_invalid_documents_raise_parse_error(write, name, text, message):

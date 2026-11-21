@@ -106,36 +106,31 @@ enum Failure {
 /// Maps a load failure to the exception Python itself would raise: an
 /// `OSError` subclass, `ValueError`, or [`ParseError`].
 fn load_error(py: Python<'_>, err: LoadError) -> PyErr {
-    match err {
-        LoadError::Directory { ref path } => {
-            os_error::<PyIsADirectoryError>(py, "EISDIR", path, &err)
-        }
+    match &err {
+        LoadError::Directory { path } => os_error::<PyIsADirectoryError>(py, "EISDIR", path, &err),
         LoadError::NoInputs | LoadError::MixedFormats | LoadError::UnknownExtension { .. } => {
             PyValueError::new_err(err.to_string())
         }
-        LoadError::File { path, source } => file_error(py, &path, &source),
-    }
-}
-
-/// Maps a read or parse failure of `path`.
-fn file_error(py: Python<'_>, path: &Path, err: &ReadError) -> PyErr {
-    if let ReadError::Io { source, .. } = err {
-        match source.kind() {
-            io::ErrorKind::NotFound => {
-                return os_error::<PyFileNotFoundError>(py, "ENOENT", path, err);
-            }
+        LoadError::File {
+            path,
+            source: ReadError::Io(source),
+        } => match source.kind() {
+            io::ErrorKind::NotFound => os_error::<PyFileNotFoundError>(py, "ENOENT", path, &err),
             io::ErrorKind::PermissionDenied => {
-                return os_error::<PyPermissionError>(py, "EACCES", path, err);
+                os_error::<PyPermissionError>(py, "EACCES", path, &err)
             }
             // `read_to_string` on bytes that are not UTF-8: the content's fault.
-            io::ErrorKind::InvalidData => {}
-            _ => return PyOSError::new_err(one_line(err)),
-        }
+            io::ErrorKind::InvalidData => ParseError::new_err(one_line(&err)),
+            _ => PyOSError::new_err(one_line(&err)),
+        },
+        LoadError::File {
+            source: ReadError::Parse(_),
+            ..
+        } => ParseError::new_err(one_line(&err)),
     }
-    ParseError::new_err(one_line(err))
 }
 
-/// The error and its sources on one line: "a.json: invalid JSON: …".
+/// The error and its sources on one line: "loading `a.json`: invalid JSON: …".
 fn one_line(err: &dyn std::error::Error) -> String {
     let mut line = err.to_string();
     let mut source = err.source();
