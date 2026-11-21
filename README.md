@@ -181,14 +181,13 @@ knf base.toml pilot.toml -c seed=42 --exec -- python fit.py --replicate 2
 ## Python API
 
 ```python
-from knf import accumulate, deep_merge, dump, dumps, filter_paths, load
+from knf import deep_merge, dump, dumps, filter_paths, load
 
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
 config = load(["foo.toml", "bar.toml"], interpolate=True, context="config.toml")
 
-files = accumulate("services/api/prod.toml", base_dir=project_root)
-files = filter_paths(files, "{defaults,prod}.toml", filename_only=True)
+files = filter_paths(candidates, "{defaults,prod}.toml", filename_only=True)
 config = load(files)
 
 text = dumps(config, format="toml")

@@ -69,20 +69,6 @@ class ParseError(ValueError):
 class InterpolationError(ValueError):
     """A configuration reference cannot be resolved."""
 
-def accumulate(
-    target: Union[str, os.PathLike[str]],
-    *,
-    base_dir: Optional[Union[str, os.PathLike[str]]] = None,
-) -> list[Path]:
-    """Discover same-format files along a relative target path, with the target last.
-
-    Paths are absolute only when ``base_dir`` is given.
-
-    Raises:
-        ValueError: Invalid target or a target that is not a regular file.
-        OSError: Discovery failed, with filesystem subclass and filename set.
-    """
-
 def filter_paths(
     files: Sequence[Union[str, os.PathLike[str]]],
     pattern: str,
