@@ -20,8 +20,8 @@ cargo test -p knf-cli --test cli <name> # run a single CLI integration test
 
 ## Crates
 
-- `crates/knf-core/`: The library (crate name `knf`). Loading, merge, interpolation. No `clap`.
-- `crates/knf-convert/`: Output conversion between native JSON and TOML values. No CLI or Python dependencies.
+- `crates/knf-core/`: The library (crate name `knf`). Ordered values, merge, interpolation. No `clap`.
+- `crates/knf-convert/`: File loading, parsing, output conversion and emission. No CLI or Python dependencies.
 - `crates/knf/`: The CLI binary (`knf-cli`). No `pyo3`.
 - `crates/mdtest/`: Markdown fixture harness (`knf-mdtest`, dev-only, not published).
 - `crates/knf-py/`: PyO3 bindings (module `knf._knf`). Python sources and tests are in `python/`; the `pyknf` wheel is built from the root `pyproject.toml`.

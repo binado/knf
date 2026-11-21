@@ -11,10 +11,11 @@ def dumps(
 ) -> str:
     """Serialize a dict as JSON, TOML, or YAML with a trailing newline.
 
-    JSON and YAML support None, bool, str, finite floats, integers from -2**63
-    through 2**64 - 1, lists, tuples, and dicts with string keys. YAML requires
-    pretty=True. For TOML, see dumps_toml. Unsupported types and invalid values
-    raise TypeError or ValueError with the key path.
+    JSON supports None, bool, str, finite floats, integers from -2**63 through
+    2**64 - 1, lists, tuples, and dicts with string keys. YAML also supports
+    non-finite floats and requires pretty=True. For TOML, see dumps_toml. Types
+    the format lacks raise TypeError, and values it cannot hold raise
+    ValueError, with the key path.
     """
 
 def dump(
@@ -68,20 +69,6 @@ class ParseError(ValueError):
 
 class InterpolationError(ValueError):
     """A configuration reference cannot be resolved."""
-
-def accumulate(
-    target: Union[str, os.PathLike[str]],
-    *,
-    base_dir: Optional[Union[str, os.PathLike[str]]] = None,
-) -> list[Path]:
-    """Discover same-format files along a relative target path, with the target last.
-
-    Paths are absolute only when ``base_dir`` is given.
-
-    Raises:
-        ValueError: Invalid target or a target that is not a regular file.
-        OSError: Discovery failed, with filesystem subclass and filename set.
-    """
 
 def filter_paths(
     files: Sequence[Union[str, os.PathLike[str]]],

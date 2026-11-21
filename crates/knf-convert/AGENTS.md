@@ -1,7 +1,7 @@
 # AGENTS.md (knf-convert)
 
-Output conversion between native JSON and TOML values. No CLI or Python dependencies.
+Loads homogeneous JSON or TOML layers into `knf::Value` and emits resolved values. No CLI or Python dependencies.
 
-- Conversion happens after merge and interpolation; this crate never merges.
-- TOML datetimes stay native; never route values through JSON.
-- Unit tests cover conversion and lossy-warning cases.
+- Conversion policy lives in `OutputFormat::emit`; this crate never merges.
+- Keep scalar types (datetimes, unsigned, non-finite floats) until output selection; never route values through JSON.
+- Tests: `tests/round_trip.rs` (emit and reparse), `tests/library.rs` (file loading), `tests/input.rs` (inline literals and formats).

@@ -1,4 +1,4 @@
-//! `${key.path}` and `${env:VAR}` resolution over native layers.
+//! `${key.path}` and `${env:VAR}` resolution over ordered configuration layers.
 //!
 //! A whole-string reference (`"${p}"`) takes the referent's value and type; an
 //! embedded one (`"x/${p}"`) stringifies, and containers are an error there.
@@ -17,12 +17,12 @@ mod scan;
 use std::collections::{HashMap, HashSet};
 
 use crate::glob::KeyGlobPattern;
-use crate::{ConfigFormat, ConfigObject, PathError, RefPath, Seg};
+use crate::{MergeOptions, PathError, RefPath, Seg, Value};
 
 pub use error::{Cycle, InterpError, Problem};
 pub use scan::Syntax;
 
-use graph::{Expr, Id, Node, Shape};
+use graph::{Expr, Id, Node, Object, Shape};
 use scan::{Piece, Spelled, scan};
 
 /// The environment namespace, matched as a literal prefix so `${a:b}` is the
@@ -36,12 +36,30 @@ pub trait Env {
     fn lookup(&self, name: &str) -> Option<String>;
 }
 
-/// Options for reference-aware merging options.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct InterpOptions {
-    /// Destination key paths to replace wholesale, in layer merges. Matching
-    /// ancestors stop merging; paths with indices never match.
-    pub shallow: Option<KeyGlobPattern>,
+/// Inputs used to resolve references.
+pub struct InterpolationOptions<'a> {
+    /// Fallback document for paths absent from the output. A present value, including null, wins.
+    pub context: Option<&'a Value>,
+    /// Source for environment references. Embedded references keep their raw text.
+    pub env: &'a dyn Env,
+    /// Parser for whole environment references. Pass `&Value::String` to keep the raw text.
+    pub parse_inline: &'a dyn Fn(String) -> Value,
+}
+
+impl<'a> InterpolationOptions<'a> {
+    /// Read the process environment, with no context.
+    pub fn new(parse_inline: &'a dyn Fn(String) -> Value) -> Self {
+        Self {
+            context: None,
+            env: &crate::ProcessEnv,
+            parse_inline,
+        }
+    }
+
+    /// Replace the context document.
+    pub fn with_context(self, context: Option<&'a Value>) -> Self {
+        Self { context, ..self }
+    }
 }
 
 /// Left-folds `layers` like [`merge`](crate::merge), then resolves references
@@ -49,22 +67,22 @@ pub struct InterpOptions {
 /// `context`. Only the merged document is returned.
 ///
 /// A whole-string reference merges as the value it names: an object merges
-/// with an object on the other side; anything else replaces. `shallow` paths
-/// replace wholesale. An operand that is replaced is never resolved, but a
-/// reference whose kind decides a merge must resolve.
+/// with an object on the other side; anything else replaces. Paths matched by
+/// `merge_options.shallow` replace wholesale. An operand that is replaced is
+/// never resolved, but a reference whose kind decides a merge must resolve.
 ///
 /// Context values are resolved only when referenced. Environment values are
 /// terminal. Invalid directives and reference problems are reported together;
 /// cycles are reported alone.
-pub fn merge_interpolate<V: ConfigFormat>(
-    layers: impl IntoIterator<Item = V>,
-    context: Option<&V>,
-    env: &dyn Env,
-    options: &InterpOptions,
-) -> Result<V, InterpError> {
+pub fn merge_with_interpolation(
+    layers: impl IntoIterator<Item = Value>,
+    merge_options: &MergeOptions,
+    options: &InterpolationOptions,
+) -> Result<Value, InterpError> {
     let mut resolver = Resolver {
-        env,
-        shallow: options.shallow.as_ref(),
+        env: options.env,
+        parse_inline: options.parse_inline,
+        shallow: merge_options.shallow.as_ref(),
         nodes: Vec::new(),
         doc: 0,
         context: None,
@@ -77,13 +95,15 @@ pub fn merge_interpolate<V: ConfigFormat>(
         visiting: Vec::new(),
         problems: Vec::new(),
     };
-    let mut doc = resolver.add(Expr::Object(Vec::new()), Vec::new());
+    let mut doc = resolver.add(Expr::Object(Object::new()), Vec::new());
     for layer in layers {
         let layer = resolver.build(layer, Vec::new());
         doc = resolver.combine(doc, layer, Vec::new());
     }
     resolver.doc = doc;
-    resolver.context = context.map(|context| resolver.build(context.clone(), Vec::new()));
+    resolver.context = options
+        .context
+        .map(|context| resolver.build(context.clone(), Vec::new()));
     let resolved = resolver.eval(doc).map_err(InterpError::Cycle)?;
     if resolver.problems.is_empty() {
         Ok(resolved)
@@ -96,29 +116,16 @@ pub fn merge_interpolate<V: ConfigFormat>(
 ///
 /// Reports all unresolved and malformed references together; a cycle is
 /// reported alone.
-pub fn interpolate<V: ConfigFormat>(doc: V, env: &dyn Env) -> Result<V, InterpError> {
-    merge_interpolate([doc], None, env, &InterpOptions::default())
-}
-
-/// Resolves references in `doc`, looking up each complete path in `doc` first,
-/// then in `context`. Context values are resolved only when referenced, using
-/// the same lookup order for their dependencies. Only `doc` is returned.
-///
-/// Existing values, including null, take precedence. Selected containers keep
-/// their own children; they are never combined with the other document.
-pub fn interpolate_with_context<V: ConfigFormat>(
-    doc: V,
-    context: &V,
-    env: &dyn Env,
-) -> Result<V, InterpError> {
-    merge_interpolate([doc], Some(context), env, &InterpOptions::default())
+pub fn interpolate(doc: Value, options: &InterpolationOptions) -> Result<Value, InterpError> {
+    merge_with_interpolation([doc], &MergeOptions::default(), options)
 }
 
 /// Expression graph and caches. `nodes` is append-only so ids are stable cache keys.
-struct Resolver<'a, V: ConfigFormat> {
+struct Resolver<'a> {
     env: &'a dyn Env,
+    parse_inline: &'a dyn Fn(String) -> Value,
     shallow: Option<&'a KeyGlobPattern>,
-    nodes: Vec<Node<V>>,
+    nodes: Vec<Node>,
     doc: Id,
     context: Option<Id>,
     merges: HashMap<(Id, Id, Vec<Seg>), Id>,
@@ -126,7 +133,7 @@ struct Resolver<'a, V: ConfigFormat> {
     targets: HashMap<Id, Option<Id>>,
     /// Nodes whose structure or target is being decided, innermost last.
     shaping: Vec<Id>,
-    values: HashMap<Id, V>,
+    values: HashMap<Id, Value>,
     /// Evaluated nodes whose evaluation recorded a problem.
     failed: HashSet<Id>,
     /// Nodes being evaluated, innermost last; also the cycle chain.
@@ -134,8 +141,8 @@ struct Resolver<'a, V: ConfigFormat> {
     problems: Vec<Problem>,
 }
 
-impl<V: ConfigFormat> Resolver<'_, V> {
-    fn eval(&mut self, id: Id) -> Result<V, Cycle> {
+impl Resolver<'_> {
+    fn eval(&mut self, id: Id) -> Result<Value, Cycle> {
         if let Some(done) = self.values.get(&id) {
             return Ok(done.clone());
         }
@@ -164,15 +171,15 @@ impl<V: ConfigFormat> Resolver<'_, V> {
                 for item in items {
                     out.push(self.eval(item)?);
                 }
-                V::array(out)
+                Value::Array(out)
             }
             Expr::Object(_) | Expr::Merge { .. } => match self.shape(id)? {
                 Shape::Object(fields) => {
-                    let mut out = V::Object::new();
+                    let mut out = indexmap::IndexMap::new();
                     for (key, field) in fields.iter() {
                         out.insert(key.clone(), self.eval(*field)?);
                     }
-                    V::object(out)
+                    Value::Object(out)
                 }
                 // Only a merge resolves to a non-object: its right operand.
                 _ => {
@@ -197,17 +204,17 @@ impl<V: ConfigFormat> Resolver<'_, V> {
         Ok(value)
     }
 
-    fn resolve_string(&mut self, id: Id, text: &str) -> Result<V, Cycle> {
+    fn resolve_string(&mut self, id: Id, text: &str) -> Result<Value, Cycle> {
         let pieces = scan(text);
 
         // No `$` anywhere.
         if pieces.is_empty() {
-            return Ok(V::string(text.to_string()));
+            return Ok(Value::String(text.to_string()));
         }
         if let [Piece::Ref(body)] = pieces.as_slice() {
             return Ok(match self.resolve_ref(id)? {
                 Some(target) => self.eval(target)?,
-                None => V::string(Spelled(body).to_string()),
+                None => Value::String(Spelled(body).to_string()),
             });
         }
 
@@ -229,7 +236,7 @@ impl<V: ConfigFormat> Resolver<'_, V> {
                 }
             }
         }
-        Ok(V::string(out))
+        Ok(Value::String(out))
     }
 
     /// Embedded position: the referent is rendered as text. `None` if a
@@ -361,6 +368,3 @@ fn child(path: &[Seg], seg: Seg) -> Vec<Seg> {
     out.push(seg);
     out
 }
-
-#[cfg(test)]
-mod tests;

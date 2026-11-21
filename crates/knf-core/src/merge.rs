@@ -1,7 +1,7 @@
-//! Generic layered merge over native configuration values.
+//! Layered configuration merge.
 
 use crate::glob::KeyGlobPattern;
-use crate::{ConfigObject, ConfigValue, Seg};
+use crate::{InterpError, InterpolationOptions, Seg, Value, merge_with_interpolation};
 
 /// Matches `path` or any ancestor against `glob`; paths containing an index never match.
 pub(crate) fn shallow_at(glob: Option<&KeyGlobPattern>, path: &[Seg]) -> bool {
@@ -19,20 +19,6 @@ pub(crate) fn shallow_at(glob: Option<&KeyGlobPattern>, path: &[Seg]) -> bool {
         return false;
     };
     (1..=keys.len()).any(|end| glob.matches_keys(&keys[..end]))
-}
-
-pub(crate) fn merge_fields<V, O: ConfigObject<V>>(
-    base: &mut O,
-    over: O,
-    mut merge: impl FnMut(&mut V, V, String),
-) {
-    for (key, value) in over {
-        if let Some(slot) = base.get_mut(&key) {
-            merge(slot, value, key);
-        } else {
-            base.insert(key, value);
-        }
-    }
 }
 
 /// Merge options.
@@ -56,7 +42,7 @@ impl MergeOptions {
 ///
 /// Objects recurse per key; everything else, including arrays and null,
 /// replaces. Paths matched by [`MergeOptions::shallow`] replace wholesale.
-pub fn merge_into<V: ConfigValue>(base: &mut V, over: V, opts: &MergeOptions) {
+pub fn merge_into(base: &mut Value, over: Value, opts: &MergeOptions) {
     let mut path = Vec::new();
     merge_at(base, over, opts, &mut path);
 }
@@ -70,8 +56,8 @@ pub fn merge_into<V: ConfigValue>(base: &mut V, over: V, opts: &MergeOptions) {
 ///   left-assoc  -> {a:{c:2}}
 ///   right-assoc -> {a:{b:1,c:2}}
 /// ```
-pub fn merge<V: ConfigValue>(layers: impl IntoIterator<Item = V>, opts: &MergeOptions) -> V {
-    let mut acc = V::object(V::Object::new());
+pub fn merge(layers: impl IntoIterator<Item = Value>, opts: &MergeOptions) -> Value {
+    let mut acc = Value::Object(Default::default());
     let mut path = Vec::new();
     for layer in layers {
         merge_at(&mut acc, layer, opts, &mut path);
@@ -80,28 +66,74 @@ pub fn merge<V: ConfigValue>(layers: impl IntoIterator<Item = V>, opts: &MergeOp
     acc
 }
 
-fn merge_at<V: ConfigValue>(base: &mut V, over: V, opts: &MergeOptions, path: &mut Vec<String>) {
-    let over = match base.as_object_mut() {
-        Some(base_map) => match over.into_object() {
-            Ok(over_map) => {
-                merge_fields(base_map, over_map, |slot, v, key| {
+/// Left-folds layers into one document, resolving references when
+/// `interpolation` is given.
+///
+/// `None` is [`merge`] and cannot fail; `Some` is [`merge_with_interpolation`].
+pub fn merge_layers(
+    layers: impl IntoIterator<Item = Value>,
+    merge_options: &MergeOptions,
+    interpolation: Option<InterpolationOptions>,
+) -> Result<Value, InterpError> {
+    match interpolation {
+        Some(options) => merge_with_interpolation(layers, merge_options, &options),
+        None => Ok(merge(layers, merge_options)),
+    }
+}
+
+fn merge_at(base: &mut Value, over: Value, opts: &MergeOptions, path: &mut Vec<String>) {
+    match (base, over) {
+        (Value::Object(base), Value::Object(over)) => {
+            for (key, value) in over {
+                if let Some(slot) = base.get_mut(&key) {
                     path.push(key);
                     if opts
                         .shallow
                         .as_ref()
                         .is_some_and(|glob| glob.matches_keys(path))
                     {
-                        *slot = v;
+                        *slot = value;
                     } else {
-                        merge_at(slot, v, opts, path);
+                        merge_at(slot, value, opts, path);
                     }
                     path.pop();
-                });
-                return;
+                } else {
+                    base.insert(key, value);
+                }
             }
-            Err(over) => over,
-        },
-        None => over,
-    };
-    *base = over;
+        }
+        (slot, value) => *slot = value,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn object(entries: &[(&str, &str)]) -> Value {
+        Value::Object(
+            entries
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), Value::String((*value).to_owned())))
+                .collect(),
+        )
+    }
+
+    fn layers() -> [Value; 2] {
+        [object(&[("a", "1")]), object(&[("b", "${a}")])]
+    }
+
+    #[test]
+    fn merge_layers_resolves_references_only_with_interpolation() {
+        let opts = MergeOptions::default();
+        assert_eq!(
+            merge_layers(layers(), &opts, None).unwrap(),
+            object(&[("a", "1"), ("b", "${a}")])
+        );
+        let interpolation = InterpolationOptions::new(&Value::String);
+        assert_eq!(
+            merge_layers(layers(), &opts, Some(interpolation)).unwrap(),
+            object(&[("a", "1"), ("b", "1")])
+        );
+    }
 }

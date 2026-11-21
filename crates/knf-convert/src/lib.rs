@@ -1,7 +1,20 @@
-//! Convert native JSON and TOML values after configuration resolution.
+//! Load ordered configuration layers and emit resolved [`Value`]s.
+//!
+//! # Example
+//!
+//! With `base.toml` and `prod.toml` in the working directory:
+//! ```no_run
+#![doc = include_str!("../examples/toml_to_json.rs")]
+//! ```
 
-use knf::{Seg, render_path};
-use serde_json::{Number, Value as Json};
+mod input;
+pub use input::{
+    InputFormat, Layers, LoadError, LoadOptions, ParseError, ReadError, load_layers, resolve_format,
+};
+use knf::{Seg, Value, render_path};
+use serde::ser::{self, Serialize, SerializeMap, SerializeSeq, Serializer};
+use serde_json::Value as Json;
+use std::cell::Cell;
 use toml::Value as Toml;
 
 /// A value that cannot be converted under the requested policy.
@@ -9,6 +22,7 @@ use toml::Value as Toml;
 #[error("{path}: {reason}")]
 pub struct ConversionError {
     path: String,
+    category: Unrepresentable,
     reason: &'static str,
 }
 
@@ -18,10 +32,64 @@ impl ConversionError {
         &self.path
     }
 
+    /// What the output format lacks to hold the value.
+    pub fn category(&self) -> Unrepresentable {
+        self.category
+    }
+
     /// Why the value cannot be converted.
     pub fn reason(&self) -> &str {
         self.reason
     }
+}
+
+/// Why an output format cannot hold a value as is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unrepresentable {
+    /// The format has no such type, such as TOML null or a JSON datetime.
+    Type,
+    /// The format has the type but not this value, such as a JSON infinity
+    /// or an unsigned integer beyond TOML's `i64`.
+    Range,
+}
+
+/// A value the output format cannot hold as is.
+#[derive(Clone, Copy)]
+struct Limit {
+    category: Unrepresentable,
+    reason: &'static str,
+}
+
+impl Limit {
+    const fn of_type(reason: &'static str) -> Self {
+        Self {
+            category: Unrepresentable::Type,
+            reason,
+        }
+    }
+
+    const fn of_range(reason: &'static str) -> Self {
+        Self {
+            category: Unrepresentable::Range,
+            reason,
+        }
+    }
+}
+
+/// Why [`OutputFormat::emit`] failed.
+#[derive(Debug, thiserror::Error)]
+pub enum EmitError {
+    /// A value cannot be converted under the requested policy.
+    #[error(transparent)]
+    Conversion(#[from] ConversionError),
+    /// The serializer failed.
+    #[error("emitting {}", format.name())]
+    Serialize {
+        /// The format being written.
+        format: OutputFormat,
+        /// The serializer's own error.
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 }
 
 /// Whether lossy mappings are applied or rejected.
@@ -33,7 +101,12 @@ pub enum Policy {
     Strict,
 }
 
-type Result<T> = std::result::Result<T, ConversionError>;
+impl Policy {
+    /// [`Policy::Strict`] when `strict`, else [`Policy::Lossy`].
+    pub fn strict(strict: bool) -> Self {
+        if strict { Self::Strict } else { Self::Lossy }
+    }
+}
 
 /// A converted value and whether any mapping was lossy.
 #[derive(Debug, Clone, PartialEq)]
@@ -43,206 +116,335 @@ pub struct Converted<T> {
     pub lossy: bool,
 }
 
-/// Converts TOML to JSON. Under [`Policy::Lossy`], dates, times and datetimes
-/// become strings in TOML's standard notation, and non-finite floats become
-/// `"nan"`, `"inf"` or `"-inf"`. [`Policy::Strict`] rejects those mappings.
-pub fn toml_to_json(value: Toml, policy: Policy) -> Result<Converted<Json>> {
-    let mut converter = Converter::new(policy);
-    let value = converter.convert_to_json(value)?;
-    Ok(converter.finish(value))
+/// Whitespace in emitted text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layout {
+    /// Single-line JSON and compact TOML.
+    Compact,
+    /// Indented, human-readable output.
+    Pretty,
 }
 
-/// Prepares TOML for YAML output. Under [`Policy::Lossy`], dates, times and
-/// datetimes become strings in TOML's standard notation. Every other value,
-/// including non-finite floats, is kept, and the result contains no
-/// datetimes. [`Policy::Strict`] rejects the date mapping.
-pub fn toml_to_yaml_ready(value: Toml, policy: Policy) -> Result<Converted<Toml>> {
-    let mut converter = Converter::new(policy);
-    let value = converter.stringify_datetimes(value)?;
-    Ok(converter.finish(value))
+impl Layout {
+    /// [`Layout::Pretty`] when `pretty`, else [`Layout::Compact`].
+    pub fn pretty(pretty: bool) -> Self {
+        if pretty { Self::Pretty } else { Self::Compact }
+    }
 }
 
-/// Serializes a JSON value or a YAML-ready TOML value as YAML.
-#[cfg(feature = "yaml")]
-pub fn emit_yaml(value: &impl serde::Serialize) -> anyhow::Result<String> {
-    use anyhow::Context;
-    serde_saphyr::to_string(value).context("emitting YAML")
+/// Output encoding and conversion rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OutputFormat {
+    Json,
+    Toml,
+    #[cfg(feature = "yaml")]
+    Yaml,
+}
+impl From<InputFormat> for OutputFormat {
+    fn from(format: InputFormat) -> Self {
+        match format {
+            InputFormat::Json => Self::Json,
+            InputFormat::Toml => Self::Toml,
+        }
+    }
 }
 
-/// Converts JSON to TOML. Under [`Policy::Lossy`], null object fields are
-/// omitted and integers above `i64::MAX` become floats. Strict conversion
-/// rejects those mappings. Null array entries and root null always fail.
-pub fn json_to_toml(value: Json, policy: Policy) -> Result<Converted<Toml>> {
-    let mut converter = Converter::new(policy);
-    let value = converter.convert_to_toml(value)?;
-    Ok(converter.finish(value))
-}
-
-struct Converter {
-    policy: Policy,
-    lossy: bool,
-    path: Vec<Seg>,
-}
-
-impl Converter {
-    fn new(policy: Policy) -> Self {
-        Self {
+impl OutputFormat {
+    /// Encode a value with a trailing newline, reporting any lossy mappings.
+    ///
+    /// With [`Policy::Lossy`], JSON and YAML stringify datetimes. JSON also
+    /// stringifies non-finite floats. TOML omits null fields and converts
+    /// oversized unsigned integers to floats. A null array entry or root
+    /// cannot be emitted as TOML under either policy.
+    pub fn emit(
+        self,
+        value: &Value,
+        policy: Policy,
+        layout: Layout,
+    ) -> Result<Converted<String>, EmitError> {
+        fn boxed(
+            error: impl std::error::Error + Send + Sync + 'static,
+        ) -> Box<dyn std::error::Error + Send + Sync> {
+            Box::new(error)
+        }
+        let pretty = layout == Layout::Pretty;
+        let emitter = Emitter {
+            format: self,
             policy,
-            lossy: false,
-            path: Vec::new(),
-        }
-    }
-
-    fn finish<T>(self, value: T) -> Converted<T> {
-        Converted {
-            value,
-            lossy: self.lossy,
-        }
-    }
-
-    fn error(&self, reason: &'static str) -> ConversionError {
-        let path = if self.path.is_empty() {
-            "<root>".into()
-        } else {
-            render_path(&self.path)
+            lossy: Cell::new(false),
+            error: Cell::new(None),
         };
-        ConversionError { path, reason }
-    }
-
-    fn allow_loss(&mut self, reason: &'static str) -> Result<()> {
-        if self.policy == Policy::Strict {
-            return Err(self.error(reason));
+        let root = Node {
+            emitter: &emitter,
+            value,
+            parent: None,
+        };
+        let written = match self {
+            Self::Json => if pretty {
+                serde_json::to_string_pretty(&root)
+            } else {
+                serde_json::to_string(&root)
+            }
+            .map_err(boxed),
+            Self::Toml => if pretty {
+                toml::to_string_pretty(&root)
+            } else {
+                toml::to_string(&root)
+            }
+            .map_err(boxed),
+            #[cfg(feature = "yaml")]
+            Self::Yaml => serde_saphyr::to_string(&root).map_err(boxed),
+        };
+        if let Some(error) = emitter.error.take() {
+            return Err(error.into());
         }
-        self.lossy = true;
-        Ok(())
-    }
-
-    fn at<T>(&mut self, segment: Seg, convert: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
-        self.path.push(segment);
-        let result = convert(self);
-        self.path.pop();
-        result
-    }
-
-    fn stringify_datetimes(&mut self, value: Toml) -> Result<Toml> {
-        Ok(match value {
-            Toml::Datetime(value) => {
-                self.allow_loss("YAML output writes TOML dates, times and datetimes as strings")?;
-                Toml::String(value.to_string())
-            }
-            Toml::Array(values) => Toml::Array(
-                values
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, value)| {
-                        self.at(Seg::Index(index), |this| this.stringify_datetimes(value))
-                    })
-                    .collect::<Result<_>>()?,
-            ),
-            Toml::Table(values) => Toml::Table(
-                values
-                    .into_iter()
-                    .map(|(key, value)| {
-                        let value = self.at(Seg::Key(key.clone()), |this| {
-                            this.stringify_datetimes(value)
-                        })?;
-                        Ok((key, value))
-                    })
-                    .collect::<Result<_>>()?,
-            ),
-            other => other,
+        let mut text = written.map_err(|source| EmitError::Serialize {
+            format: self,
+            source,
+        })?;
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        Ok(Converted {
+            value: text,
+            lossy: emitter.lossy.get(),
         })
     }
 
-    fn convert_to_json(&mut self, value: Toml) -> Result<Json> {
-        Ok(match value {
-            Toml::Boolean(value) => Json::Bool(value),
-            Toml::Integer(value) => Json::Number(value.into()),
-            Toml::Float(value) => match Number::from_f64(value) {
-                Some(number) => Json::Number(number),
-                None => {
-                    self.allow_loss("the JSON data model cannot represent non-finite floats")?;
-                    let text = if value.is_nan() {
-                        "nan"
-                    } else if value.is_sign_negative() {
-                        "-inf"
-                    } else {
-                        "inf"
-                    };
-                    Json::String(text.into())
-                }
+    fn name(self) -> &'static str {
+        match self {
+            Self::Json => "JSON",
+            Self::Toml => "TOML",
+            #[cfg(feature = "yaml")]
+            Self::Yaml => "YAML",
+        }
+    }
+
+    /// How this format writes `value`; containers are always [`Repr::Native`].
+    fn represent(self, value: &Value) -> Repr<'_> {
+        match (self, value) {
+            (Self::Json, Value::Float(f)) if !f.is_finite() => Repr::Lossy {
+                limit: Limit::of_range("the JSON data model cannot represent non-finite floats"),
+                fallback: Fallback::Str(if f.is_nan() {
+                    "nan"
+                } else if f.is_sign_negative() {
+                    "-inf"
+                } else {
+                    "inf"
+                }),
             },
-            Toml::String(value) => Json::String(value),
-            Toml::Datetime(value) => {
-                self.allow_loss(
+            (Self::Json, Value::Datetime(dt)) => Repr::Lossy {
+                limit: Limit::of_type(
                     "the JSON data model cannot represent TOML dates, times or datetimes",
-                )?;
-                Json::String(value.to_string())
+                ),
+                fallback: Fallback::Datetime(dt),
+            },
+            #[cfg(feature = "yaml")]
+            (Self::Yaml, Value::Datetime(dt)) => Repr::Lossy {
+                limit: Limit::of_type(
+                    "YAML output writes TOML dates, times and datetimes as strings",
+                ),
+                fallback: Fallback::Datetime(dt),
+            },
+            (Self::Toml, Value::Null) => {
+                Repr::Rejected(Limit::of_type("TOML cannot represent null"))
             }
-            Toml::Array(values) => Json::Array(
-                values
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, value)| {
-                        self.at(Seg::Index(index), |this| this.convert_to_json(value))
-                    })
-                    .collect::<Result<_>>()?,
-            ),
-            Toml::Table(values) => Json::Object(
-                values
-                    .into_iter()
-                    .map(|(key, value)| {
-                        let value =
-                            self.at(Seg::Key(key.clone()), |this| this.convert_to_json(value))?;
-                        Ok((key, value))
-                    })
-                    .collect::<Result<_>>()?,
-            ),
-        })
+            (Self::Toml, Value::Unsigned(u)) => Repr::Lossy {
+                limit: Limit::of_range("integer exceeds TOML's signed 64-bit range"),
+                fallback: Fallback::Float(u.get() as f64),
+            },
+            _ => Repr::Native,
+        }
     }
 
-    fn convert_to_toml(&mut self, value: Json) -> Result<Toml> {
-        Ok(match value {
-            Json::Null => return Err(self.error("TOML cannot represent null")),
-            Json::Bool(value) => Toml::Boolean(value),
-            Json::Number(value) => match value.as_i64() {
-                Some(integer) => Toml::Integer(integer),
-                None => {
-                    if !value.is_f64() {
-                        self.allow_loss("integer exceeds TOML's signed 64-bit range")?;
-                    }
-                    match value.as_f64() {
-                        Some(float) => Toml::Float(float),
-                        None => return Err(self.error("number cannot be represented in TOML")),
-                    }
-                }
-            },
-            Json::String(value) => Toml::String(value),
-            Json::Array(values) => Toml::Array(
-                values
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, value)| {
-                        self.at(Seg::Index(index), |this| this.convert_to_toml(value))
-                    })
-                    .collect::<Result<_>>()?,
-            ),
-            Json::Object(values) => {
-                let mut table = toml::Table::new();
-                for (key, value) in values {
-                    if value.is_null() {
-                        self.at(Seg::Key(key), |this| {
-                            this.allow_loss("TOML cannot represent null object fields")
-                        })?;
-                    } else {
-                        let value =
-                            self.at(Seg::Key(key.clone()), |this| this.convert_to_toml(value))?;
-                        table.insert(key, value);
-                    }
-                }
-                Toml::Table(table)
+    /// Why this format drops an object field under [`Policy::Lossy`], or
+    /// `None` to keep it.
+    fn omits_field(self, value: &Value) -> Option<Limit> {
+        (self == Self::Toml && matches!(value, Value::Null))
+            .then_some(Limit::of_type("TOML cannot represent null object fields"))
+    }
+}
+
+/// Convert a JSON document; integers that fit `i64` become `Integer`, larger ones `Unsigned`.
+/// Never yields `Datetime`.
+pub(crate) fn from_json(value: Json) -> Value {
+    match value {
+        Json::Null => Value::Null,
+        Json::Bool(b) => Value::Bool(b),
+        Json::String(s) => Value::String(s),
+        Json::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Integer(i)
+            } else if let Some(u) = n.as_u64() {
+                Value::unsigned(u)
+            } else {
+                n.as_f64()
+                    .map_or_else(|| Value::String(n.to_string()), Value::Float)
             }
-        })
+        }
+        Json::Array(a) => Value::Array(a.into_iter().map(from_json).collect()),
+        Json::Object(o) => Value::Object(o.into_iter().map(|(k, v)| (k, from_json(v))).collect()),
+    }
+}
+
+/// Convert a TOML document, keeping datetimes and non-finite floats. Never yields `Null`.
+pub(crate) fn from_toml(value: Toml) -> Value {
+    match value {
+        Toml::Boolean(b) => Value::Bool(b),
+        Toml::Integer(i) => Value::Integer(i),
+        Toml::Float(f) => Value::Float(f),
+        Toml::String(s) => Value::String(s),
+        Toml::Datetime(d) => Value::Datetime(d),
+        Toml::Array(a) => Value::Array(a.into_iter().map(from_toml).collect()),
+        Toml::Table(o) => Value::Object(o.into_iter().map(|(k, v)| (k, from_toml(v))).collect()),
+    }
+}
+
+/// How a format writes one value.
+enum Repr<'a> {
+    /// Written unchanged.
+    Native,
+    /// Written as `fallback` under [`Policy::Lossy`], rejected under [`Policy::Strict`].
+    Lossy {
+        limit: Limit,
+        fallback: Fallback<'a>,
+    },
+    /// Rejected under either policy.
+    Rejected(Limit),
+}
+
+/// The replacement written for a lossy value.
+enum Fallback<'a> {
+    Str(&'static str),
+    Float(f64),
+    Datetime(&'a toml::value::Datetime),
+}
+
+impl Serialize for Fallback<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Str(text) => serializer.serialize_str(text),
+            Self::Float(f) => serializer.serialize_f64(*f),
+            Self::Datetime(dt) => serializer.serialize_str(&dt.to_string()),
+        }
+    }
+}
+
+/// State shared by one [`OutputFormat::emit`] call.
+struct Emitter {
+    format: OutputFormat,
+    policy: Policy,
+    lossy: Cell<bool>,
+    /// The conversion failure; serializer errors only carry its message.
+    error: Cell<Option<ConversionError>>,
+}
+
+/// A value under serialization, linked to its parent so its path is only
+/// built on error.
+struct Node<'n, 'a> {
+    emitter: &'n Emitter,
+    value: &'a Value,
+    parent: Option<(&'n Node<'n, 'a>, Step<'a>)>,
+}
+
+#[derive(Clone, Copy)]
+enum Step<'a> {
+    Key(&'a str),
+    Index(usize),
+}
+
+impl<'n, 'a> Node<'n, 'a> {
+    fn child(&'n self, step: Step<'a>, value: &'a Value) -> Self {
+        Node {
+            emitter: self.emitter,
+            value,
+            parent: Some((self, step)),
+        }
+    }
+
+    fn path(&self) -> String {
+        let mut segments = Vec::new();
+        let mut node = self;
+        while let Some((parent, step)) = node.parent {
+            segments.push(match step {
+                Step::Key(key) => Seg::Key(key.to_owned()),
+                Step::Index(index) => Seg::Index(index),
+            });
+            node = parent;
+        }
+        if segments.is_empty() {
+            return "<root>".into();
+        }
+        segments.reverse();
+        render_path(&segments)
+    }
+
+    /// Record the conversion failure and abort serialization.
+    fn fail<E: ser::Error>(&self, limit: Limit) -> E {
+        let error = ConversionError {
+            path: self.path(),
+            category: limit.category,
+            reason: limit.reason,
+        };
+        let abort = E::custom(&error);
+        self.emitter.error.set(Some(error));
+        abort
+    }
+
+    fn allow_loss<E: ser::Error>(&self, limit: Limit) -> Result<(), E> {
+        match self.emitter.policy {
+            Policy::Strict => Err(self.fail(limit)),
+            Policy::Lossy => {
+                self.emitter.lossy.set(true);
+                Ok(())
+            }
+        }
+    }
+}
+
+impl Serialize for Node<'_, '_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let format = self.emitter.format;
+        match format.represent(self.value) {
+            Repr::Native => {}
+            Repr::Lossy { limit, fallback } => {
+                self.allow_loss(limit)?;
+                return fallback.serialize(serializer);
+            }
+            Repr::Rejected(limit) => return Err(self.fail(limit)),
+        }
+        match self.value {
+            Value::Null => serializer.serialize_unit(),
+            Value::Bool(b) => serializer.serialize_bool(*b),
+            Value::Integer(i) => serializer.serialize_i64(*i),
+            Value::Unsigned(u) => serializer.serialize_u64(u.get()),
+            Value::Float(f) => serializer.serialize_f64(*f),
+            Value::String(s) => serializer.serialize_str(s),
+            Value::Datetime(dt) => dt.serialize(serializer),
+            Value::Array(items) => {
+                let mut seq = serializer.serialize_seq(Some(items.len()))?;
+                for (index, item) in items.iter().enumerate() {
+                    seq.serialize_element(&self.child(Step::Index(index), item))?;
+                }
+                seq.end()
+            }
+            Value::Object(fields) => {
+                let kept = fields
+                    .values()
+                    .filter(|value| format.omits_field(value).is_none())
+                    .count();
+                let mut map = serializer.serialize_map(Some(kept))?;
+                for (key, value) in fields {
+                    let child = self.child(Step::Key(key), value);
+                    match format.omits_field(value) {
+                        Some(limit) => child.allow_loss(limit)?,
+                        None => map.serialize_entry(key, &child)?,
+                    }
+                }
+                map.end()
+            }
+        }
     }
 }
 
@@ -255,7 +457,23 @@ mod tests {
         toml::from_str::<toml::Table>(text).unwrap().into()
     }
 
-    fn err(result: Result<impl std::fmt::Debug>) -> String {
+    fn emit(
+        format: OutputFormat,
+        value: Value,
+        policy: Policy,
+    ) -> Result<Converted<String>, EmitError> {
+        format.emit(&value, policy, Layout::Compact)
+    }
+
+    fn json_out(out: &Converted<String>) -> Json {
+        serde_json::from_str(&out.value).unwrap()
+    }
+
+    fn toml_out(out: &Converted<String>) -> Toml {
+        toml(&out.value)
+    }
+
+    fn err(result: Result<Converted<String>, EmitError>) -> String {
         result.unwrap_err().to_string()
     }
 
@@ -265,10 +483,10 @@ mod tests {
             "[nested]\ndate=1979-05-27\ntime=07:32:00\nlocal=1979-05-27T07:32:00\n\
              offset=1979-05-27T07:32:00-07:00\nfloats=[nan, inf, -inf, -nan]\n",
         );
-        let out = toml_to_json(input, Policy::Lossy).unwrap();
+        let out = emit(OutputFormat::Json, from_toml(input), Policy::Lossy).unwrap();
         assert!(out.lossy);
         assert_eq!(
-            out.value,
+            json_out(&out),
             json!({"nested": {
                 "date": "1979-05-27",
                 "time": "07:32:00",
@@ -280,38 +498,11 @@ mod tests {
     }
 
     #[test]
-    fn yaml_ready_toml_keeps_floats_and_stringifies_datetimes() {
-        let converted = toml_to_yaml_ready(
-            toml("a = nan\nb = [inf, 1979-05-27]\n[t]\nc = 07:32:00"),
-            Policy::Lossy,
-        )
-        .unwrap();
-        assert!(converted.lossy);
-        let table = converted.value.as_table().unwrap();
-        assert!(table["a"].as_float().unwrap().is_nan());
-        assert_eq!(table["b"][0].as_float(), Some(f64::INFINITY));
-        assert_eq!(table["b"][1].as_str(), Some("1979-05-27"));
-        assert_eq!(table["t"]["c"].as_str(), Some("07:32:00"));
-    }
-
-    #[test]
-    fn yaml_ready_toml_without_datetimes_is_lossless_and_strict_names_the_key() {
-        let converted = toml_to_yaml_ready(toml("a = nan"), Policy::Strict).unwrap();
-        assert!(!converted.lossy);
-        assert_eq!(
-            err(toml_to_yaml_ready(
-                toml("[n]\nd = 1979-05-27"),
-                Policy::Strict
-            )),
-            "n.d: YAML output writes TOML dates, times and datetimes as strings"
-        );
-    }
-
-    #[test]
     fn toml_lossless_values_are_not_flagged() {
-        let out = toml_to_json(toml("a = 1\nb = [1.5, 'x', true]\n"), Policy::Strict).unwrap();
+        let input = from_toml(toml("a = 1\nb = [1.5, 'x', true]\n"));
+        let out = emit(OutputFormat::Json, input, Policy::Strict).unwrap();
         assert!(!out.lossy);
-        assert_eq!(out.value, json!({"a": 1, "b": [1.5, "x", true]}));
+        assert_eq!(json_out(&out), json!({"a": 1, "b": [1.5, "x", true]}));
     }
 
     #[test]
@@ -326,7 +517,11 @@ mod tests {
             ("[n]\nv=[-inf]", "n.v[0]"),
             ("a=[{b=[1979-05-27]}]", "a[0].b[0]"),
         ] {
-            let message = err(toml_to_json(toml(text), Policy::Strict));
+            let message = err(emit(
+                OutputFormat::Json,
+                from_toml(toml(text)),
+                Policy::Strict,
+            ));
             assert!(
                 message.starts_with(&format!("{path}: ")),
                 "{text}: {message}"
@@ -337,9 +532,10 @@ mod tests {
     #[test]
     fn json_lossy_values_are_adjusted() {
         let input = json!({"nested": {"drop": null, "large": u64::MAX, "float": 1.5}});
-        let out = json_to_toml(input, Policy::Lossy).unwrap();
+        let out = emit(OutputFormat::Toml, from_json(input), Policy::Lossy).unwrap();
         assert!(out.lossy);
-        let nested = out.value["nested"].as_table().unwrap();
+        let out = toml_out(&out);
+        let nested = out["nested"].as_table().unwrap();
         assert!(!nested.contains_key("drop"));
         assert_eq!(nested["large"].as_float(), Some(u64::MAX as f64));
         assert_eq!(nested["float"].as_float(), Some(1.5));
@@ -347,56 +543,68 @@ mod tests {
 
     #[test]
     fn json_all_null_object_becomes_empty_table() {
-        let out = json_to_toml(json!({"a": {"b": null}}), Policy::Lossy).unwrap();
+        let input = from_json(json!({"a": {"b": null}}));
+        let out = emit(OutputFormat::Toml, input, Policy::Lossy).unwrap();
         assert!(out.lossy);
-        assert_eq!(out.value, toml("[a]\n"));
+        assert_eq!(toml_out(&out), toml("[a]\n"));
     }
 
     #[test]
     fn json_integer_boundaries() {
-        let min = json_to_toml(json!({"v": i64::MIN}), Policy::Strict).unwrap();
-        assert_eq!(min.value["v"].as_integer(), Some(i64::MIN));
-        let max = json_to_toml(json!({"v": i64::MAX}), Policy::Strict).unwrap();
-        assert_eq!(max.value["v"].as_integer(), Some(i64::MAX));
-        let over = json!({"v": i64::MAX as u64 + 1});
-        assert!(json_to_toml(over.clone(), Policy::Lossy).unwrap().lossy);
+        for bound in [i64::MIN, i64::MAX] {
+            let input = from_json(json!({ "v": bound }));
+            let out = emit(OutputFormat::Toml, input, Policy::Strict).unwrap();
+            assert_eq!(toml_out(&out)["v"].as_integer(), Some(bound));
+        }
+        let over = || from_json(json!({"v": i64::MAX as u64 + 1}));
+        assert!(
+            emit(OutputFormat::Toml, over(), Policy::Lossy)
+                .unwrap()
+                .lossy
+        );
         assert_eq!(
-            err(json_to_toml(over, Policy::Strict)),
+            err(emit(OutputFormat::Toml, over(), Policy::Strict)),
             "v: integer exceeds TOML's signed 64-bit range"
         );
     }
 
     #[test]
     fn json_lossless_values_are_not_flagged() {
-        let input = json!({"a": [1, {"b": 2.5}], "c": "x", "d": false});
-        let out = json_to_toml(input, Policy::Strict).unwrap();
+        let input = from_json(json!({"a": [1, {"b": 2.5}], "c": "x", "d": false}));
+        let out = emit(OutputFormat::Toml, input, Policy::Strict).unwrap();
         assert!(!out.lossy);
     }
 
     #[test]
     fn strict_json_rejects_each_lossy_kind_with_its_path() {
-        assert_eq!(
-            err(json_to_toml(json!({"n": {"drop": null}}), Policy::Strict)),
-            "n.drop: TOML cannot represent null object fields"
-        );
-        assert_eq!(
-            err(json_to_toml(
+        for (input, message) in [
+            (
+                json!({"n": {"drop": null}}),
+                "n.drop: TOML cannot represent null object fields",
+            ),
+            (
                 json!({"a": [{"b": u64::MAX}]}),
-                Policy::Strict
-            )),
-            "a[0].b: integer exceeds TOML's signed 64-bit range"
-        );
+                "a[0].b: integer exceeds TOML's signed 64-bit range",
+            ),
+        ] {
+            let result = emit(OutputFormat::Toml, from_json(input), Policy::Strict);
+            assert_eq!(err(result), message);
+        }
     }
 
     #[test]
     fn json_null_in_arrays_and_at_root_fails_in_every_mode() {
         for policy in [Policy::Lossy, Policy::Strict] {
             assert_eq!(
-                err(json_to_toml(json!({"a": [1, null]}), policy)),
+                err(emit(
+                    OutputFormat::Toml,
+                    from_json(json!({"a": [1, null]})),
+                    policy
+                )),
                 "a[1]: TOML cannot represent null"
             );
             assert_eq!(
-                err(json_to_toml(Json::Null, policy)),
+                err(emit(OutputFormat::Toml, Value::Null, policy)),
                 "<root>: TOML cannot represent null"
             );
         }
@@ -404,18 +612,50 @@ mod tests {
 
     #[test]
     fn error_exposes_path_and_reason() {
-        let error = json_to_toml(json!({"a": [null]}), Policy::Lossy).unwrap_err();
+        let input = from_json(json!({"a": [null]}));
+        let error = emit(OutputFormat::Toml, input, Policy::Lossy).unwrap_err();
+        let EmitError::Conversion(error) = error else {
+            panic!("{error}")
+        };
         assert_eq!(error.path(), "a[0]");
+        assert_eq!(error.category(), Unrepresentable::Type);
         assert_eq!(error.reason(), "TOML cannot represent null");
     }
 
     #[test]
-    fn error_paths_are_balanced_after_a_sibling_succeeds() {
-        // A path leaked by a successful sibling would show up in the error.
-        let message = err(json_to_toml(
-            json!({"ok": {"x": [1]}, "bad": [null]}),
-            Policy::Lossy,
-        ));
-        assert_eq!(message, "bad[0]: TOML cannot represent null");
+    fn error_category_separates_missing_types_from_ranges() {
+        for (format, value, category) in [
+            (
+                OutputFormat::Toml,
+                json!({"a": null}),
+                Unrepresentable::Type,
+            ),
+            (
+                OutputFormat::Toml,
+                json!({"a": u64::MAX}),
+                Unrepresentable::Range,
+            ),
+        ] {
+            let error = emit(format, from_json(value), Policy::Strict).unwrap_err();
+            let EmitError::Conversion(error) = error else {
+                panic!("{error}")
+            };
+            assert_eq!(error.category(), category);
+        }
+        let float = Value::Object([("a".into(), Value::Float(f64::NAN))].into_iter().collect());
+        let error = emit(OutputFormat::Json, float, Policy::Strict).unwrap_err();
+        let EmitError::Conversion(error) = error else {
+            panic!("{error}")
+        };
+        assert_eq!(error.category(), Unrepresentable::Range);
+    }
+
+    #[test]
+    fn error_paths_skip_successful_siblings() {
+        let input = from_json(json!({"ok": {"x": [1]}, "bad": [null]}));
+        assert_eq!(
+            err(emit(OutputFormat::Toml, input, Policy::Lossy)),
+            "bad[0]: TOML cannot represent null"
+        );
     }
 }

@@ -11,9 +11,8 @@ The same Rust pipeline the ``knf`` command line runs, called natively::
     >>> config = load(["base.toml", "prod.toml"])
     >>> config["server"]["port"] = 8080
 
-``accumulate`` discovers ordered input paths; ``filter_paths`` selects from an
-existing list without filesystem access. Both return ``pathlib.Path`` objects
-that can be passed directly to ``load``. ``deep_merge`` applies in-memory
+``filter_paths`` selects from a list of paths without filesystem access and
+returns ``pathlib.Path`` objects that can be passed directly to ``load``. ``deep_merge`` applies in-memory
 overrides. ``dumps`` and ``dump`` serialize a dict as JSON, TOML, or YAML. Under
 ``knf --exec``, ``config()`` returns the resolved configuration.
 """
@@ -24,7 +23,6 @@ from typing import Any
 from ._knf import (
     InterpolationError,
     ParseError,
-    accumulate,
     dumps,
     dumps_toml,
     filter_paths,
@@ -103,6 +101,6 @@ def config() -> dict[str, Any]:
 
 
 __all__ = [
-    "InterpolationError", "ParseError", "accumulate", "config", "deep_merge", "dump",
+    "InterpolationError", "ParseError", "config", "deep_merge", "dump",
     "dump_toml", "dumps", "dumps_toml", "filter_paths", "load",
 ]

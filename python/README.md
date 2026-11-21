@@ -8,15 +8,14 @@ pip install pyknf  # the `knf` module and the `knf` executable
 ```
 
 ```python
-from knf import accumulate, deep_merge, dump, dumps, filter_paths, load
+from knf import deep_merge, dump, dumps, filter_paths, load
 
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
 config = load(["foo.toml", "bar.toml"], interpolate=True, context="config.toml")
 pilot = deep_merge(config, {"solver": {"steps": 10}})
 
-files = accumulate("services/api/prod.toml", base_dir=project_root)
-files = filter_paths(files, "{defaults,prod}.toml", filename_only=True)
+files = filter_paths(candidates, "{defaults,prod}.toml", filename_only=True)
 config = load(files)
 
 text = dumps(config, format="toml")
@@ -35,11 +34,10 @@ dump(config, "merged.toml")
   including context dependencies. Only referenced context values resolve.
 - `shallow="PATTERN"` replaces matching key paths wholesale (`"*"`, `"db"`,
   `"db.*"`).
-- `accumulate` collects same-format files along a relative target path, with
-  the target last. `filter_paths` filters a list by glob without I/O.
+- `filter_paths` filters a list of paths by glob without I/O.
 - `dumps` returns JSON, TOML, or YAML text. `dump` infers the format from
   `.json`, `.toml`, `.yaml`, or `.yml` and requires an explicit format for text
-  streams. YAML accepts the same Python value types as JSON and requires
+  streams. YAML accepts the JSON types plus `nan` and `inf`, and requires
   `pretty=True`. See `dumps_toml` docs for TOML limits.
 - Errors: `knf.ParseError` and `knf.InterpolationError` (both `ValueError`s),
   `ValueError` for bad arguments, and `OSError` subclasses for I/O failures.

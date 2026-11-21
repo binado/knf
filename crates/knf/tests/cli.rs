@@ -312,6 +312,6 @@ fn glob_preserves_non_utf8_filenames_and_matches_native_bytes() {
     }
 }
 
-// --- native inline values -------------------------------------------------
+// --- typed inline values -------------------------------------------------
 
 // --- multi-line error messages (snapshotted) ------------------------------

@@ -9,17 +9,12 @@ use std::path::{PathBuf, absolute};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::{Context, bail};
-use knf::{
-    ConfigFormat, InterpOptions, Layers, MergeOptions, ProcessEnv, format, load_layers, merge,
-    merge_interpolate,
-};
+use anyhow::Context;
+use knf::{InterpolationOptions, MergeOptions, merge_layers};
+use knf_convert::{Layers, Layout, LoadOptions, Policy, load_layers};
 
 use cli::{Cli, ExecFormat, OutputFormat};
-use explain::{explain_pipeline, name_the_inline_layer_flag};
-#[cfg(feature = "yaml")]
-use knf_convert::emit_yaml;
-use knf_convert::{Converted, Policy};
+use explain::{explain_load, name_the_inline_layer_flag};
 
 /// Set while an `--exec` child runs, so Ctrl-C is left to the child.
 static CHILD_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -101,95 +96,43 @@ fn run_pipeline(
     files: &[PathBuf],
     opts: &MergeOptions,
 ) -> anyhow::Result<(String, OutputFormat)> {
-    let mut inputs = files.to_vec();
-    inputs.extend(cli.with.iter().cloned());
-    let layers = if inputs.is_empty() {
-        match cli.to {
-            Some(OutputFormat::Json) => Layers::Json(Vec::new()),
-            #[cfg(feature = "yaml")]
-            Some(OutputFormat::Yaml) => Layers::Json(Vec::new()),
-            Some(OutputFormat::Toml) => Layers::Toml(Vec::new()),
-            None => {
-                bail!("no input files to infer a format from\nhelp: pass --to json or --to toml")
-            }
-        }
-    } else {
-        load_layers(&inputs).map_err(|err| explain_pipeline(err, cli.with.as_deref()))?
-    };
-    let pretty = !cli.compact;
-    let policy = if cli.strict {
-        Policy::Strict
-    } else {
-        Policy::Lossy
-    };
-    let (format, text) = match layers {
-        Layers::Json(layers) => {
-            let merged = resolve_native(cli, layers, opts)?;
-            let output = cli.to.unwrap_or(OutputFormat::Json);
-            let text = match output {
-                OutputFormat::Json => format::emit(merged, pretty),
-                OutputFormat::Toml => format::emit(
-                    converted_value(knf_convert::json_to_toml(merged, policy)?),
-                    pretty,
-                ),
-                #[cfg(feature = "yaml")]
-                OutputFormat::Yaml => emit_yaml(&merged),
-            };
-            (output, text)
-        }
-        Layers::Toml(layers) => {
-            let merged = resolve_native(cli, layers, opts)?;
-            let output = cli.to.unwrap_or(OutputFormat::Toml);
-            let text = match output {
-                OutputFormat::Toml => format::emit(merged, pretty),
-                OutputFormat::Json => format::emit(
-                    converted_value(knf_convert::toml_to_json(merged, policy)?),
-                    pretty,
-                ),
-                #[cfg(feature = "yaml")]
-                OutputFormat::Yaml => emit_yaml(&converted_value(knf_convert::toml_to_yaml_ready(
-                    merged, policy,
-                )?)),
-            };
-            (output, text)
-        }
-    };
-    Ok((text.map_err(|err| explain_pipeline(err, None))?, format))
-}
-
-fn converted_value<V>(converted: Converted<V>) -> V {
-    if converted.lossy {
-        eprintln!("warning: conversion was lossy; rerun with --strict to find the affected keys");
-    }
-    converted.value
-}
-
-fn resolve_native<V: ConfigFormat>(
-    cli: &Cli,
-    mut layers: Vec<V>,
-    opts: &MergeOptions,
-) -> anyhow::Result<V> {
-    let context = cli
-        .with
-        .as_ref()
-        .map(|_| layers.pop().expect("context was loaded last"));
+    let Layers {
+        format,
+        mut values,
+        context,
+    } = load_layers(
+        files,
+        LoadOptions {
+            context: cli.with.as_deref(),
+            fallback: cli.to.map(Into::into),
+        },
+    )
+    .map_err(|err| explain_load(err, cli.with.as_deref()))?;
+    let parse_inline = |text| format.parse_inline(text);
     for leaf in &cli.set {
-        layers.push(
+        values.push(
             leaf.clone()
-                .into_layer()
+                .map_leaf(parse_inline)
+                .try_into()
                 .map_err(name_the_inline_layer_flag)?,
         );
     }
-    // References merge as the values they name, so they fold with the layers.
-    if cli.interpolate {
-        let options = InterpOptions {
-            shallow: cli.shallow.clone(),
-        };
-        merge_interpolate(layers, context.as_ref(), &ProcessEnv, &options)
-            .map_err(|err| explain::explain_interp(err, context.is_some()))
-    } else {
-        Ok(merge(layers, opts))
+    let interpolation = cli
+        .interpolate
+        .then(|| InterpolationOptions::new(&parse_inline).with_context(context.as_ref()));
+    let merged = merge_layers(values, opts, interpolation)
+        .map_err(|err| explain::explain_interp(err, context.is_some()))?;
+    let output = cli.to.unwrap_or_else(|| format.into());
+    let target = knf_convert::OutputFormat::from(output);
+    let converted = target.emit(
+        &merged,
+        Policy::strict(cli.strict),
+        Layout::pretty(!cli.compact),
+    )?;
+    if converted.lossy {
+        eprintln!("warning: conversion was lossy; rerun with --strict to find the affected keys");
     }
+    Ok((converted.value, output))
 }
 
 fn run_child(

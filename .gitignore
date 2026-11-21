@@ -8,6 +8,7 @@
 # Python: what `maturin develop` builds in place.
 /python/knf/*.so
 /python/knf/*.pyd
+/crates/knf-py/python/
 __pycache__/
 
 # Local Python development/test environment.

@@ -1,7 +1,6 @@
-//! Python bindings for `knf-core`, published as `pyknf`. The wheel's `knf`
+//! Python bindings for `knf`, published as `pyknf`. The wheel's `knf`
 //! command runs the same `main_from` as `knf-cli`.
 
-use anyhow::Context;
 use std::io;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
@@ -10,12 +9,9 @@ use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 #[path = "../../knf/src/main.rs"]
 mod cli_bin;
 
-use knf::fs::{AccumulateError, AccumulateTarget};
 use knf::glob::{GlobError, GlobPattern, KeyGlobError, KeyGlobPattern};
-use knf::{
-    ConfigFormat, Format, InterpError, InterpOptions, LoadError, MergeOptions, ProcessEnv, Seg,
-    merge, merge_interpolate, render_path, resolve_format,
-};
+use knf::{InterpError, InterpolationOptions, MergeOptions, Seg, Value, merge_layers, render_path};
+use knf_convert::{InputFormat, Layers, LoadError, LoadOptions, ReadError, load_layers};
 use pyo3::PyTypeInfo;
 use pyo3::create_exception;
 use pyo3::exceptions::{
@@ -41,32 +37,6 @@ create_exception!(
     "A configuration reference cannot be resolved."
 );
 
-/// Discover ordered JSON or TOML paths without reading their contents.
-/// An explicit base produces absolute paths; the default produces relative paths.
-#[pyfunction]
-#[pyo3(signature = (target, *, base_dir = None))]
-fn accumulate(
-    py: Python<'_>,
-    target: PathBuf,
-    base_dir: Option<PathBuf>,
-) -> PyResult<Vec<PathBuf>> {
-    let target =
-        AccumulateTarget::try_from(target).map_err(|err| PyValueError::new_err(err.to_string()))?;
-    py.detach(move || knf::fs::accumulate(&target, base_dir.as_deref()))
-        .map_err(|err| match err {
-            AccumulateError::Inspect { path, source } | AccumulateError::List { path, source } => {
-                discovery_os_error(py, Some(&path), source)
-            }
-            AccumulateError::CurrentDirectory(source) => discovery_os_error(py, None, source),
-            AccumulateError::Directory { path } => discovery_os_error(
-                py,
-                Some(&path),
-                io::Error::from(io::ErrorKind::IsADirectory),
-            ),
-            err @ AccumulateError::NonRegular { .. } => PyValueError::new_err(err.to_string()),
-        })
-}
-
 /// Filter candidates without filesystem access, preserving their order and duplicates.
 /// Matching precedes conversion to pathlib.Path, which can normalize `./`.
 #[pyfunction]
@@ -76,44 +46,6 @@ fn filter_paths(files: Vec<PathBuf>, pattern: &str, filename_only: bool) -> PyRe
         .parse()
         .map_err(|err: GlobError| PyValueError::new_err(err.to_string()))?;
     Ok(knf::fs::filter_paths(&files, &pattern, filename_only))
-}
-
-/// Build OSError with native filenames and errno, letting Python select its subclass.
-fn discovery_os_error(py: Python<'_>, path: Option<&Path>, source: io::Error) -> PyErr {
-    let build = || -> PyResult<PyErr> {
-        let errno_name = match source.kind() {
-            io::ErrorKind::NotFound => "ENOENT",
-            io::ErrorKind::PermissionDenied => "EACCES",
-            io::ErrorKind::IsADirectory => "EISDIR",
-            io::ErrorKind::NotADirectory => "ENOTDIR",
-            io::ErrorKind::AlreadyExists => "EEXIST",
-            io::ErrorKind::Interrupted => "EINTR",
-            io::ErrorKind::InvalidInput => "EINVAL",
-            _ => "EIO",
-        };
-        let fallback: i32 = py.import("errno")?.getattr(errno_name)?.extract()?;
-        #[cfg(unix)]
-        let errno = source.raw_os_error().unwrap_or(fallback);
-        #[cfg(not(unix))]
-        let errno = fallback;
-        let strerror = py.import("os")?.call_method1("strerror", (errno,))?;
-        let filename = match path {
-            Some(path) => path.as_os_str().into_pyobject(py)?.into_any().unbind(),
-            None => py.None(),
-        };
-        #[cfg(windows)]
-        let args = (
-            errno,
-            strerror.unbind(),
-            filename,
-            py.None(),
-            source.raw_os_error(),
-        );
-        #[cfg(not(windows))]
-        let args = (errno, strerror.unbind(), filename);
-        Ok(PyOSError::new_err(args))
-    };
-    build().unwrap_or_else(|_| PyOSError::new_err(source.to_string()))
 }
 
 /// Load and merge homogeneous JSON or TOML files into one `dict`.
@@ -140,109 +72,74 @@ fn load<'py>(
         .transpose()
         .map_err(|err: KeyGlobError| PyValueError::new_err(err.to_string()))?;
     let opts = MergeOptions { shallow };
-    let interp_options = InterpOptions {
-        shallow: opts.shallow.clone(),
-    };
     let merged = py
         .detach(move || {
-            let mut inputs = files.clone();
-            inputs.extend(context.iter().cloned());
-            let format = resolve_format(&inputs).map_err(|err| {
-                Failure::File(
-                    err.path().unwrap_or(Path::new("")).to_path_buf(),
-                    err.into(),
-                )
-            })?;
-            match format {
-                Format::Json => load_native(
-                    &files,
-                    context.as_deref(),
-                    interpolate,
-                    &opts,
-                    &interp_options,
-                )
-                .map(Document::Json),
-                Format::Toml => load_native(
-                    &files,
-                    context.as_deref(),
-                    interpolate,
-                    &opts,
-                    &interp_options,
-                )
-                .map(Document::Toml),
-            }
+            let Layers {
+                format,
+                values,
+                context,
+            } = load_layers(
+                &files,
+                LoadOptions {
+                    context: context.as_deref(),
+                    fallback: Some(InputFormat::Json),
+                },
+            )
+            .map_err(Failure::Load)?;
+            let parse_inline = |text| format.parse_inline(text);
+            let interpolation = interpolate
+                .then(|| InterpolationOptions::new(&parse_inline).with_context(context.as_ref()));
+            merge_layers(values, &opts, interpolation).map_err(Failure::Interpolate)
         })
         .map_err(|failure| match failure {
-            Failure::File(path, err) => file_error(py, &path, err),
+            Failure::Load(err) => load_error(py, err),
             Failure::Interpolate(err) => InterpolationError::new_err(err.to_string()),
         })?;
-    match merged {
-        Document::Json(value) => json_to_py(py, value),
-        Document::Toml(value) => toml_to_py(py, value, &mut Vec::new()),
-    }
-}
-
-enum Document {
-    Json(serde_json::Value),
-    Toml(toml::Value),
-}
-
-fn load_native<V: ConfigFormat>(
-    files: &[PathBuf],
-    context_path: Option<&Path>,
-    interpolate: bool,
-    opts: &MergeOptions,
-    interp_options: &InterpOptions,
-) -> Result<V, Failure> {
-    let mut layers = Vec::with_capacity(files.len() + usize::from(context_path.is_some()));
-    for path in files.iter().map(PathBuf::as_path).chain(context_path) {
-        let read = || -> anyhow::Result<V> {
-            let text = std::fs::read_to_string(path)
-                .with_context(|| format!("reading `{}`", path.display()))?;
-            knf::format::parse(&text, path)
-        };
-        layers.push(read().map_err(|err| Failure::File(path.to_path_buf(), err))?);
-    }
-    let context = context_path.map(|_| layers.pop().expect("context was loaded last"));
-    if interpolate {
-        merge_interpolate(layers, context.as_ref(), &ProcessEnv, interp_options)
-            .map_err(Failure::Interpolate)
-    } else {
-        Ok(merge(layers, opts))
-    }
+    value_to_py(py, merged, &mut Vec::new())
 }
 
 enum Failure {
-    File(PathBuf, anyhow::Error),
+    Load(LoadError),
     Interpolate(InterpError),
 }
 
 /// Maps a load failure to the exception Python itself would raise: an
 /// `OSError` subclass, `ValueError`, or [`ParseError`].
-fn file_error(py: Python<'_>, path: &Path, err: anyhow::Error) -> PyErr {
-    if let Some(load) = err.downcast_ref::<LoadError>() {
-        return match load {
-            LoadError::Directory { .. } => {
-                os_error::<PyIsADirectoryError>(py, "EISDIR", path, &err)
-            }
-            _ => PyValueError::new_err(load.to_string()),
-        };
-    }
-    if let Some(io) = err.chain().find_map(|c| c.downcast_ref::<io::Error>()) {
-        match io.kind() {
-            io::ErrorKind::NotFound => {
-                return os_error::<PyFileNotFoundError>(py, "ENOENT", path, &err);
-            }
+fn load_error(py: Python<'_>, err: LoadError) -> PyErr {
+    match &err {
+        LoadError::Directory { path } => os_error::<PyIsADirectoryError>(py, "EISDIR", path, &err),
+        LoadError::NoInputs | LoadError::MixedFormats | LoadError::UnknownExtension { .. } => {
+            PyValueError::new_err(err.to_string())
+        }
+        LoadError::File {
+            path,
+            source: ReadError::Io(source),
+        } => match source.kind() {
+            io::ErrorKind::NotFound => os_error::<PyFileNotFoundError>(py, "ENOENT", path, &err),
             io::ErrorKind::PermissionDenied => {
-                return os_error::<PyPermissionError>(py, "EACCES", path, &err);
+                os_error::<PyPermissionError>(py, "EACCES", path, &err)
             }
             // `read_to_string` on bytes that are not UTF-8: the content's fault.
-            io::ErrorKind::InvalidData => {}
-            _ => return PyOSError::new_err(format!("{err:#}")),
-        }
+            io::ErrorKind::InvalidData => ParseError::new_err(one_line(&err)),
+            _ => PyOSError::new_err(one_line(&err)),
+        },
+        LoadError::File {
+            source: ReadError::Parse(_),
+            ..
+        } => ParseError::new_err(one_line(&err)),
     }
-    // `{:#}` is the whole chain on one line: "a.json: invalid JSON: …".
-    ParseError::new_err(format!("{err:#}"))
+}
+
+/// The error and its sources on one line: "loading `a.json`: invalid JSON: …".
+fn one_line(err: &dyn std::error::Error) -> String {
+    let mut line = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        line.push_str(": ");
+        line.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    line
 }
 
 /// Builds `E(errno, strerror, filename)` as `open()` does.
@@ -252,7 +149,7 @@ fn os_error<E: PyTypeInfo>(
     py: Python<'_>,
     errno_name: &str,
     path: &Path,
-    err: &anyhow::Error,
+    err: &dyn std::error::Error,
 ) -> PyErr {
     let build = || -> PyResult<PyErr> {
         let errno = py.import("errno")?.getattr(errno_name)?;
@@ -264,7 +161,7 @@ fn os_error<E: PyTypeInfo>(
             filename,
         )))
     };
-    build().unwrap_or_else(|_| PyOSError::new_err(format!("{err:#}")))
+    build().unwrap_or_else(|_| PyOSError::new_err(one_line(err)))
 }
 
 /// Runs the `knf` command line with `sys.argv` and exits.
@@ -295,7 +192,6 @@ fn _knf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load, m)?)?;
     m.add_function(wrap_pyfunction!(writer::dumps, m)?)?;
     m.add_function(wrap_pyfunction!(writer::dumps_toml, m)?)?;
-    m.add_function(wrap_pyfunction!(accumulate, m)?)?;
     m.add_function(wrap_pyfunction!(filter_paths, m)?)?;
     m.add_function(wrap_pyfunction!(cli, m)?)?;
     m.add("ParseError", m.py().get_type::<ParseError>())?;
@@ -306,51 +202,15 @@ fn _knf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-// --- Native values → Python -----------------------------------------------
-
-fn json_to_py(py: Python<'_>, value: serde_json::Value) -> PyResult<Bound<'_, PyAny>> {
-    use serde_json::Value;
-    Ok(match value {
-        Value::Null => py.None().into_bound(py),
-        Value::Bool(b) => PyBool::new(py, b).to_owned().into_any(),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                i.into_pyobject(py)?.into_any()
-            } else if let Some(u) = n.as_u64() {
-                u.into_pyobject(py)?.into_any()
-            } else {
-                n.as_f64()
-                    .expect("a native JSON number is i64/u64/f64")
-                    .into_pyobject(py)?
-                    .into_any()
-            }
-        }
-        Value::String(s) => PyString::new(py, &s).into_any(),
-        Value::Array(items) => {
-            let list = PyList::empty(py);
-            for item in items {
-                list.append(json_to_py(py, item)?)?;
-            }
-            list.into_any()
-        }
-        Value::Object(map) => {
-            let dict = PyDict::new(py);
-            for (key, value) in map {
-                dict.set_item(key, json_to_py(py, value)?)?;
-            }
-            dict.into_any()
-        }
-    })
-}
-
-fn toml_to_py<'py>(
+fn value_to_py<'py>(
     py: Python<'py>,
-    value: toml::Value,
+    value: Value,
     path: &mut Vec<Seg>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    use toml::Value;
     Ok(match value {
-        Value::Boolean(b) => PyBool::new(py, b).to_owned().into_any(),
+        Value::Null => py.None().into_bound(py),
+        Value::Unsigned(u) => u.get().into_pyobject(py)?.into_any(),
+        Value::Bool(b) => PyBool::new(py, b).to_owned().into_any(),
         Value::Integer(i) => i.into_pyobject(py)?.into_any(),
         Value::Float(f) => f.into_pyobject(py)?.into_any(),
         Value::String(s) => PyString::new(py, &s).into_any(),
@@ -369,16 +229,16 @@ fn toml_to_py<'py>(
             let list = PyList::empty(py);
             for (index, item) in items.into_iter().enumerate() {
                 path.push(Seg::Index(index));
-                list.append(toml_to_py(py, item, path)?)?;
+                list.append(value_to_py(py, item, path)?)?;
                 path.pop();
             }
             list.into_any()
         }
-        Value::Table(map) => {
+        Value::Object(map) => {
             let dict = PyDict::new(py);
             for (key, value) in map {
                 path.push(Seg::Key(key.clone()));
-                dict.set_item(key, toml_to_py(py, value, path)?)?;
+                dict.set_item(key, value_to_py(py, value, path)?)?;
                 path.pop();
             }
             dict.into_any()

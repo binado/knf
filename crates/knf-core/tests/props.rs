@@ -1,19 +1,17 @@
 //! Merge properties.
 
-use knf::{ConfigFormat, ConfigValue, MergeOptions, merge, merge_into};
+use knf::{MergeOptions, Value, merge, merge_into};
 use proptest::prelude::*;
 
-/// Arbitrary native values without floats, so equality is total.
-macro_rules! properties { ($value:ty, $map:ty) => {
-type Value = $value;
-type Map = $map;
+/// Arbitrary `Value`s without floats, so equality is total.
 fn arb_value() -> impl Strategy<Value = Value> {
     let leaf = prop_oneof![
-        Just(Value::parse_inline("null".into())),
-        any::<bool>().prop_map(|b| Value::parse_inline(b.to_string())),
-        any::<i64>().prop_map(|n| Value::parse_inline(n.to_string())),
+        Just(Value::Null),
+        any::<bool>().prop_map(Value::Bool),
+        any::<i64>().prop_map(Value::Integer),
+        any::<u64>().prop_map(Value::unsigned),
         "[a-z]{0,3}".prop_map(Value::String),
-        Just(Value::parse_inline("1979-05-27T07:32:00Z".into())),
+        Just(Value::Datetime("1979-05-27T07:32:00Z".parse().unwrap())),
     ];
     // Small key alphabet so layers collide often.
     leaf.prop_recursive(4, 24, 3, |inner| {
@@ -26,7 +24,7 @@ fn arb_value() -> impl Strategy<Value = Value> {
 
 fn arb_object(inner: impl Strategy<Value = Value>) -> impl Strategy<Value = Value> {
     prop::collection::vec(("[a-c]{1,2}", inner), 0..3)
-        .prop_map(|entries| Value::object(entries.into_iter().collect::<Map>()))
+        .prop_map(|entries| Value::Object(entries.into_iter().collect()))
 }
 
 fn arb_doc() -> impl Strategy<Value = Value> {
@@ -54,11 +52,12 @@ fn shallow_at(mut base: Value, over: Value, path: &[&str]) -> Value {
 /// The document without one top-level key.
 fn without(doc: &Value, key: &str) -> Value {
     let map = doc.as_object().expect("object");
-    let map: Map = map.iter()
+    let map = map
+        .iter()
         .filter(|(k, _)| k.as_str() != key)
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    Value::object(map)
+    Value::Object(map)
 }
 
 proptest! {
@@ -82,12 +81,12 @@ proptest! {
     /// Root-shallow merge is jq's `a + b`.
     #[test]
     fn shallow_assigns_top_level_keys(a in arb_doc(), b in arb_doc()) {
-        let mut want = a.clone().into_object().unwrap();
-        let over = b.clone().into_object().unwrap();
+        let mut want = a.as_object().unwrap().clone();
+        let over = b.as_object().unwrap().clone();
         for (k, v) in over {
             want.insert(k, v);
         }
-        prop_assert_eq!(shallow(a, b), Value::object(want));
+        prop_assert_eq!(shallow(a, b), Value::Object(want));
     }
 
     #[test]
@@ -113,15 +112,4 @@ proptest! {
         let right = shallow(a, shallow(b, c));
         prop_assert_eq!(left, right);
     }
-}
-
-}; }
-
-mod json {
-    use super::*;
-    properties!(serde_json::Value, serde_json::Map<String, serde_json::Value>);
-}
-mod toml {
-    use super::*;
-    properties!(::toml::Value, ::toml::Table);
 }

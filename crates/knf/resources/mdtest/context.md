@@ -262,7 +262,8 @@ $ knf a.json -i --with bad.json
 `stderr`:
 
 ```text
-error: bad.json: invalid JSON
+error: loading `bad.json`
+  caused by: invalid JSON
   caused by: EOF while parsing an object at line 2 column 0
 ```
 
@@ -276,7 +277,8 @@ $ knf a.json -i --with array.json
 `stderr`:
 
 ```text
-error: array.json: expected an object at the top level, found array
+error: loading `array.json`
+  caused by: expected an object at the top level, found array
 ```
 
 ### Missing file
@@ -289,7 +291,7 @@ $ knf a.json -i --with missing.json
 `stderr`:
 
 ```text
-error: reading `missing.json`
+error: loading `missing.json`
   caused by: No such file or directory (os error 2)
 ```
 

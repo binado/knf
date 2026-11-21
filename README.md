@@ -18,8 +18,11 @@ Windows (x86-64 and ARM64); CPython 3.11+. The wheels include `--to yaml`.
 ```bash
 cargo install knf-cli                  # the executable
 cargo install knf-cli --features yaml  # with `--to yaml` (Rust 1.89+)
-cargo add knf-core     # the library, imported as `knf`
+cargo add knf-core knf-convert         # Rust libraries
 ```
+
+Rust: `knf_convert::load_layers`, then `knf::merge_layers`, then
+`OutputFormat::emit`; see the [example](crates/knf-convert/examples/toml_to_json.rs).
 
 ## Usage
 
@@ -178,14 +181,13 @@ knf base.toml pilot.toml -c seed=42 --exec -- python fit.py --replicate 2
 ## Python API
 
 ```python
-from knf import accumulate, deep_merge, dump, dumps, filter_paths, load
+from knf import deep_merge, dump, dumps, filter_paths, load
 
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
 config = load(["foo.toml", "bar.toml"], interpolate=True, context="config.toml")
 
-files = accumulate("services/api/prod.toml", base_dir=project_root)
-files = filter_paths(files, "{defaults,prod}.toml", filename_only=True)
+files = filter_paths(candidates, "{defaults,prod}.toml", filename_only=True)
 config = load(files)
 
 text = dumps(config, format="toml")
@@ -209,7 +211,7 @@ seed = knf.config()["seed"]
 `dumps` returns JSON, TOML, or YAML text. `dump` writes to a UTF-8 path or text
 stream. It infers the format from `.json`, `.toml`, `.yaml`, or `.yml` and
 requires `format` for a stream. JSON and TOML support `pretty=False` for compact
-output. YAML uses the same Python value types as JSON and requires `pretty=True`.
+output. YAML also accepts `nan` and `inf` and requires `pretty=True`.
 See the `dumps_toml` and `dump_toml` docs for TOML types and limits.
 
 `deep_merge(cfg, overrides)` returns a new dict: dicts merge recursively;

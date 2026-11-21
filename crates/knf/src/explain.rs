@@ -3,31 +3,17 @@
 use std::path::Path;
 
 use anyhow::anyhow;
-use knf::{InterpError, LoadError, PathError, Problem};
-
-/// Adds CLI help to unwrapped `LoadError` or `InterpError` pipeline errors.
-///
-/// `context` is the `--with` path for load failures (`None` for later stages).
-/// Uses `anyhow::Error::downcast`, so wrapped errors pass through unchanged.
-pub fn explain_pipeline(err: impl Into<anyhow::Error>, context: Option<&Path>) -> anyhow::Error {
-    let err = err.into();
-    let err = match err.downcast::<LoadError>() {
-        Ok(err) => return explain_load(err, context),
-        Err(err) => err,
-    };
-    match err.downcast::<InterpError>() {
-        Ok(err) => explain_interp(err, false),
-        Err(err) => err,
-    }
-}
+use knf::{InterpError, PathError, Problem};
+use knf_convert::LoadError;
 
 /// Adds help to a load error.
 ///
 /// `context` is the `--with` path when one was supplied. Mixed formats then
 /// share one format with that file, and a directory at that path is not a
 /// merge layer.
-fn explain_load(err: LoadError, context: Option<&Path>) -> anyhow::Error {
+pub fn explain_load(err: LoadError, context: Option<&Path>) -> anyhow::Error {
     match &err {
+        LoadError::NoInputs => anyhow!("{err}\nhelp: pass --to json or --to toml"),
         LoadError::UnknownExtension { .. } => {
             anyhow!("{err}\nhelp: name the file with a .json or .toml extension")
         }
@@ -44,6 +30,7 @@ fn explain_load(err: LoadError, context: Option<&Path>) -> anyhow::Error {
             "{err}\nhelp: `knf {}/*.toml` merges its files as layers",
             path.display()
         ),
+        LoadError::File { .. } => err.into(),
     }
 }
 
