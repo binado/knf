@@ -22,7 +22,7 @@ use crate::{MergeOptions, PathError, RefPath, Seg, Value};
 pub use error::{Cycle, InterpError, Problem};
 pub use scan::Syntax;
 
-use graph::{Expr, Id, Node, Shape};
+use graph::{Expr, Id, Node, Object, Shape};
 use scan::{Piece, Spelled, scan};
 
 /// The environment namespace, matched as a literal prefix so `${a:b}` is the
@@ -79,7 +79,7 @@ pub fn merge_with_interpolation(
         visiting: Vec::new(),
         problems: Vec::new(),
     };
-    let mut doc = resolver.add(Expr::Object(Vec::new()), Vec::new());
+    let mut doc = resolver.add(Expr::Object(Object::new()), Vec::new());
     for layer in layers {
         let layer = resolver.build(layer, Vec::new());
         doc = resolver.combine(doc, layer, Vec::new());

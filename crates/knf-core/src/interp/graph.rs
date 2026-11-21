@@ -3,6 +3,8 @@
 
 use std::rc::Rc;
 
+use indexmap::IndexMap;
+
 use crate::merge::shallow_at;
 use crate::{Seg, Value};
 
@@ -11,15 +13,18 @@ use super::{Cycle, ENV, Resolver, child};
 
 pub(super) type Id = usize;
 
-/// An object's fields in order, shared between caches.
-pub(super) type Fields = Rc<[(String, Id)]>;
+/// An object's fields in order.
+pub(super) type Object = IndexMap<String, Id>;
+
+/// An object's fields, shared between caches.
+pub(super) type Fields = Rc<Object>;
 
 pub(super) enum Expr {
     /// A non-container layer value; strings are scanned on demand.
     Value(Value),
     /// An environment value: never scanned, and its children stay terminal.
     Terminal(Value),
-    Object(Vec<(String, Id)>),
+    Object(Object),
     Array(Vec<Id>),
     /// `over` merged onto `base` at this node's path.
     Merge {
@@ -190,7 +195,7 @@ impl Resolver<'_> {
                 self.terminal_shape(id, value)
             }
             Expr::Array(items) => Shape::Array(items.as_slice().into()),
-            Expr::Object(fields) => Shape::Object(fields.as_slice().into()),
+            Expr::Object(fields) => Shape::Object(Rc::new(fields.clone())),
             &Expr::Merge { base, over } => {
                 self.enter(id)?;
                 let shape = self.merge_shape(id, base, over)?;
@@ -214,7 +219,7 @@ impl Resolver<'_> {
                     })
                     .collect(),
             ),
-            Value::Object(map) => Shape::Object(
+            Value::Object(map) => Shape::Object(Rc::new(
                 map.into_iter()
                     .map(|(key, item)| {
                         let id =
@@ -222,7 +227,7 @@ impl Resolver<'_> {
                         (key, id)
                     })
                     .collect(),
-            ),
+            )),
             _ => Shape::Scalar,
         }
     }
@@ -237,25 +242,20 @@ impl Resolver<'_> {
             return Ok(over_shape);
         };
         let path = self.nodes[id].path.clone();
-        let fields = self.overlay(&base_fields, over_fields.to_vec(), &path);
-        Ok(Shape::Object(fields.into()))
+        let over_fields = Object::clone(over_fields);
+        let fields = self.overlay(Rc::unwrap_or_clone(base_fields), over_fields, &path);
+        Ok(Shape::Object(Rc::new(fields)))
     }
 
-    fn overlay(
-        &mut self,
-        base: &[(String, Id)],
-        over: Vec<(String, Id)>,
-        dest: &[Seg],
-    ) -> Vec<(String, Id)> {
-        let mut fields: indexmap::IndexMap<_, _> = base.iter().cloned().collect();
+    fn overlay(&mut self, mut base: Object, over: Object, dest: &[Seg]) -> Object {
         for (key, value) in over {
-            if let Some(slot) = fields.get_mut(&key) {
+            if let Some(slot) = base.get_mut(&key) {
                 *slot = self.combine(*slot, value, child(dest, Seg::Key(key)));
             } else {
-                fields.insert(key, value);
+                base.insert(key, value);
             }
         }
-        fields.into_iter().collect()
+        base
     }
 
     /// Output first by complete path, then context.
@@ -285,10 +285,7 @@ impl Resolver<'_> {
             return Ok(self.explicit(id, seg));
         }
         Ok(match (self.shape(id)?, seg) {
-            (Shape::Object(fields), Seg::Key(key)) => fields
-                .iter()
-                .find(|(name, _)| name == key)
-                .map(|&(_, id)| id),
+            (Shape::Object(fields), Seg::Key(key)) => fields.get(key).copied(),
             (Shape::Array(items), Seg::Index(index)) => items.get(*index).copied(),
             _ => None,
         })
@@ -298,10 +295,7 @@ impl Resolver<'_> {
     /// written locally; anything else is absent from the output.
     fn explicit(&self, id: Id, seg: &Seg) -> Option<Id> {
         match (&self.nodes[id].expr, seg) {
-            (Expr::Object(fields), Seg::Key(key)) => fields
-                .iter()
-                .find(|(name, _)| name == key)
-                .map(|(_, id)| *id),
+            (Expr::Object(fields), Seg::Key(key)) => fields.get(key).copied(),
             (&Expr::Merge { base, over }, _) => self.explicit(over, seg).or_else(|| {
                 matches!(self.nodes[over].expr, Expr::Object(_))
                     .then(|| self.explicit(base, seg))
