@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, bail};
 use knf::{InterpolationOptions, MergeOptions, ProcessEnv, merge, merge_with_interpolation};
-use knf_convert::{InputFormat, Layers, Policy, load_layers};
+use knf_convert::{InputFormat, Layers, Layout, Policy, load_layers};
 
 use cli::{Cli, ExecFormat, OutputFormat};
 use explain::{explain_pipeline, name_the_inline_layer_flag};
@@ -98,7 +98,9 @@ fn run_pipeline(
 ) -> anyhow::Result<(String, OutputFormat)> {
     let mut inputs = files.to_vec();
     inputs.extend(cli.with.iter().cloned());
-    let Layers { format, mut values } = if inputs.is_empty() {
+    let Layers {
+        format, mut values, ..
+    } = if inputs.is_empty() {
         let format = match cli.to {
             Some(OutputFormat::Toml) => InputFormat::Toml,
             Some(_) => InputFormat::Json,
@@ -106,10 +108,7 @@ fn run_pipeline(
                 bail!("no input files to infer a format from\nhelp: pass --to json or --to toml")
             }
         };
-        Layers {
-            format,
-            values: Vec::new(),
-        }
+        Layers::new(format, Vec::new())
     } else {
         load_layers(&inputs).map_err(|err| explain_pipeline(err, cli.with.as_deref()))?
     };
@@ -155,7 +154,12 @@ fn run_pipeline(
     } else {
         Policy::Lossy
     };
-    let converted = target.emit(&merged, policy, !cli.compact)?;
+    let layout = if cli.compact {
+        Layout::Compact
+    } else {
+        Layout::Pretty
+    };
+    let converted = target.emit(&merged, policy, layout)?;
     if converted.lossy {
         eprintln!("warning: conversion was lossy; rerun with --strict to find the affected keys");
     }

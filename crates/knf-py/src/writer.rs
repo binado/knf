@@ -1,4 +1,4 @@
-use knf_convert::{InputFormat, OutputFormat, Policy};
+use knf_convert::{InputFormat, Layout, OutputFormat, Policy};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -28,8 +28,13 @@ pub(super) fn dumps(data: &Bound<'_, PyDict>, format: &str, pretty: bool) -> PyR
             return Err(PyValueError::new_err(message));
         }
     };
+    let layout = if pretty {
+        Layout::Pretty
+    } else {
+        Layout::Compact
+    };
     output
-        .emit(&dict_to_value(data, input)?, Policy::Strict, pretty)
+        .emit(&dict_to_value(data, input)?, Policy::Strict, layout)
         .map(|result| result.value)
         .map_err(|err| PyValueError::new_err(format!("{err:#}")))
 }

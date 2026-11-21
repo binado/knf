@@ -175,7 +175,7 @@ $ knf f.json -c 'data=${root}/data' --interpolate --compact
 {"root":"/srv","data":"/srv/data"}
 ```
 
-## A null referent remains native JSON null
+## A null referent remains null
 
 `f.json`:
 

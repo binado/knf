@@ -1,7 +1,7 @@
 [package]
 # Published to PyPI as pyknf (via root pyproject.toml), never to crates.io.
 name = "knf-py"
-description = "Python bindings for knf-core, with the knf command line"
+description = "Python bindings for knf, with the knf command line"
 publish = false
 version.workspace = true
 edition.workspace = true
@@ -31,6 +31,6 @@ clap.workspace = true
 tempfile.workspace = true
 # Compiled in with the included CLI; its handler is never installed here.
 ctrlc.workspace = true
-indexmap = "2"
+indexmap.workspace = true
 toml.workspace = true
 pyo3 = { version = "0.29", features = ["abi3-py311"] }

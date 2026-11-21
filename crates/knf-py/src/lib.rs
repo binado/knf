@@ -1,4 +1,4 @@
-//! Python bindings for `knf-core`, published as `pyknf`. The wheel's `knf`
+//! Python bindings for `knf`, published as `pyknf`. The wheel's `knf`
 //! command runs the same `main_from` as `knf-cli`.
 
 use std::io;

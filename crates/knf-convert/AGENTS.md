@@ -1,3 +1,7 @@
 # AGENTS.md (knf-convert)
 
-Load homogeneous JSON or TOML layers into `knf::Value`. Apply output conversion policy in `OutputFormat::emit`. Preserve native scalar types until output selection. Keep CLI and Python dependencies out of this crate.
+Loads homogeneous JSON or TOML layers into `knf::Value` and emits resolved values. No CLI or Python dependencies.
+
+- Conversion policy lives in `OutputFormat::emit`; this crate never merges.
+- Keep scalar types (datetimes, unsigned, non-finite floats) until output selection; never route values through JSON.
+- Tests: `tests/round_trip.rs` (emit and reparse), `tests/library.rs` (file loading), `tests/input.rs` (inline literals and formats).

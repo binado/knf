@@ -227,3 +227,18 @@ def test_dumps_json_integer_within_64_bits_roundtrips(value):
 def test_dumps_json_integer_outside_64_bits_raises(value):
     with pytest.raises(ValueError, match="64-bit"):
         dumps({"n": value}, format="json")
+
+
+def test_dumps_json_none_and_unsigned_roundtrip():
+    data = {"missing": None, "big": 2**64 - 1}
+    assert json.loads(dumps(data, format="json")) == data
+
+
+def test_dumps_yaml_keeps_none_and_unsigned():
+    text = dumps({"missing": None, "big": 2**64 - 1}, format="yaml")
+    assert text == "missing: null\nbig: 18446744073709551615\n"
+
+
+def test_dumps_toml_unsigned_above_i64_is_rejected_not_rounded():
+    with pytest.raises(ValueError, match="signed 64-bit"):
+        dumps({"big": 2**64 - 1}, format="toml")

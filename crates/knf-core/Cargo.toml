@@ -11,8 +11,8 @@ repository.workspace = true
 name = "knf"
 
 [dependencies]
-indexmap = "2"
-toml_datetime = "1"
+indexmap.workspace = true
+toml_datetime.workspace = true
 fast-glob.workspace = true
 thiserror.workspace = true
 

@@ -89,7 +89,7 @@ fn json_scalar(value: &Bound<'_, PyAny>, path: &[Seg]) -> PyResult<Value> {
         return v
             .extract::<i64>()
             .map(Value::Integer)
-            .or_else(|_| v.extract::<u64>().map(Value::Unsigned))
+            .or_else(|_| v.extract::<u64>().map(Value::unsigned))
             .map_err(|_| {
                 PyValueError::new_err(format!(
                     "integer outside JSON's supported 64-bit range {}",

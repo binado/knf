@@ -10,28 +10,6 @@ pub enum InputFormat {
     Toml,
 }
 
-impl InputFormat {
-    /// Infers a format from a file extension, case-insensitively.
-    pub fn from_path(path: &Path) -> Option<Self> {
-        let ext = path.extension()?.to_str()?;
-        if ext.eq_ignore_ascii_case("json") {
-            Some(Self::Json)
-        } else if ext.eq_ignore_ascii_case("toml") {
-            Some(Self::Toml)
-        } else {
-            None
-        }
-    }
-
-    /// The canonical file extension for this format.
-    pub fn extension(self) -> &'static str {
-        match self {
-            Self::Json => "json",
-            Self::Toml => "toml",
-        }
-    }
-}
-
 impl fmt::Display for InputFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.extension())
@@ -40,6 +18,7 @@ impl fmt::Display for InputFormat {
 
 /// Why input paths could not be turned into layers.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum LoadError {
     /// Inferred input formats differ.
     #[error("inputs mix JSON and TOML formats; layers must use one format")]
@@ -70,9 +49,17 @@ impl LoadError {
 
 /// Parsed documents in input order.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Layers {
     pub format: InputFormat,
     pub values: Vec<Value>,
+}
+
+impl Layers {
+    /// Bundle documents already parsed as `format`.
+    pub fn new(format: InputFormat, values: Vec<Value>) -> Self {
+        Self { format, values }
+    }
 }
 
 /// Resolve a single format from file extensions, without reading any contents.
@@ -105,10 +92,30 @@ pub fn load_layers<P: AsRef<Path>>(paths: &[P]) -> anyhow::Result<Layers> {
         .iter()
         .map(|path| format.load(path.as_ref()))
         .collect::<anyhow::Result<_>>()?;
-    Ok(Layers { format, values })
+    Ok(Layers::new(format, values))
 }
 
 impl InputFormat {
+    /// Infers a format from a file extension, case-insensitively.
+    pub fn from_path(path: &Path) -> Option<Self> {
+        let ext = path.extension()?.to_str()?;
+        if ext.eq_ignore_ascii_case("json") {
+            Some(Self::Json)
+        } else if ext.eq_ignore_ascii_case("toml") {
+            Some(Self::Toml)
+        } else {
+            None
+        }
+    }
+
+    /// The canonical file extension for this format.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Toml => "toml",
+        }
+    }
+
     /// Read one document with filename-aware diagnostics.
     pub fn load(self, path: &Path) -> anyhow::Result<Value> {
         let text = std::fs::read_to_string(path)
@@ -140,6 +147,9 @@ impl InputFormat {
     }
 
     /// Parse one literal, preserving the original string when parsing fails.
+    ///
+    /// JSON parses the text as a JSON value. TOML trims surrounding ASCII
+    /// whitespace and parses a TOML value, so `null` stays a string there.
     pub fn parse_inline(self, text: String) -> Value {
         match self {
             Self::Json => serde_json::from_str(&text)

@@ -252,6 +252,87 @@ $ knf clean.json --to toml --strict
 a = 1
 ```
 
+### Same-format JSON is lossless under strict
+
+`same.json`:
+
+```json
+{"nothing":null,"big":18446744073709551615}
+```
+
+```console
+$ knf same.json --to json --strict --compact
+```
+
+`stdout`:
+
+```text
+{"nothing":null,"big":18446744073709551615}
+```
+
+### Same-format TOML is lossless under strict
+
+`same.toml`:
+
+```toml
+day = 1979-05-27
+limit = inf
+```
+
+```console
+$ knf same.toml --to toml --strict
+```
+
+`stdout`:
+
+```text
+day = 1979-05-27
+limit = inf
+```
+
+### Unsigned integers above i64 become floats in lossy TOML
+
+`big.json`:
+
+```json
+{"big":18446744073709551615}
+```
+
+```console
+$ knf big.json --to toml
+```
+
+`stdout`:
+
+```text
+big = 18446744073709552000.0
+```
+
+`stderr`:
+
+```text
+warning: conversion was lossy; rerun with --strict to find the affected keys
+```
+
+### Strict rejects unsigned integers above i64 in TOML
+
+`big.json`:
+
+```json
+{"big":18446744073709551615}
+```
+
+```console
+$ knf big.json --to toml --strict
+? 1
+```
+
+`stderr`:
+
+```text
+error: big: integer exceeds TOML's signed 64-bit range
+```
+
 ### Null array entries fail conversion without strict
 
 `null_array.json`:
@@ -386,7 +467,7 @@ $ knf f.toml -c a=null -c a=1
 a = 1
 ```
 
-### Inline typing uses native values with a string fallback
+### Inline typing uses input-format values with a string fallback
 
 ```console
 $ knf --to toml -c proxy=null -c day=1979-05-27 -c "db={host='local'}" -c large=18446744073709551615 -c 'bad=[a,b]' -c limit=inf

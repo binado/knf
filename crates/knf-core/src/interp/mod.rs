@@ -38,11 +38,11 @@ pub trait Env {
 
 /// Inputs used to resolve references.
 pub struct InterpolationOptions<'a> {
-    /// Fallback document for paths absent from the output.
+    /// Fallback document for paths absent from the output. A present value, including null, wins.
     pub context: Option<&'a Value>,
     /// Source for environment references. Embedded references keep their raw text.
     pub env: &'a dyn Env,
-    /// Parser for whole environment references. Use `&Value::String` for literal text.
+    /// Parser for whole environment references. Pass `&Value::String` to keep the raw text.
     pub parse_inline: &'a dyn Fn(String) -> Value,
 }
 
@@ -51,9 +51,9 @@ pub struct InterpolationOptions<'a> {
 /// `context`. Only the merged document is returned.
 ///
 /// A whole-string reference merges as the value it names: an object merges
-/// with an object on the other side; anything else replaces. `shallow` paths
-/// replace wholesale. An operand that is replaced is never resolved, but a
-/// reference whose kind decides a merge must resolve.
+/// with an object on the other side; anything else replaces. Paths matched by
+/// `merge_options.shallow` replace wholesale. An operand that is replaced is
+/// never resolved, but a reference whose kind decides a merge must resolve.
 ///
 /// Context values are resolved only when referenced. Environment values are
 /// terminal. Invalid directives and reference problems are reported together;

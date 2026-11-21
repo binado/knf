@@ -1,5 +1,5 @@
 use knf::Value;
-use knf_convert::{OutputFormat, Policy, from_json, from_toml};
+use knf_convert::{Layout, OutputFormat, Policy, from_json, from_toml};
 
 #[test]
 fn json_round_trip_preserves_order_integer_limits_null_and_negative_zero() {
@@ -12,7 +12,7 @@ fn json_round_trip_preserves_order_integer_limits_null_and_negative_zero() {
     assert_eq!(object["positive"], Value::Integer(i64::MAX));
     assert_eq!(object["large"], Value::Unsigned(u64::MAX));
     let emitted = OutputFormat::Json
-        .emit(&value, Policy::Strict, false)
+        .emit(&value, Policy::Strict, Layout::Compact)
         .unwrap();
     assert!(!emitted.lossy);
     let native: serde_json::Value = serde_json::from_str(&emitted.value).unwrap();
@@ -50,7 +50,7 @@ fn toml_round_trip_preserves_order_datetime_precision_and_float_kinds() {
     .unwrap();
     let value = from_toml(source.clone().into());
     let emitted = OutputFormat::Toml
-        .emit(&value, Policy::Strict, false)
+        .emit(&value, Policy::Strict, Layout::Compact)
         .unwrap();
     assert!(!emitted.lossy);
     let native: toml::Table = toml::from_str(&emitted.value).unwrap();
@@ -91,17 +91,18 @@ fn yaml_keeps_null_unsigned_and_nonfinite_values_in_one_document() {
         .into(),
     );
     let out = OutputFormat::Yaml
-        .emit(&value, Policy::Strict, true)
+        .emit(&value, Policy::Strict, Layout::Pretty)
         .unwrap();
     assert!(!out.lossy);
-    assert!(out.value.contains("18446744073709551615"));
-    assert!(out.value.to_lowercase().contains(".nan"));
-    assert!(out.value.to_lowercase().contains(".inf"));
+    assert_eq!(
+        out.value,
+        "nil: null\nmax: 18446744073709551615\nfloats:\n- .nan\n- .inf\n"
+    );
     let date = knf_convert::InputFormat::Toml
         .parse_document("[nested]\nday = 1979-05-27")
         .unwrap();
     let error = OutputFormat::Yaml
-        .emit(&date, Policy::Strict, true)
+        .emit(&date, Policy::Strict, Layout::Pretty)
         .unwrap_err();
     assert_eq!(
         error
@@ -112,7 +113,7 @@ fn yaml_keeps_null_unsigned_and_nonfinite_values_in_one_document() {
     );
     assert!(
         OutputFormat::Yaml
-            .emit(&date, Policy::Lossy, true)
+            .emit(&date, Policy::Lossy, Layout::Pretty)
             .unwrap()
             .lossy
     );

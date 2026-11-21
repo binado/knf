@@ -45,6 +45,7 @@ fn explain_load(err: LoadError, context: Option<&Path>) -> anyhow::Error {
             "{err}\nhelp: `knf {}/*.toml` merges its files as layers",
             path.display()
         ),
+        _ => err.into(),
     }
 }
 

@@ -52,8 +52,18 @@ pub struct Converted<T> {
     pub lossy: bool,
 }
 
+/// Whitespace in emitted text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layout {
+    /// Single-line JSON and compact TOML.
+    Compact,
+    /// Indented, human-readable output.
+    Pretty,
+}
+
 /// Output encoding and conversion rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OutputFormat {
     Json,
     Toml,
@@ -80,32 +90,33 @@ impl OutputFormat {
         self,
         value: &Value,
         policy: Policy,
-        pretty: bool,
+        layout: Layout,
     ) -> anyhow::Result<Converted<String>> {
+        use anyhow::Context;
+        let pretty = layout == Layout::Pretty;
         let mut converter = Converter::new(policy);
         let mut text = match self {
             Self::Json => {
                 let native = converter.convert_to_json(value)?;
                 if pretty {
-                    serde_json::to_string_pretty(&native)?
+                    serde_json::to_string_pretty(&native)
                 } else {
-                    serde_json::to_string(&native)?
+                    serde_json::to_string(&native)
                 }
+                .context("emitting JSON")?
             }
             Self::Toml => {
                 let native = converter.convert_to_toml(value)?;
                 if pretty {
-                    toml::to_string_pretty(&native)?
+                    toml::to_string_pretty(&native)
                 } else {
-                    toml::to_string(&native)?
+                    toml::to_string(&native)
                 }
+                .context("emitting TOML")?
             }
             #[cfg(feature = "yaml")]
-            Self::Yaml => {
-                use anyhow::Context;
-                serde_saphyr::to_string(&converter.convert_to_yaml(value)?)
-                    .context("emitting YAML")?
-            }
+            Self::Yaml => serde_saphyr::to_string(&converter.convert_to_yaml(value)?)
+                .context("emitting YAML")?,
         };
         if !text.ends_with('\n') {
             text.push('\n');
@@ -114,7 +125,7 @@ impl OutputFormat {
     }
 }
 
-/// Preserve the native JSON value and normalize integers that fit in i64.
+/// Convert a JSON document; integers that fit `i64` become `Integer`, larger ones `Unsigned`.
 pub fn from_json(value: Json) -> Value {
     match value {
         Json::Null => Value::Null,
@@ -124,9 +135,10 @@ pub fn from_json(value: Json) -> Value {
             if let Some(i) = n.as_i64() {
                 Value::Integer(i)
             } else if let Some(u) = n.as_u64() {
-                Value::Unsigned(u)
+                Value::unsigned(u)
             } else {
-                Value::Float(n.as_f64().expect("JSON number"))
+                n.as_f64()
+                    .map_or_else(|| Value::String(n.to_string()), Value::Float)
             }
         }
         Json::Array(a) => Value::Array(a.into_iter().map(from_json).collect()),
@@ -134,7 +146,7 @@ pub fn from_json(value: Json) -> Value {
     }
 }
 
-/// Preserve the native TOML value, including datetimes and non-finite floats.
+/// Convert a TOML document, keeping datetimes and non-finite floats.
 pub fn from_toml(value: Toml) -> Value {
     match value {
         Toml::Boolean(b) => Value::Bool(b),

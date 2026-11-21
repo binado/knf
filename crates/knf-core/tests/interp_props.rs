@@ -1,4 +1,4 @@
-//! Reference-aware merging agrees with native merge, and a reference merges
+//! Reference-aware merging agrees with plain merge, and a reference merges
 //! exactly as the value it names.
 
 use knf::{
@@ -15,12 +15,13 @@ impl Env for NoEnv {
     }
 }
 
-/// Arbitrary native values without `$` or floats (so equality is total).
+/// Arbitrary `Value`s without `$` or floats (so equality is total).
 fn arb_value() -> impl Strategy<Value = Value> {
     let leaf = prop_oneof![
         Just(Value::Null),
         any::<bool>().prop_map(Value::Bool),
         any::<i64>().prop_map(Value::Integer),
+        any::<u64>().prop_map(Value::unsigned),
         "[a-z{} :.]{0,6}".prop_map(Value::String),
         Just(Value::Datetime("1979-05-27T07:32:00Z".parse().unwrap())),
     ];
@@ -43,7 +44,7 @@ fn arb_doc() -> impl Strategy<Value = Value> {
 
 proptest! {
     #[test]
-    fn layers_without_references_fold_like_native_merge(
+    fn layers_without_references_fold_like_plain_merge(
         layers in prop::collection::vec(arb_doc(), 0..4),
         shallow in prop::option::of(prop::sample::select(vec!["a", "a.b", "a.*", "*", "{a,b}.c"])),
     ) {

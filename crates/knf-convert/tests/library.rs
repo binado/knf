@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use knf::{InterpolationOptions, MergeOptions, Value};
-use knf_convert::{InputFormat, Layers, OutputFormat, Policy};
+use knf_convert::{InputFormat, Layers, Layout, OutputFormat, Policy};
 use tempfile::TempDir;
 
 macro_rules! json {
@@ -67,7 +67,7 @@ fn shallow_terminal_overlays_and_interpolation_compose() {
         &InterpolationOptions {
             context: None,
             env: &knf::ProcessEnv,
-            parse_inline: &|text| InputFormat::Json.parse_inline(text),
+            parse_inline: &|text| InputFormat::Toml.parse_inline(text),
         },
     )
     .expect("document references resolve");
@@ -208,10 +208,7 @@ fn mixed_formats_are_rejected_before_contents_are_read() {
 fn empty_layers_default_to_json() {
     assert_eq!(
         knf_convert::load_layers::<&str>(&[]).unwrap(),
-        Layers {
-            format: InputFormat::Json,
-            values: vec![]
-        }
+        Layers::new(InputFormat::Json, vec![])
     );
 }
 
@@ -244,7 +241,7 @@ fn native_toml_preserves_special_values_and_precision() {
         merged.as_object().unwrap()["copy"]
     );
     let emitted = OutputFormat::Toml
-        .emit(&merged, Policy::Strict, true)
+        .emit(&merged, Policy::Strict, Layout::Pretty)
         .unwrap()
         .value;
     assert!(emitted.contains(".123456789Z"));

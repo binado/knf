@@ -3,12 +3,13 @@
 use knf::{MergeOptions, Value, merge, merge_into};
 use proptest::prelude::*;
 
-/// Arbitrary native values without floats, so equality is total.
+/// Arbitrary `Value`s without floats, so equality is total.
 fn arb_value() -> impl Strategy<Value = Value> {
     let leaf = prop_oneof![
         Just(Value::Null),
         any::<bool>().prop_map(Value::Bool),
         any::<i64>().prop_map(Value::Integer),
+        any::<u64>().prop_map(Value::unsigned),
         "[a-z]{0,3}".prop_map(Value::String),
         Just(Value::Datetime("1979-05-27T07:32:00Z".parse().unwrap())),
     ];

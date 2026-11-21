@@ -1,5 +1,6 @@
 //! Discover ordered configuration inputs and filter path lists without loading them.
 
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -11,6 +12,7 @@ pub use crate::glob::{GlobError, GlobPattern};
 #[derive(Debug, Clone)]
 pub struct AccumulateTarget {
     path: PathBuf,
+    extension: OsString,
 }
 
 /// Why a target cannot be used for discovery.
@@ -40,18 +42,18 @@ impl TryFrom<PathBuf> for AccumulateTarget {
             .components()
             .filter(|component| !matches!(component, Component::CurDir))
             .collect();
-        if !path
+        let extension = path
             .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| {
-                ["json", "toml"]
-                    .iter()
-                    .any(|name| ext.eq_ignore_ascii_case(name))
+            .filter(|ext| {
+                ext.to_str().is_some_and(|ext| {
+                    ["json", "toml"]
+                        .iter()
+                        .any(|name| ext.eq_ignore_ascii_case(name))
+                })
             })
-        {
-            return Err(AccumulateTargetError::UnknownExtension);
-        }
-        Ok(Self { path })
+            .ok_or(AccumulateTargetError::UnknownExtension)?
+            .to_owned();
+        Ok(Self { path, extension })
     }
 }
 
@@ -145,9 +147,9 @@ pub fn accumulate(
                 let entry = entry.map_err(listing_error)?;
                 let path = entry.path();
                 if path == target_path
-                    || !path.extension().is_some_and(|ext| {
-                        ext.eq_ignore_ascii_case(target.path.extension().unwrap())
-                    })
+                    || !path
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case(&target.extension))
                 {
                     continue;
                 }
