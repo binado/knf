@@ -189,12 +189,9 @@ def test_dumps_circular_reference_raises_with_path(format):
         dumps({"a": cycle}, format=format)
 
 
-@pytest.mark.parametrize(
-    ("format", "message"),
-    [("json", "JSON object keys"), ("toml", "TOML table keys")],
-)
-def test_dumps_non_string_key_raises_type_error(format, message):
-    with pytest.raises(TypeError, match=message):
+@pytest.mark.parametrize("format", ["json", "toml"])
+def test_dumps_non_string_key_raises_type_error(format):
+    with pytest.raises(TypeError, match="keys must be strings at `nested`"):
         dumps({"nested": {1: "x"}}, format=format)
 
 
@@ -214,7 +211,7 @@ def test_dumps_toml_time_with_tzinfo_raises():
 
 @pytest.mark.parametrize("value", [2**63, -(2**63) - 1])
 def test_dumps_toml_integer_outside_i64_raises(value):
-    with pytest.raises(ValueError, match="signed 64-bit"):
+    with pytest.raises(ValueError, match="64-bit range"):
         dumps({"n": value}, format="toml")
 
 
@@ -242,3 +239,23 @@ def test_dumps_yaml_keeps_none_and_unsigned():
 def test_dumps_toml_unsigned_above_i64_is_rejected_not_rounded():
     with pytest.raises(ValueError, match="signed 64-bit"):
         dumps({"big": 2**64 - 1}, format="toml")
+
+
+def test_dumps_yaml_keeps_non_finite_floats():
+    text = dumps({"x": math.nan, "floats": [math.inf, -math.inf]}, format="yaml")
+    assert text == "x: .nan\nfloats:\n- .inf\n- -.inf\n"
+
+
+@pytest.mark.parametrize(
+    ("format", "value", "error", "message"),
+    [
+        ("json", math.nan, ValueError, "non-finite floats"),
+        ("json", date(2026, 11, 13), TypeError, "dates, times or datetimes"),
+        ("yaml", date(2026, 11, 13), TypeError, "dates, times and datetimes"),
+        ("toml", None, TypeError, "TOML cannot represent null"),
+        ("toml", 2**64 - 1, ValueError, "signed 64-bit range"),
+    ],
+)
+def test_dumps_rejects_what_the_format_cannot_represent(format, value, error, message):
+    with pytest.raises(error, match=rf"^a\.b\[0\]: .*{message}"):
+        dumps({"a": {"b": [value]}}, format=format)

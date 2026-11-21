@@ -11,10 +11,11 @@ def dumps(
 ) -> str:
     """Serialize a dict as JSON, TOML, or YAML with a trailing newline.
 
-    JSON and YAML support None, bool, str, finite floats, integers from -2**63
-    through 2**64 - 1, lists, tuples, and dicts with string keys. YAML requires
-    pretty=True. For TOML, see dumps_toml. Unsupported types and invalid values
-    raise TypeError or ValueError with the key path.
+    JSON supports None, bool, str, finite floats, integers from -2**63 through
+    2**64 - 1, lists, tuples, and dicts with string keys. YAML also supports
+    non-finite floats and requires pretty=True. For TOML, see dumps_toml. Types
+    the format lacks raise TypeError, and values it cannot hold raise
+    ValueError, with the key path.
     """
 
 def dump(

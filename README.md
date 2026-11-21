@@ -211,7 +211,7 @@ seed = knf.config()["seed"]
 `dumps` returns JSON, TOML, or YAML text. `dump` writes to a UTF-8 path or text
 stream. It infers the format from `.json`, `.toml`, `.yaml`, or `.yml` and
 requires `format` for a stream. JSON and TOML support `pretty=False` for compact
-output. YAML uses the same Python value types as JSON and requires `pretty=True`.
+output. YAML also accepts `nan` and `inf` and requires `pretty=True`.
 See the `dumps_toml` and `dump_toml` docs for TOML types and limits.
 
 `deep_merge(cfg, overrides)` returns a new dict: dicts merge recursively;

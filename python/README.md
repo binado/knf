@@ -37,7 +37,7 @@ dump(config, "merged.toml")
 - `filter_paths` filters a list of paths by glob without I/O.
 - `dumps` returns JSON, TOML, or YAML text. `dump` infers the format from
   `.json`, `.toml`, `.yaml`, or `.yml` and requires an explicit format for text
-  streams. YAML accepts the same Python value types as JSON and requires
+  streams. YAML accepts the JSON types plus `nan` and `inf`, and requires
   `pretty=True`. See `dumps_toml` docs for TOML limits.
 - Errors: `knf.ParseError` and `knf.InterpolationError` (both `ValueError`s),
   `ValueError` for bad arguments, and `OSError` subclasses for I/O failures.

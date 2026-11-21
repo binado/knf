@@ -20,6 +20,7 @@ use toml::Value as Toml;
 #[error("{path}: {reason}")]
 pub struct ConversionError {
     path: String,
+    kind: &'static str,
     reason: &'static str,
 }
 
@@ -27,6 +28,11 @@ impl ConversionError {
     /// Key path of the offending value, or `<root>`.
     pub fn path(&self) -> &str {
         &self.path
+    }
+
+    /// Kind of the offending value, as named by [`Value::kind`].
+    pub fn kind(&self) -> &str {
+        self.kind
     }
 
     /// Why the value cannot be converted.
@@ -291,6 +297,7 @@ impl<'n, 'a> Node<'n, 'a> {
     fn fail<E: ser::Error>(&self, reason: &'static str) -> E {
         let error = ConversionError {
             path: self.path(),
+            kind: self.value.kind(),
             reason,
         };
         let abort = E::custom(&error);
@@ -522,6 +529,7 @@ mod tests {
         let error = emit(OutputFormat::Toml, input, Policy::Lossy).unwrap_err();
         let error = error.downcast_ref::<ConversionError>().unwrap();
         assert_eq!(error.path(), "a[0]");
+        assert_eq!(error.kind(), "null");
         assert_eq!(error.reason(), "TOML cannot represent null");
     }
 
