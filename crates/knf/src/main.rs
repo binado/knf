@@ -9,12 +9,12 @@ use std::path::{PathBuf, absolute};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use knf::{InterpolationOptions, MergeOptions, ProcessEnv, merge, merge_with_interpolation};
 use knf_convert::{Layers, Layout, Policy, load_layers};
 
 use cli::{Cli, ExecFormat, OutputFormat};
-use explain::{explain_pipeline, name_the_inline_layer_flag};
+use explain::{explain_load, name_the_inline_layer_flag};
 
 /// Set while an `--exec` child runs, so Ctrl-C is left to the child.
 static CHILD_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -96,22 +96,12 @@ fn run_pipeline(
     files: &[PathBuf],
     opts: &MergeOptions,
 ) -> anyhow::Result<(String, OutputFormat)> {
-    let mut inputs = files.to_vec();
-    inputs.extend(cli.with.iter().cloned());
     let Layers {
-        format, mut values, ..
-    } = if inputs.is_empty() {
-        let Some(to) = cli.to else {
-            bail!("no input files to infer a format from\nhelp: pass --to json or --to toml")
-        };
-        Layers::new(to.into(), Vec::new())
-    } else {
-        load_layers(&inputs).map_err(|err| explain_pipeline(err, cli.with.as_deref()))?
-    };
-    let context = cli
-        .with
-        .as_ref()
-        .map(|_| values.pop().expect("context was loaded last"));
+        format,
+        mut values,
+        context,
+    } = load_layers(files, cli.with.as_deref(), cli.to.map(Into::into))
+        .map_err(|err| explain_load(err, cli.with.as_deref()))?;
     let parse_inline = |text| format.parse_inline(text);
     for leaf in &cli.set {
         values.push(

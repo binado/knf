@@ -25,7 +25,7 @@ fn overlay(value: Value) -> Value {
 
 /// The whole file pipeline, as a caller composes it: load, then fold.
 fn merge_files<P: AsRef<Path>>(paths: &[P], opts: &MergeOptions) -> anyhow::Result<Value> {
-    let layers = knf_convert::load_layers(paths)?.values;
+    let layers = knf_convert::load_layers(paths, None, None)?.values;
     Ok(knf::merge(layers, opts))
 }
 
@@ -57,7 +57,7 @@ fn shallow_terminal_overlays_and_interpolation_compose() {
     let paths = [dir.path().join("base.json"), dir.path().join("prod.json")];
     let overlay = overlay(json!({"port": 443, "data": "${root}/data"}));
 
-    let mut layers = knf_convert::load_layers(&paths)
+    let mut layers = knf_convert::load_layers(&paths, None, None)
         .expect("layers load")
         .values;
     layers.push(overlay);
@@ -134,26 +134,72 @@ fn load_layers_accepts_borrowed_paths() {
 fn load_errors_are_typed_and_flag_free() {
     let dir = tree(&[("layer", "{}")]);
 
-    let err = knf_convert::load_layers(&[dir.path().join("layer")])
+    let layer = dir.path().join("layer");
+    let load = knf_convert::load_layers(&[&layer], None, None)
         .expect_err("an extensionless path cannot be typed");
-    let load = err
-        .downcast_ref::<knf_convert::LoadError>()
-        .expect("preserves the load error");
     assert!(matches!(
-        load,
-        knf_convert::LoadError::UnknownExtension { .. }
+        &load,
+        knf_convert::LoadError::UnknownExtension { path } if *path == layer
     ));
-    assert_eq!(load.path(), Some(dir.path().join("layer").as_path()));
     assert!(
         !load.to_string().contains("--"),
         "a library error must not name a flag: {load}"
     );
 
-    let err = knf_convert::load_layers(&[dir.path()]).expect_err("a directory is no layer");
-    assert!(matches!(
-        err.downcast_ref::<knf_convert::LoadError>(),
-        Some(knf_convert::LoadError::Directory { .. })
-    ));
+    let err =
+        knf_convert::load_layers(&[dir.path()], None, None).expect_err("a directory is no layer");
+    assert!(matches!(err, knf_convert::LoadError::Directory { .. }));
+
+    let err = knf_convert::load_layers::<&str>(&[], None, None).expect_err("nothing to infer from");
+    assert!(matches!(err, knf_convert::LoadError::NoInputs));
+    assert!(!err.to_string().contains("--"));
+}
+
+#[test]
+fn file_errors_name_the_failing_path() {
+    let dir = tree(&[("base.json", "{}"), ("broken.json", "[")]);
+    let broken = dir.path().join("broken.json");
+    let err = knf_convert::load_layers(&[dir.path().join("base.json"), broken.clone()], None, None)
+        .unwrap_err();
+    let knf_convert::LoadError::File { path, .. } = &err else {
+        panic!("expected a file error, got {err:?}");
+    };
+    assert_eq!(*path, broken);
+    assert_eq!(
+        err.to_string(),
+        format!("{}: invalid JSON", broken.display())
+    );
+    assert!(
+        std::error::Error::source(&err).is_some(),
+        "keeps the parser cause"
+    );
+
+    let missing = dir.path().join("missing.json");
+    let err = knf_convert::load_layers(&[dir.path().join("base.json")], Some(&missing), None)
+        .unwrap_err();
+    assert!(matches!(&err, knf_convert::LoadError::File { path, .. } if *path == missing));
+}
+
+#[test]
+fn context_loads_apart_from_the_layers() {
+    let dir = tree(&[("base.toml", "a = 1"), ("ctx.toml", "b = 2")]);
+    let layers = knf_convert::load_layers(
+        &[dir.path().join("base.toml")],
+        Some(&dir.path().join("ctx.toml")),
+        None,
+    )
+    .unwrap();
+    assert_eq!(layers.format, InputFormat::Toml);
+    assert_eq!(layers.values, [json!({"a": 1})]);
+    assert_eq!(layers.context, Some(json!({"b": 2})));
+
+    let err = knf_convert::load_layers(
+        &[dir.path().join("base.toml")],
+        Some(Path::new("ctx.json")),
+        None,
+    )
+    .unwrap_err();
+    assert!(matches!(err, knf_convert::LoadError::MixedFormats));
 }
 
 #[test]
@@ -196,19 +242,21 @@ fn merge_does_not_interpolate() {
 #[test]
 fn mixed_formats_are_rejected_before_contents_are_read() {
     let paths = ["missing.json", "missing.toml"];
-    let err = knf_convert::load_layers(&paths).unwrap_err();
-    let load = err.downcast_ref::<knf_convert::LoadError>().unwrap();
-    assert_eq!(*load, knf_convert::LoadError::MixedFormats);
-    assert_eq!(load.path(), None);
+    let load = knf_convert::load_layers(&paths, None, None).unwrap_err();
+    assert!(matches!(load, knf_convert::LoadError::MixedFormats));
     assert!(!load.to_string().contains("-f"));
     assert!(!load.to_string().ends_with('\n'));
 }
 
 #[test]
-fn empty_layers_default_to_json() {
+fn empty_layers_take_the_fallback_format() {
     assert_eq!(
-        knf_convert::load_layers::<&str>(&[]).unwrap(),
-        Layers::new(InputFormat::Json, vec![])
+        knf_convert::load_layers::<&str>(&[], None, Some(InputFormat::Toml)).unwrap(),
+        Layers {
+            format: InputFormat::Toml,
+            values: vec![],
+            context: None,
+        }
     );
 }
 
@@ -216,7 +264,7 @@ fn empty_layers_default_to_json() {
 fn native_toml_preserves_special_values_and_precision() {
     let source = "date = 1979-05-27T07:32:00.123456789Z\ninf = inf\nnan = nan\n";
     let dir = tree(&[("base.toml", source)]);
-    let layers = knf_convert::load_layers(&[dir.path().join("base.toml")])
+    let layers = knf_convert::load_layers(&[dir.path().join("base.toml")], None, None)
         .unwrap()
         .values;
     let mut merged = knf::merge(layers, &MergeOptions::default());

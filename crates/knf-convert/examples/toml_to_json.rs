@@ -2,7 +2,7 @@ use knf::{InterpolationOptions, MergeOptions, ProcessEnv, merge_with_interpolati
 use knf_convert::{Layout, OutputFormat, Policy, load_layers};
 
 fn main() -> anyhow::Result<()> {
-    let layers = load_layers(&["base.toml", "prod.toml"])?;
+    let layers = load_layers(&["base.toml", "prod.toml"], None, None)?;
     let options = InterpolationOptions {
         context: None,
         env: &ProcessEnv,

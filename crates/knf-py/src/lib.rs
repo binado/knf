@@ -14,7 +14,7 @@ use knf::{
     InterpError, InterpolationOptions, MergeOptions, ProcessEnv, Seg, Value, merge,
     merge_with_interpolation, render_path,
 };
-use knf_convert::{LoadError, resolve_format};
+use knf_convert::{InputFormat, Layers, LoadError, load_layers};
 use pyo3::PyTypeInfo;
 use pyo3::create_exception;
 use pyo3::exceptions::{
@@ -77,26 +77,15 @@ fn load<'py>(
     let opts = MergeOptions { shallow };
     let merged = py
         .detach(move || {
-            let mut inputs = files;
-            inputs.extend(context.iter().cloned());
-            let format = resolve_format(&inputs).map_err(|err| {
-                Failure::File(
-                    err.path().unwrap_or(Path::new("")).to_path_buf(),
-                    err.into(),
-                )
-            })?;
-            let mut layers = inputs
-                .iter()
-                .map(|path| {
-                    format
-                        .load(path)
-                        .map_err(|err| Failure::File(path.clone(), err))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let context = context.map(|_| layers.pop().expect("context loaded last"));
+            let Layers {
+                format,
+                values,
+                context,
+            } = load_layers(&files, context.as_deref(), Some(InputFormat::Json))
+                .map_err(Failure::Load)?;
             if interpolate {
                 merge_with_interpolation(
-                    layers,
+                    values,
                     &opts,
                     &InterpolationOptions {
                         context: context.as_ref(),
@@ -106,39 +95,44 @@ fn load<'py>(
                 )
                 .map_err(Failure::Interpolate)
             } else {
-                Ok(merge(layers, &opts))
+                Ok(merge(values, &opts))
             }
         })
         .map_err(|failure| match failure {
-            Failure::File(path, err) => file_error(py, &path, err),
+            Failure::Load(err) => load_error(py, err),
             Failure::Interpolate(err) => InterpolationError::new_err(err.to_string()),
         })?;
     value_to_py(py, merged, &mut Vec::new())
 }
 
 enum Failure {
-    File(PathBuf, anyhow::Error),
+    Load(LoadError),
     Interpolate(InterpError),
 }
 
 /// Maps a load failure to the exception Python itself would raise: an
 /// `OSError` subclass, `ValueError`, or [`ParseError`].
-fn file_error(py: Python<'_>, path: &Path, err: anyhow::Error) -> PyErr {
-    if let Some(load) = err.downcast_ref::<LoadError>() {
-        return match load {
-            LoadError::Directory { .. } => {
-                os_error::<PyIsADirectoryError>(py, "EISDIR", path, &err)
-            }
-            _ => PyValueError::new_err(load.to_string()),
-        };
+fn load_error(py: Python<'_>, err: LoadError) -> PyErr {
+    match err {
+        LoadError::Directory { ref path } => {
+            os_error::<PyIsADirectoryError>(py, "EISDIR", path, &err)
+        }
+        LoadError::NoInputs | LoadError::MixedFormats | LoadError::UnknownExtension { .. } => {
+            PyValueError::new_err(err.to_string())
+        }
+        LoadError::File { path, source } => file_error(py, &path, &source),
     }
+}
+
+/// Maps a read or parse failure of `path`.
+fn file_error(py: Python<'_>, path: &Path, err: &anyhow::Error) -> PyErr {
     if let Some(io) = err.chain().find_map(|c| c.downcast_ref::<io::Error>()) {
         match io.kind() {
             io::ErrorKind::NotFound => {
-                return os_error::<PyFileNotFoundError>(py, "ENOENT", path, &err);
+                return os_error::<PyFileNotFoundError>(py, "ENOENT", path, err);
             }
             io::ErrorKind::PermissionDenied => {
-                return os_error::<PyPermissionError>(py, "EACCES", path, &err);
+                return os_error::<PyPermissionError>(py, "EACCES", path, err);
             }
             // `read_to_string` on bytes that are not UTF-8: the content's fault.
             io::ErrorKind::InvalidData => {}
@@ -156,7 +150,7 @@ fn os_error<E: PyTypeInfo>(
     py: Python<'_>,
     errno_name: &str,
     path: &Path,
-    err: &anyhow::Error,
+    err: &dyn std::fmt::Display,
 ) -> PyErr {
     let build = || -> PyResult<PyErr> {
         let errno = py.import("errno")?.getattr(errno_name)?;

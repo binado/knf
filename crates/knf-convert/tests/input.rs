@@ -141,21 +141,27 @@ fn load_names_the_file_in_diagnostics() {
 
 #[test]
 fn resolve_format_checks_extensions_before_reading() {
-    assert_eq!(resolve_format::<&str>(&[]).unwrap(), InputFormat::Json);
+    let none: [&str; 0] = [];
+    assert!(matches!(
+        resolve_format(none, None),
+        Err(LoadError::NoInputs)
+    ));
     assert_eq!(
-        resolve_format(&["a.toml", "b.TOML"]).unwrap(),
+        resolve_format(none, Some(InputFormat::Json)).unwrap(),
+        InputFormat::Json
+    );
+    assert_eq!(
+        resolve_format(["a.toml", "b.TOML"], Some(InputFormat::Json)).unwrap(),
         InputFormat::Toml
     );
-    assert_eq!(
-        resolve_format(&["a.json", "b.toml"]).unwrap_err(),
-        LoadError::MixedFormats
-    );
-    assert_eq!(
-        resolve_format(&["a.yaml"]).unwrap_err(),
-        LoadError::UnknownExtension {
-            path: "a.yaml".into()
-        }
-    );
+    assert!(matches!(
+        resolve_format(["a.json", "b.toml"], None),
+        Err(LoadError::MixedFormats)
+    ));
+    assert!(matches!(
+        resolve_format(["a.yaml"], None),
+        Err(LoadError::UnknownExtension { path }) if path == std::path::Path::new("a.yaml")
+    ));
 }
 
 #[test]

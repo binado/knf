@@ -17,55 +17,79 @@ impl fmt::Display for InputFormat {
 }
 
 /// Why input paths could not be turned into layers.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
+#[derive(Debug)]
 pub enum LoadError {
+    /// There are no inputs and no fallback format.
+    NoInputs,
     /// Inferred input formats differ.
-    #[error("inputs mix JSON and TOML formats; layers must use one format")]
     MixedFormats,
     /// A positional named a directory.
-    #[error("`{}` is a directory; knf takes files as layers", path.display())]
     Directory {
         /// The directory that was named.
         path: PathBuf,
     },
     /// A positional's extension is neither `json` nor `toml`.
-    #[error("cannot infer a format from `{}`", path.display())]
     UnknownExtension {
         /// The file whose extension said nothing.
         path: PathBuf,
     },
+    /// A file could not be read or parsed. Displays as `source`.
+    File {
+        /// The file that failed.
+        path: PathBuf,
+        /// The read or parse failure, already naming `path`.
+        source: anyhow::Error,
+    },
 }
 
-impl LoadError {
-    /// The path this failed on, or `None` for mixed formats.
-    pub fn path(&self) -> Option<&Path> {
+impl fmt::Display for LoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MixedFormats => None,
-            Self::Directory { path } | Self::UnknownExtension { path } => Some(path),
+            Self::NoInputs => f.write_str("no input files to infer a format from"),
+            Self::MixedFormats => {
+                f.write_str("inputs mix JSON and TOML formats; layers must use one format")
+            }
+            Self::Directory { path } => write!(
+                f,
+                "`{}` is a directory; knf takes files as layers",
+                path.display()
+            ),
+            Self::UnknownExtension { path } => {
+                write!(f, "cannot infer a format from `{}`", path.display())
+            }
+            Self::File { source, .. } => fmt::Display::fmt(source, f),
         }
     }
 }
 
-/// Parsed documents in input order.
+impl std::error::Error for LoadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::File { source, .. } => source.source(),
+            Self::NoInputs
+            | Self::MixedFormats
+            | Self::Directory { .. }
+            | Self::UnknownExtension { .. } => None,
+        }
+    }
+}
+
+/// Parsed documents in input order, plus the interpolation context.
 #[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
 pub struct Layers {
     pub format: InputFormat,
     pub values: Vec<Value>,
-}
-
-impl Layers {
-    /// Bundle documents already parsed as `format`.
-    pub fn new(format: InputFormat, values: Vec<Value>) -> Self {
-        Self { format, values }
-    }
+    pub context: Option<Value>,
 }
 
 /// Resolve a single format from file extensions, without reading any contents.
 ///
-/// Directory inputs are rejected before inference. No inputs default to JSON.
-pub fn resolve_format<P: AsRef<Path>>(paths: &[P]) -> Result<InputFormat, LoadError> {
+/// Directory inputs are rejected before inference. No inputs resolve to
+/// `fallback`, or fail with [`LoadError::NoInputs`].
+pub fn resolve_format<P: AsRef<Path>>(
+    paths: impl IntoIterator<Item = P>,
+    fallback: Option<InputFormat>,
+) -> Result<InputFormat, LoadError> {
     let mut selected = None;
     for path in paths {
         let path = path.as_ref();
@@ -82,17 +106,33 @@ pub fn resolve_format<P: AsRef<Path>>(paths: &[P]) -> Result<InputFormat, LoadEr
         }
         selected = Some(format);
     }
-    Ok(selected.unwrap_or(InputFormat::Json))
+    selected.or(fallback).ok_or(LoadError::NoInputs)
 }
 
-/// Infer one format before reading the ordered documents.
-pub fn load_layers<P: AsRef<Path>>(paths: &[P]) -> anyhow::Result<Layers> {
-    let format = resolve_format(paths)?;
-    let values = paths
-        .iter()
-        .map(|path| format.load(path.as_ref()))
-        .collect::<anyhow::Result<_>>()?;
-    Ok(Layers::new(format, values))
+/// Infer one format for `files` and `context`, then read them in order.
+///
+/// `fallback` is the format when there are no inputs at all.
+pub fn load_layers<P: AsRef<Path>>(
+    files: &[P],
+    context: Option<&Path>,
+    fallback: Option<InputFormat>,
+) -> Result<Layers, LoadError> {
+    let paths = files.iter().map(AsRef::as_ref).chain(context);
+    let format = resolve_format(paths, fallback)?;
+    let load = |path: &Path| {
+        format.load(path).map_err(|source| LoadError::File {
+            path: path.to_path_buf(),
+            source,
+        })
+    };
+    Ok(Layers {
+        format,
+        values: files
+            .iter()
+            .map(|path| load(path.as_ref()))
+            .collect::<Result<_, _>>()?,
+        context: context.map(load).transpose()?,
+    })
 }
 
 impl InputFormat {
@@ -120,26 +160,28 @@ impl InputFormat {
     pub fn load(self, path: &Path) -> anyhow::Result<Value> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading `{}`", path.display()))?;
-        self.parse_named(&text, &format!("{}: ", path.display()))
+        self.parse_named(&text, Some(path))
     }
 
     /// Parse a configuration document with an object root.
     pub fn parse_document(self, text: &str) -> anyhow::Result<Value> {
-        self.parse_named(text, "")
+        self.parse_named(text, None)
     }
 
-    fn parse_named(self, text: &str, prefix: &str) -> anyhow::Result<Value> {
+    fn parse_named(self, text: &str, path: Option<&Path>) -> anyhow::Result<Value> {
+        let prefix = || path.map_or_else(String::new, |path| format!("{}: ", path.display()));
         let value = match self {
             Self::Json => super::from_json(
-                serde_json::from_str(text).with_context(|| format!("{prefix}invalid JSON"))?,
+                serde_json::from_str(text).with_context(|| format!("{}invalid JSON", prefix()))?,
             ),
             Self::Toml => super::from_toml(
-                toml::from_str(text).with_context(|| format!("{prefix}invalid TOML"))?,
+                toml::from_str(text).with_context(|| format!("{}invalid TOML", prefix()))?,
             ),
         };
         if value.as_object().is_none() {
             bail!(
-                "{prefix}expected an object at the top level, found {}",
+                "{}expected an object at the top level, found {}",
+                prefix(),
                 value.kind()
             )
         }
