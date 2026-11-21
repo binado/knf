@@ -25,12 +25,16 @@ git_release_enable = false
 
 # The Python module, the only PyPI package. Track its changes so Python-only
 # updates bump the shared workspace version and produce the canonical v<version> tag.
-# Its changes are included in the CLI changelog, and the workflow publishes
-# PyPI wheels from the CLI tag, so it needs no separate release or tag.
+# Keep it enabled so Python-only changes can trigger a shared version bump.
+# Use the canonical CLI tag as its version baseline without creating its own.
 [[package]]
 name = "knf-py"
-release = false
+git_only = true
+git_tag_name = "v{{ version }}"
+git_tag_enable = false
+git_release_enable = false
 publish = false
+changelog_update = false
 
 # Test-only harness; never versioned, tagged or published.
 [[package]]
