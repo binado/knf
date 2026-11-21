@@ -15,6 +15,35 @@ pub enum OutputFormat {
     Yaml,
 }
 
+impl From<OutputFormat> for knf_convert::OutputFormat {
+    fn from(format: OutputFormat) -> Self {
+        match format {
+            OutputFormat::Json => Self::Json,
+            OutputFormat::Toml => Self::Toml,
+            #[cfg(feature = "yaml")]
+            OutputFormat::Yaml => Self::Yaml,
+        }
+    }
+}
+
+impl From<knf_convert::InputFormat> for OutputFormat {
+    fn from(format: knf_convert::InputFormat) -> Self {
+        match format {
+            knf_convert::InputFormat::Json => Self::Json,
+            knf_convert::InputFormat::Toml => Self::Toml,
+        }
+    }
+}
+
+impl From<OutputFormat> for knf_convert::InputFormat {
+    fn from(format: OutputFormat) -> Self {
+        match format {
+            OutputFormat::Toml => Self::Toml,
+            _ => Self::Json,
+        }
+    }
+}
+
 /// Formats a configuration snapshot for `--exec` can be written in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecFormat {

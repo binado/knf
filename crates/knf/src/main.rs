@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, bail};
 use knf::{InterpolationOptions, MergeOptions, ProcessEnv, merge, merge_with_interpolation};
-use knf_convert::{InputFormat, Layers, Layout, Policy, load_layers};
+use knf_convert::{Layers, Layout, Policy, load_layers};
 
 use cli::{Cli, ExecFormat, OutputFormat};
 use explain::{explain_pipeline, name_the_inline_layer_flag};
@@ -101,14 +101,10 @@ fn run_pipeline(
     let Layers {
         format, mut values, ..
     } = if inputs.is_empty() {
-        let format = match cli.to {
-            Some(OutputFormat::Toml) => InputFormat::Toml,
-            Some(_) => InputFormat::Json,
-            None => {
-                bail!("no input files to infer a format from\nhelp: pass --to json or --to toml")
-            }
+        let Some(to) = cli.to else {
+            bail!("no input files to infer a format from\nhelp: pass --to json or --to toml")
         };
-        Layers::new(format, Vec::new())
+        Layers::new(to.into(), Vec::new())
     } else {
         load_layers(&inputs).map_err(|err| explain_pipeline(err, cli.with.as_deref()))?
     };
@@ -139,16 +135,8 @@ fn run_pipeline(
     } else {
         merge(values, opts)
     };
-    let output = cli.to.unwrap_or(match format {
-        InputFormat::Json => OutputFormat::Json,
-        InputFormat::Toml => OutputFormat::Toml,
-    });
-    let target = match output {
-        OutputFormat::Json => knf_convert::OutputFormat::Json,
-        OutputFormat::Toml => knf_convert::OutputFormat::Toml,
-        #[cfg(feature = "yaml")]
-        OutputFormat::Yaml => knf_convert::OutputFormat::Yaml,
-    };
+    let output = cli.to.unwrap_or_else(|| format.into());
+    let target = knf_convert::OutputFormat::from(output);
     let policy = if cli.strict {
         Policy::Strict
     } else {
