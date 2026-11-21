@@ -1,5 +1,5 @@
 use knf::Value;
-use knf_convert::{Layout, OutputFormat, Policy, from_json, from_toml};
+use knf_convert::{InputFormat, Layout, OutputFormat, Policy};
 
 #[test]
 fn json_round_trip_preserves_order_integer_limits_null_and_negative_zero() {
@@ -7,7 +7,9 @@ fn json_round_trip_preserves_order_integer_limits_null_and_negative_zero() {
         "z": i64::MIN, "positive": i64::MAX, "large": u64::MAX, "nothing": null,
         "a": [1.0, -0.0, {"y": true, "b": false}]
     });
-    let value = from_json(source.clone());
+    let value = InputFormat::Json
+        .parse_document(&source.to_string())
+        .unwrap();
     let object = value.as_object().unwrap();
     assert_eq!(object["positive"], Value::Integer(i64::MAX));
     assert_eq!(object["large"], Value::unsigned(u64::MAX));
@@ -38,17 +40,15 @@ fn json_round_trip_preserves_order_integer_limits_null_and_negative_zero() {
 
 #[test]
 fn toml_round_trip_preserves_order_datetime_precision_and_float_kinds() {
-    let source: toml::Table = toml::from_str(
-        "
+    let text = "
         z = 1979-05-27T07:32:00.123456789-07:00
         local = 1979-05-27T07:32:00.987654321
         date = 1979-05-27
         time = 07:32:00.000000001
         a = [-0.0, 1.0, nan, inf, -inf]
-    ",
-    )
-    .unwrap();
-    let value = from_toml(source.clone().into());
+    ";
+    let source: toml::Table = toml::from_str(text).unwrap();
+    let value = InputFormat::Toml.parse_document(text).unwrap();
     let emitted = OutputFormat::Toml
         .emit(&value, Policy::Strict, Layout::Compact)
         .unwrap();

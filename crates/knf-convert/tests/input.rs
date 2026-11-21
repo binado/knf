@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use knf::Value;
-use knf_convert::{InputFormat, LoadError, from_json, resolve_format};
+use knf_convert::{InputFormat, LoadError, resolve_format};
 use tempfile::TempDir;
 
 fn string(text: &str) -> Value {
@@ -166,7 +166,9 @@ fn resolve_format_checks_extensions_before_reading() {
 
 #[test]
 fn json_numbers_keep_their_kind() {
-    let value = from_json(serde_json::json!({"whole": 1.0, "int": 1, "big": 1e30}));
+    let value = InputFormat::Json
+        .parse_document(r#"{"whole": 1.0, "int": 1, "big": 1e30}"#)
+        .unwrap();
     let object = value.as_object().unwrap();
     assert_eq!(object["whole"], Value::Float(1.0));
     assert_eq!(object["int"], Value::Integer(1));

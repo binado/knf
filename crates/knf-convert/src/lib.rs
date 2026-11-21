@@ -268,7 +268,7 @@ impl OutputFormat {
 
 /// Convert a JSON document; integers that fit `i64` become `Integer`, larger ones `Unsigned`.
 /// Never yields `Datetime`.
-pub fn from_json(value: Json) -> Value {
+pub(crate) fn from_json(value: Json) -> Value {
     match value {
         Json::Null => Value::Null,
         Json::Bool(b) => Value::Bool(b),
@@ -289,7 +289,7 @@ pub fn from_json(value: Json) -> Value {
 }
 
 /// Convert a TOML document, keeping datetimes and non-finite floats. Never yields `Null`.
-pub fn from_toml(value: Toml) -> Value {
+pub(crate) fn from_toml(value: Toml) -> Value {
     match value {
         Toml::Boolean(b) => Value::Bool(b),
         Toml::Integer(i) => Value::Integer(i),

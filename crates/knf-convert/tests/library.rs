@@ -6,7 +6,9 @@ use tempfile::TempDir;
 
 macro_rules! json {
     ($($tokens:tt)*) => {
-        knf_convert::from_json(serde_json::json!($($tokens)*))
+        InputFormat::Json
+            .parse_document(&serde_json::json!($($tokens)*).to_string())
+            .unwrap()
     };
 }
 

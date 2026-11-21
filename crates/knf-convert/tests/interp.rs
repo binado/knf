@@ -1142,17 +1142,18 @@ mod json {
     }
     #[test]
     fn context_preserves_unsigned_integers_and_null_precedence() {
-        let doc = knf_convert::from_json(
-            serde_json::json!({"value": null, "copy": "${value}", "big": "${big_value}", "nested": "${value.child}", "null": "${null_value}"}),
+        let parse = |text: &str| FORMAT.parse_document(text).unwrap();
+        let doc = parse(
+            r#"{"value": null, "copy": "${value}", "big": "${big_value}", "nested": "${value.child}", "null": "${null_value}"}"#,
         );
-        let context = knf_convert::from_json(
-            serde_json::json!({"value": {"child": 4}, "big_value": u64::MAX, "null_value": null}),
+        let context = parse(
+            r#"{"value": {"child": 4}, "big_value": 18446744073709551615, "null_value": null}"#,
         );
         let out = interpolate_with_context(doc, &context, &StubEnv::default()).unwrap();
         assert_eq!(
             out,
-            knf_convert::from_json(
-                serde_json::json!({"value": null, "copy": null, "big": u64::MAX, "nested": 4, "null": null})
+            parse(
+                r#"{"value": null, "copy": null, "big": 18446744073709551615, "nested": 4, "null": null}"#
             )
         );
     }
