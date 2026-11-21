@@ -97,7 +97,7 @@ fn selected_values_keep_their_native_scalar_representations() {
     );
     assert_eq!(
         json.as_object().unwrap()["payload"].as_object().unwrap()["n"],
-        Value::Unsigned(u64::MAX)
+        Value::unsigned(u64::MAX)
     );
     assert_eq!(
         json.as_object().unwrap()["payload"].as_object().unwrap()["nil"],

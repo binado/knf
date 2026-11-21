@@ -26,7 +26,7 @@ fn json_inline_literals_are_typed() {
     );
     assert_eq!(
         inline(json, "18446744073709551615"),
-        Value::Unsigned(u64::MAX)
+        Value::unsigned(u64::MAX)
     );
     assert_eq!(
         inline(json, "9223372036854775807"),
@@ -34,7 +34,7 @@ fn json_inline_literals_are_typed() {
     );
     assert_eq!(
         inline(json, "9223372036854775808"),
-        Value::Unsigned(i64::MAX as u64 + 1)
+        Value::unsigned(i64::MAX as u64 + 1)
     );
 }
 

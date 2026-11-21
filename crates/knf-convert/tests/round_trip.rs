@@ -10,7 +10,7 @@ fn json_round_trip_preserves_order_integer_limits_null_and_negative_zero() {
     let value = from_json(source.clone());
     let object = value.as_object().unwrap();
     assert_eq!(object["positive"], Value::Integer(i64::MAX));
-    assert_eq!(object["large"], Value::Unsigned(u64::MAX));
+    assert_eq!(object["large"], Value::unsigned(u64::MAX));
     let emitted = OutputFormat::Json
         .emit(&value, Policy::Strict, Layout::Compact)
         .unwrap();
@@ -82,7 +82,7 @@ fn yaml_keeps_null_unsigned_and_nonfinite_values_in_one_document() {
     let value = Value::Object(
         [
             ("nil".into(), Value::Null),
-            ("max".into(), Value::Unsigned(u64::MAX)),
+            ("max".into(), Value::unsigned(u64::MAX)),
             (
                 "floats".into(),
                 Value::Array(vec![Value::Float(f64::NAN), Value::Float(f64::INFINITY)]),

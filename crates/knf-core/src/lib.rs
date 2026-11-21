@@ -18,4 +18,4 @@ pub use interp::{
 pub use merge::{MergeOptions, merge, merge_into};
 pub use path::{PathError, RefPath, Seg, render_path};
 pub use toml_datetime::Datetime;
-pub use value::Value;
+pub use value::{Unsigned, Value};

@@ -126,6 +126,7 @@ impl OutputFormat {
 }
 
 /// Convert a JSON document; integers that fit `i64` become `Integer`, larger ones `Unsigned`.
+/// Never yields `Datetime`.
 pub fn from_json(value: Json) -> Value {
     match value {
         Json::Null => Value::Null,
@@ -146,7 +147,7 @@ pub fn from_json(value: Json) -> Value {
     }
 }
 
-/// Convert a TOML document, keeping datetimes and non-finite floats.
+/// Convert a TOML document, keeping datetimes and non-finite floats. Never yields `Null`.
 pub fn from_toml(value: Toml) -> Value {
     match value {
         Toml::Boolean(b) => Value::Bool(b),
@@ -225,7 +226,7 @@ impl Converter {
             Value::Null => Yaml::Null,
             Value::Bool(b) => Yaml::Bool(*b),
             Value::Integer(i) => Yaml::Integer(*i),
-            Value::Unsigned(u) => Yaml::Unsigned(*u),
+            Value::Unsigned(u) => Yaml::Unsigned(u.get()),
             Value::Float(f) => Yaml::Float(*f),
             Value::String(s) => Yaml::String(s.as_str().into()),
             Value::Datetime(dt) => {
@@ -255,7 +256,7 @@ impl Converter {
     fn convert_to_json(&mut self, value: &Value) -> Result<Json> {
         Ok(match value {
             Value::Null => Json::Null,
-            Value::Unsigned(value) => Json::Number((*value).into()),
+            Value::Unsigned(value) => Json::Number(value.get().into()),
             Value::Bool(value) => Json::Bool(*value),
             Value::Integer(value) => Json::Number((*value).into()),
             Value::Float(value) => match Number::from_f64(*value) {
@@ -306,13 +307,10 @@ impl Converter {
             Value::Null => return Err(self.error("TOML cannot represent null")),
             Value::Bool(value) => Toml::Boolean(*value),
             Value::Integer(value) => Toml::Integer(*value),
-            Value::Unsigned(value) => match i64::try_from(*value) {
-                Ok(i) => Toml::Integer(i),
-                Err(_) => {
-                    self.allow_loss("integer exceeds TOML's signed 64-bit range")?;
-                    Toml::Float(*value as f64)
-                }
-            },
+            Value::Unsigned(value) => {
+                self.allow_loss("integer exceeds TOML's signed 64-bit range")?;
+                Toml::Float(value.get() as f64)
+            }
             Value::Float(value) => Toml::Float(*value),
             Value::Datetime(value) => Toml::Datetime(*value),
             Value::String(value) => Toml::String(value.clone()),

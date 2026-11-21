@@ -216,7 +216,7 @@ fn value_to_py<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     Ok(match value {
         Value::Null => py.None().into_bound(py),
-        Value::Unsigned(u) => u.into_pyobject(py)?.into_any(),
+        Value::Unsigned(u) => u.get().into_pyobject(py)?.into_any(),
         Value::Bool(b) => PyBool::new(py, b).to_owned().into_any(),
         Value::Integer(i) => i.into_pyobject(py)?.into_any(),
         Value::Float(f) => f.into_pyobject(py)?.into_any(),
