@@ -104,13 +104,10 @@ fn yaml_keeps_null_unsigned_and_nonfinite_values_in_one_document() {
     let error = OutputFormat::Yaml
         .emit(&date, Policy::Strict, Layout::Pretty)
         .unwrap_err();
-    assert_eq!(
-        error
-            .downcast_ref::<knf_convert::ConversionError>()
-            .unwrap()
-            .path(),
-        "nested.day"
-    );
+    let knf_convert::EmitError::Conversion(error) = error else {
+        panic!("{error}")
+    };
+    assert_eq!(error.path(), "nested.day");
     assert!(
         OutputFormat::Yaml
             .emit(&date, Policy::Lossy, Layout::Pretty)

@@ -1,7 +1,6 @@
-use anyhow::{Context, bail};
 use knf::Value;
-use std::fmt;
 use std::path::{Path, PathBuf};
+use std::{fmt, io};
 
 /// Supported configuration formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,8 +37,63 @@ pub enum LoadError {
         /// The file that failed.
         path: PathBuf,
         /// The read or parse failure, already naming `path`.
-        source: anyhow::Error,
+        source: ReadError,
     },
+}
+
+/// Why one file could not be turned into a document.
+#[derive(Debug, thiserror::Error)]
+pub enum ReadError {
+    /// The file could not be read, including when it is not UTF-8.
+    #[error("reading `{}`", path.display())]
+    Io {
+        /// The file that failed.
+        path: PathBuf,
+        source: io::Error,
+    },
+    /// The contents are not a valid document.
+    #[error(transparent)]
+    Parse(#[from] ParseError),
+}
+
+/// Why text is not a configuration document. Displays prefixed with the
+/// file name when there is one.
+#[derive(Debug, thiserror::Error)]
+pub enum ParseError {
+    /// Invalid JSON syntax.
+    #[error("{}invalid JSON", Prefix(path))]
+    Json {
+        /// The file that was parsed, if any.
+        path: Option<PathBuf>,
+        source: serde_json::Error,
+    },
+    /// Invalid TOML syntax.
+    #[error("{}invalid TOML", Prefix(path))]
+    Toml {
+        /// The file that was parsed, if any.
+        path: Option<PathBuf>,
+        source: Box<toml::de::Error>,
+    },
+    /// The document root is not an object.
+    #[error("{}expected an object at the top level, found {kind}", Prefix(path))]
+    NotObject {
+        /// The file that was parsed, if any.
+        path: Option<PathBuf>,
+        /// The root's kind, as named by [`Value::kind`].
+        kind: &'static str,
+    },
+}
+
+/// Renders `path: `, or nothing without a path.
+struct Prefix<'a>(&'a Option<PathBuf>);
+
+impl fmt::Display for Prefix<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(path) => write!(f, "{}: ", path.display()),
+            None => Ok(()),
+        }
+    }
 }
 
 impl fmt::Display for LoadError {
@@ -157,33 +211,40 @@ impl InputFormat {
     }
 
     /// Read one document with filename-aware diagnostics.
-    pub fn load(self, path: &Path) -> anyhow::Result<Value> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading `{}`", path.display()))?;
-        self.parse_named(&text, Some(path))
+    pub fn load(self, path: &Path) -> Result<Value, ReadError> {
+        let text = std::fs::read_to_string(path).map_err(|source| ReadError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        Ok(self.parse_named(&text, Some(path))?)
     }
 
     /// Parse a configuration document with an object root.
-    pub fn parse_document(self, text: &str) -> anyhow::Result<Value> {
+    pub fn parse_document(self, text: &str) -> Result<Value, ParseError> {
         self.parse_named(text, None)
     }
 
-    fn parse_named(self, text: &str, path: Option<&Path>) -> anyhow::Result<Value> {
-        let prefix = || path.map_or_else(String::new, |path| format!("{}: ", path.display()));
+    fn parse_named(self, text: &str, path: Option<&Path>) -> Result<Value, ParseError> {
+        let path = || path.map(Path::to_path_buf);
         let value = match self {
-            Self::Json => super::from_json(
-                serde_json::from_str(text).with_context(|| format!("{}invalid JSON", prefix()))?,
-            ),
-            Self::Toml => super::from_toml(
-                toml::from_str(text).with_context(|| format!("{}invalid TOML", prefix()))?,
-            ),
+            Self::Json => serde_json::from_str(text)
+                .map(super::from_json)
+                .map_err(|source| ParseError::Json {
+                    path: path(),
+                    source,
+                })?,
+            Self::Toml => toml::from_str(text)
+                .map(super::from_toml)
+                .map_err(|source| ParseError::Toml {
+                    path: path(),
+                    source: Box::new(source),
+                })?,
         };
         if value.as_object().is_none() {
-            bail!(
-                "{}expected an object at the top level, found {}",
-                prefix(),
-                value.kind()
-            )
+            return Err(ParseError::NotObject {
+                path: path(),
+                kind: value.kind(),
+            });
         }
         Ok(value)
     }

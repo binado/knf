@@ -14,7 +14,7 @@ use knf::{
     InterpError, InterpolationOptions, MergeOptions, Seg, Value, merge, merge_with_interpolation,
     render_path,
 };
-use knf_convert::{InputFormat, Layers, LoadError, load_layers};
+use knf_convert::{InputFormat, Layers, LoadError, ReadError, load_layers};
 use pyo3::PyTypeInfo;
 use pyo3::create_exception;
 use pyo3::exceptions::{
@@ -122,9 +122,9 @@ fn load_error(py: Python<'_>, err: LoadError) -> PyErr {
 }
 
 /// Maps a read or parse failure of `path`.
-fn file_error(py: Python<'_>, path: &Path, err: &anyhow::Error) -> PyErr {
-    if let Some(io) = err.chain().find_map(|c| c.downcast_ref::<io::Error>()) {
-        match io.kind() {
+fn file_error(py: Python<'_>, path: &Path, err: &ReadError) -> PyErr {
+    if let ReadError::Io { source, .. } = err {
+        match source.kind() {
             io::ErrorKind::NotFound => {
                 return os_error::<PyFileNotFoundError>(py, "ENOENT", path, err);
             }
@@ -133,11 +133,22 @@ fn file_error(py: Python<'_>, path: &Path, err: &anyhow::Error) -> PyErr {
             }
             // `read_to_string` on bytes that are not UTF-8: the content's fault.
             io::ErrorKind::InvalidData => {}
-            _ => return PyOSError::new_err(format!("{err:#}")),
+            _ => return PyOSError::new_err(one_line(err)),
         }
     }
-    // `{:#}` is the whole chain on one line: "a.json: invalid JSON: …".
-    ParseError::new_err(format!("{err:#}"))
+    ParseError::new_err(one_line(err))
+}
+
+/// The error and its sources on one line: "a.json: invalid JSON: …".
+fn one_line(err: &dyn std::error::Error) -> String {
+    let mut line = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        line.push_str(": ");
+        line.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    line
 }
 
 /// Builds `E(errno, strerror, filename)` as `open()` does.
@@ -147,7 +158,7 @@ fn os_error<E: PyTypeInfo>(
     py: Python<'_>,
     errno_name: &str,
     path: &Path,
-    err: &dyn std::fmt::Display,
+    err: &dyn std::error::Error,
 ) -> PyErr {
     let build = || -> PyResult<PyErr> {
         let errno = py.import("errno")?.getattr(errno_name)?;
@@ -159,7 +170,7 @@ fn os_error<E: PyTypeInfo>(
             filename,
         )))
     };
-    build().unwrap_or_else(|_| PyOSError::new_err(format!("{err:#}")))
+    build().unwrap_or_else(|_| PyOSError::new_err(one_line(err)))
 }
 
 /// Runs the `knf` command line with `sys.argv` and exits.

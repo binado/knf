@@ -1,4 +1,4 @@
-use knf_convert::{ConversionError, Layout, OutputFormat, Policy, Unrepresentable};
+use knf_convert::{EmitError, Layout, OutputFormat, Policy, Unrepresentable};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -35,11 +35,11 @@ pub(super) fn dumps(data: &Bound<'_, PyDict>, format: &str, pretty: bool) -> PyR
             Layout::pretty(pretty),
         )
         .map(|result| result.value)
-        .map_err(|err| match err.downcast_ref::<ConversionError>() {
-            Some(error) if error.category() == Unrepresentable::Type => {
+        .map_err(|err| match err {
+            EmitError::Conversion(error) if error.category() == Unrepresentable::Type => {
                 PyTypeError::new_err(error.to_string())
             }
-            _ => PyValueError::new_err(format!("{err:#}")),
+            err => PyValueError::new_err(crate::one_line(&err)),
         })
 }
 

@@ -8,7 +8,9 @@
 //! ```
 
 mod input;
-pub use input::{InputFormat, Layers, LoadError, load_layers, resolve_format};
+pub use input::{
+    InputFormat, Layers, LoadError, ParseError, ReadError, load_layers, resolve_format,
+};
 use knf::{Seg, Value, render_path};
 use serde::ser::{self, Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::Value as Json;
@@ -72,6 +74,22 @@ impl Limit {
             reason,
         }
     }
+}
+
+/// Why [`OutputFormat::emit`] failed.
+#[derive(Debug, thiserror::Error)]
+pub enum EmitError {
+    /// A value cannot be converted under the requested policy.
+    #[error(transparent)]
+    Conversion(#[from] ConversionError),
+    /// The serializer failed.
+    #[error("emitting {}", format.name())]
+    Serialize {
+        /// The format being written.
+        format: OutputFormat,
+        /// The serializer's own error.
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 }
 
 /// Whether lossy mappings are applied or rejected.
@@ -144,8 +162,12 @@ impl OutputFormat {
         value: &Value,
         policy: Policy,
         layout: Layout,
-    ) -> anyhow::Result<Converted<String>> {
-        use anyhow::Context;
+    ) -> Result<Converted<String>, EmitError> {
+        fn boxed(
+            error: impl std::error::Error + Send + Sync + 'static,
+        ) -> Box<dyn std::error::Error + Send + Sync> {
+            Box::new(error)
+        }
         let pretty = layout == Layout::Pretty;
         let emitter = Emitter {
             format: self,
@@ -164,20 +186,23 @@ impl OutputFormat {
             } else {
                 serde_json::to_string(&root)
             }
-            .context("emitting JSON"),
+            .map_err(boxed),
             Self::Toml => if pretty {
                 toml::to_string_pretty(&root)
             } else {
                 toml::to_string(&root)
             }
-            .context("emitting TOML"),
+            .map_err(boxed),
             #[cfg(feature = "yaml")]
-            Self::Yaml => serde_saphyr::to_string(&root).context("emitting YAML"),
+            Self::Yaml => serde_saphyr::to_string(&root).map_err(boxed),
         };
         if let Some(error) = emitter.error.take() {
             return Err(error.into());
         }
-        let mut text = written?;
+        let mut text = written.map_err(|source| EmitError::Serialize {
+            format: self,
+            source,
+        })?;
         if !text.ends_with('\n') {
             text.push('\n');
         }
@@ -185,6 +210,15 @@ impl OutputFormat {
             value: text,
             lossy: emitter.lossy.get(),
         })
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Json => "JSON",
+            Self::Toml => "TOML",
+            #[cfg(feature = "yaml")]
+            Self::Yaml => "YAML",
+        }
     }
 
     /// How this format writes `value`; containers are always [`Repr::Native`].
@@ -427,7 +461,7 @@ mod tests {
         format: OutputFormat,
         value: Value,
         policy: Policy,
-    ) -> anyhow::Result<Converted<String>> {
+    ) -> Result<Converted<String>, EmitError> {
         format.emit(&value, policy, Layout::Compact)
     }
 
@@ -439,7 +473,7 @@ mod tests {
         toml(&out.value)
     }
 
-    fn err(result: anyhow::Result<Converted<String>>) -> String {
+    fn err(result: Result<Converted<String>, EmitError>) -> String {
         result.unwrap_err().to_string()
     }
 
@@ -580,7 +614,9 @@ mod tests {
     fn error_exposes_path_and_reason() {
         let input = from_json(json!({"a": [null]}));
         let error = emit(OutputFormat::Toml, input, Policy::Lossy).unwrap_err();
-        let error = error.downcast_ref::<ConversionError>().unwrap();
+        let EmitError::Conversion(error) = error else {
+            panic!("{error}")
+        };
         assert_eq!(error.path(), "a[0]");
         assert_eq!(error.category(), Unrepresentable::Type);
         assert_eq!(error.reason(), "TOML cannot represent null");
@@ -601,12 +637,16 @@ mod tests {
             ),
         ] {
             let error = emit(format, from_json(value), Policy::Strict).unwrap_err();
-            let error = error.downcast_ref::<ConversionError>().unwrap();
+            let EmitError::Conversion(error) = error else {
+                panic!("{error}")
+            };
             assert_eq!(error.category(), category);
         }
         let float = Value::Object([("a".into(), Value::Float(f64::NAN))].into_iter().collect());
         let error = emit(OutputFormat::Json, float, Policy::Strict).unwrap_err();
-        let error = error.downcast_ref::<ConversionError>().unwrap();
+        let EmitError::Conversion(error) = error else {
+            panic!("{error}")
+        };
         assert_eq!(error.category(), Unrepresentable::Range);
     }
 
