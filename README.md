@@ -18,8 +18,13 @@ Windows (x86-64 and ARM64); CPython 3.11+. The wheels include `--to yaml`.
 ```bash
 cargo install knf-cli                  # the executable
 cargo install knf-cli --features yaml  # with `--to yaml` (Rust 1.89+)
-cargo add knf-core     # the library, imported as `knf`
+cargo add knf-core knf-convert         # Rust libraries
 ```
+
+Rust callers use `knf::Value` for both JSON and TOML. It replaces the native
+value traits. Use `knf_convert::load_layers` to read files, `knf::merge` or
+`knf::merge_with_interpolation` to combine them, and `OutputFormat::emit` to
+serialize the result. [TOML layers to JSON example](crates/knf-convert/examples/toml_to_json.rs).
 
 ## Usage
 

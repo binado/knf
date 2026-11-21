@@ -343,6 +343,8 @@ checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
  "hashbrown",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -369,9 +371,7 @@ dependencies = [
  "knf-convert",
  "knf-core",
  "knf-mdtest",
- "serde_json",
  "tempfile",
- "toml",
 ]
 
 [[package]]
@@ -379,10 +379,12 @@ name = "knf-convert"
 version = "0.8.1"
 dependencies = [
  "anyhow",
+ "indexmap",
  "knf-core",
  "serde",
  "serde-saphyr",
  "serde_json",
+ "tempfile",
  "thiserror",
  "toml",
 ]
@@ -391,13 +393,12 @@ dependencies = [
 name = "knf-core"
 version = "0.8.1"
 dependencies = [
- "anyhow",
  "fast-glob",
+ "indexmap",
  "proptest",
- "serde_json",
  "tempfile",
  "thiserror",
- "toml",
+ "toml_datetime",
 ]
 
 [[package]]
@@ -416,10 +417,10 @@ dependencies = [
  "anyhow",
  "clap",
  "ctrlc",
+ "indexmap",
  "knf-convert",
  "knf-core",
  "pyo3",
- "serde_json",
  "tempfile",
  "toml",
 ]
@@ -758,6 +759,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]

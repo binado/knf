@@ -1,33 +1,11 @@
-use knf::{ConfigObject, ConfigValue, Seg, render_path};
+use knf::{Seg, Value, render_path};
+use knf_convert::InputFormat;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 
 /// Maximum container nesting accepted when converting Python values.
 const MAX_DEPTH: usize = 128;
-
-/// A native output value type, pairing its error-message wording with its scalar conversion.
-trait Target: ConfigValue {
-    const LABEL: &'static str;
-    const OBJECT_NOUN: &'static str;
-    fn scalar(value: &Bound<'_, PyAny>, path: &[Seg]) -> PyResult<Self>;
-}
-
-impl Target for toml::Value {
-    const LABEL: &'static str = "TOML";
-    const OBJECT_NOUN: &'static str = "table";
-    fn scalar(value: &Bound<'_, PyAny>, path: &[Seg]) -> PyResult<Self> {
-        toml_scalar(value, path)
-    }
-}
-
-impl Target for serde_json::Value {
-    const LABEL: &'static str = "JSON";
-    const OBJECT_NOUN: &'static str = "object";
-    fn scalar(value: &Bound<'_, PyAny>, path: &[Seg]) -> PyResult<Self> {
-        json_scalar(value, path)
-    }
-}
 
 /// Traversal state: the current key path and the containers being visited (for cycle detection).
 #[derive(Default)]
@@ -36,18 +14,15 @@ struct Walk {
     ancestors: Vec<usize>,
 }
 
-/// Converts a Python dict into a TOML table; errors name the offending key path.
-pub(super) fn dict_to_toml(data: &Bound<'_, PyDict>) -> PyResult<toml::Value> {
-    convert(data.as_any(), &mut Walk::default())
+pub(super) fn dict_to_value(data: &Bound<'_, PyDict>, format: InputFormat) -> PyResult<Value> {
+    convert(data.as_any(), &mut Walk::default(), format)
 }
 
-/// Converts a Python dict into a JSON object; errors name the offending key path.
-pub(super) fn dict_to_json(data: &Bound<'_, PyDict>) -> PyResult<serde_json::Value> {
-    convert(data.as_any(), &mut Walk::default())
-}
-
-/// Recursively converts dicts, lists, tuples and scalars, rejecting cycles and excess nesting.
-fn convert<V: Target>(value: &Bound<'_, PyAny>, walk: &mut Walk) -> PyResult<V> {
+fn convert(value: &Bound<'_, PyAny>, walk: &mut Walk, format: InputFormat) -> PyResult<Value> {
+    let (label, noun) = match format {
+        InputFormat::Json => ("JSON", "object"),
+        InputFormat::Toml => ("TOML", "table"),
+    };
     let location = || format!("at `{}`", render_path(&walk.path));
     let container = value.is_instance_of::<PyDict>()
         || value.is_instance_of::<PyList>()
@@ -63,44 +38,46 @@ fn convert<V: Target>(value: &Bound<'_, PyAny>, walk: &mut Walk) -> PyResult<V> 
         if walk.ancestors.len() >= MAX_DEPTH {
             return Err(PyValueError::new_err(format!(
                 "{} nesting exceeds {MAX_DEPTH} containers {}",
-                V::LABEL,
+                label,
                 location()
             )));
         }
         walk.ancestors.push(identity);
         let result = if let Ok(dict) = value.cast::<PyDict>() {
-            let mut object = V::Object::new();
+            let mut object = indexmap::IndexMap::new();
             for (key, item) in dict.iter() {
                 let key: String = key.extract().map_err(|_| {
                     PyTypeError::new_err(format!(
                         "{} {} keys must be strings at `{}`",
-                        V::LABEL,
-                        V::OBJECT_NOUN,
+                        label,
+                        noun,
                         render_path(&walk.path)
                     ))
                 })?;
                 walk.path.push(Seg::Key(key.clone()));
-                object.insert(key, convert(&item, walk)?);
+                object.insert(key, convert(&item, walk, format)?);
                 walk.path.pop();
             }
-            V::object(object)
+            Value::Object(object)
         } else {
             let mut items = Vec::new();
             for (index, item) in value.try_iter()?.enumerate() {
                 walk.path.push(Seg::Index(index));
-                items.push(convert(&item?, walk)?);
+                items.push(convert(&item?, walk, format)?);
                 walk.path.pop();
             }
-            V::array(items)
+            Value::Array(items)
         };
         walk.ancestors.pop();
         return Ok(result);
     }
-    V::scalar(value, &walk.path)
+    match format {
+        InputFormat::Json => json_scalar(value, &walk.path),
+        InputFormat::Toml => toml_scalar(value, &walk.path),
+    }
 }
 
-fn json_scalar(value: &Bound<'_, PyAny>, path: &[Seg]) -> PyResult<serde_json::Value> {
-    use serde_json::{Number, Value};
+fn json_scalar(value: &Bound<'_, PyAny>, path: &[Seg]) -> PyResult<Value> {
     let location = || format!("at `{}`", render_path(path));
     if value.is_none() {
         return Ok(Value::Null);
@@ -111,9 +88,8 @@ fn json_scalar(value: &Bound<'_, PyAny>, path: &[Seg]) -> PyResult<serde_json::V
     if let Ok(v) = value.cast::<PyInt>() {
         return v
             .extract::<i64>()
-            .map(Number::from)
-            .or_else(|_| v.extract::<u64>().map(Number::from))
-            .map(Value::Number)
+            .map(Value::Integer)
+            .or_else(|_| v.extract::<u64>().map(Value::Unsigned))
             .map_err(|_| {
                 PyValueError::new_err(format!(
                     "integer outside JSON's supported 64-bit range {}",
@@ -122,11 +98,10 @@ fn json_scalar(value: &Bound<'_, PyAny>, path: &[Seg]) -> PyResult<serde_json::V
             });
     }
     if let Ok(v) = value.cast::<PyFloat>() {
-        return Number::from_f64(v.extract()?)
-            .map(Value::Number)
-            .ok_or_else(|| {
-                PyValueError::new_err(format!("JSON requires finite floats {}", location()))
-            });
+        let f: f64 = v.extract()?;
+        return f.is_finite().then_some(Value::Float(f)).ok_or_else(|| {
+            PyValueError::new_err(format!("JSON requires finite floats {}", location()))
+        });
     }
     if let Ok(v) = value.cast::<PyString>() {
         return Ok(Value::String(v.extract()?));
@@ -138,12 +113,11 @@ fn json_scalar(value: &Bound<'_, PyAny>, path: &[Seg]) -> PyResult<serde_json::V
     )))
 }
 
-fn toml_scalar(value: &Bound<'_, PyAny>, path: &[Seg]) -> PyResult<toml::Value> {
-    use toml::Value;
+fn toml_scalar(value: &Bound<'_, PyAny>, path: &[Seg]) -> PyResult<Value> {
     // Non-finite floats (inf, nan) are intentionally allowed: TOML supports them.
     let location = || format!("at `{}`", render_path(path));
     if let Ok(v) = value.cast::<PyBool>() {
-        return Ok(Value::Boolean(v.extract()?));
+        return Ok(Value::Bool(v.extract()?));
     }
     if let Ok(v) = value.cast::<PyInt>() {
         return v.extract().map(Value::Integer).map_err(|_| {

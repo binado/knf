@@ -2,9 +2,8 @@
 
 use std::collections::HashMap;
 
-use crate::{ConfigFormat, ConfigValue};
-
-use super::*;
+use knf::{Env, InterpError, InterpolationOptions, MergeOptions, Value, merge_with_interpolation};
+use knf_convert::{InputFormat, OutputFormat, Policy};
 
 /// A raw-text environment, with no process reads.
 #[derive(Default)]
@@ -29,29 +28,29 @@ impl Env for StubEnv {
 macro_rules! common_tests {
     () => {
         fn obj(entries: Vec<(&str, Value)>) -> Value {
-            Value::object(
+            Value::Object(
                 entries
                     .into_iter()
                     .map(|(k, v)| (k.to_string(), v))
-                    .collect::<Map>(),
+                    .collect(),
             )
         }
 
         fn s(text: &str) -> Value {
-            Value::string(text.to_string())
+            Value::String(text.to_string())
         }
 
         fn n(v: i64) -> Value {
-            Value::parse_inline(v.to_string())
+            Value::Integer(v)
         }
 
         /// Interpolate with no environment at all.
         fn interp(doc: Value) -> Result<Value, InterpError> {
-            interpolate_with_options(doc, None, &StubEnv::default(), &InterpOptions::default())
+            interpolate_with_options(doc, None, &StubEnv::default(), &MergeOptions::default())
         }
 
         fn interp_env(doc: Value, vars: &[(&str, &str)]) -> Result<Value, InterpError> {
-            interpolate_with_options(doc, None, &StubEnv::new(vars), &InterpOptions::default())
+            interpolate_with_options(doc, None, &StubEnv::new(vars), &MergeOptions::default())
         }
 
         fn interpolate_with_context(
@@ -59,7 +58,7 @@ macro_rules! common_tests {
             context: &Value,
             env: &dyn Env,
         ) -> Result<Value, InterpError> {
-            interpolate_with_options(doc, Some(context), env, &InterpOptions::default())
+            interpolate_with_options(doc, Some(context), env, &MergeOptions::default())
         }
 
         fn err(doc: Value) -> String {
@@ -74,9 +73,17 @@ macro_rules! common_tests {
             doc: Value,
             context: Option<&Value>,
             env: &dyn Env,
-            options: &InterpOptions,
+            options: &MergeOptions,
         ) -> Result<Value, InterpError> {
-            merge_interpolate([doc], context, env, options)
+            merge_with_interpolation(
+                [doc],
+                options,
+                &InterpolationOptions {
+                    context,
+                    env,
+                    parse_inline: &|text| FORMAT.parse_inline(text),
+                },
+            )
         }
 
         #[test]
@@ -85,14 +92,14 @@ macro_rules! common_tests {
                 ("db", obj(vec![("host", s("prod"))])),
                 ("port", s("${db.port}")),
                 ("copy", s("${db}")),
-                ("items", Value::array(vec![n(1)])),
+                ("items", Value::Array(vec![n(1)])),
                 ("last", s("${items[1]}")),
                 ("scalar", n(0)),
                 ("nested", s("${scalar.child}")),
             ]);
             let context = obj(vec![
                 ("db", obj(vec![("host", s("shared")), ("port", n(5432))])),
-                ("items", Value::array(vec![n(2), n(3)])),
+                ("items", Value::Array(vec![n(2), n(3)])),
                 ("scalar", obj(vec![("child", n(4))])),
                 ("unused", s("${missing}")),
                 ("cycle", s("${cycle}")),
@@ -118,7 +125,7 @@ macro_rules! common_tests {
             let service = obj(vec![
                 ("host", s("own")),
                 ("url", s("https://${host}/api")),
-                ("ports", Value::array(vec![n(5432)])),
+                ("ports", Value::Array(vec![n(5432)])),
             ]);
             let context = obj(vec![("host", s("shared")), ("service", service)]);
             let out = interpolate_with_context(doc, &context, &StubEnv::default()).unwrap();
@@ -129,7 +136,7 @@ macro_rules! common_tests {
                 obj(vec![
                     ("host", s("own")),
                     ("url", s("https://prod/api")),
-                    ("ports", Value::array(vec![n(5432)])),
+                    ("ports", Value::Array(vec![n(5432)])),
                 ])
             );
         }
@@ -237,12 +244,15 @@ macro_rules! common_tests {
             shallow: Option<&str>,
             env: &dyn Env,
         ) -> Result<Value, InterpError> {
-            merge_interpolate(
+            merge_with_interpolation(
                 layers,
-                context,
-                env,
-                &InterpOptions {
+                &MergeOptions {
                     shallow: shallow.map(|pattern| pattern.parse().unwrap()),
+                },
+                &InterpolationOptions {
+                    context,
+                    env,
+                    parse_inline: &|text| FORMAT.parse_inline(text),
                 },
             )
         }
@@ -255,10 +265,16 @@ macro_rules! common_tests {
             ]);
             let over = obj(vec![("foo", obj(vec![("b", obj(vec![("a", n(4))]))]))]);
             let out = fold(vec![base.clone(), over.clone()]).unwrap();
-            assert_eq!(out["foo"]["b"], obj(vec![("a", n(4)), ("d", n(1))]));
+            assert_eq!(
+                out.as_object().unwrap()["foo"].as_object().unwrap()["b"],
+                obj(vec![("a", n(4)), ("d", n(1))])
+            );
             let late = obj(vec![("bar", obj(vec![("d", n(9))]))]);
             let out = fold(vec![base, over, late]).unwrap();
-            assert_eq!(out["foo"]["b"], obj(vec![("a", n(4)), ("d", n(9))]));
+            assert_eq!(
+                out.as_object().unwrap()["foo"].as_object().unwrap()["b"],
+                obj(vec![("a", n(4)), ("d", n(9))])
+            );
         }
 
         #[test]
@@ -277,13 +293,19 @@ macro_rules! common_tests {
                 ]),
             ])
             .unwrap();
-            assert_eq!(out["foo"], obj(vec![("x", n(1)), ("y", n(2)), ("z", n(2))]));
-            assert_eq!(out["c"], obj(vec![("p", n(1)), ("q", n(2))]));
+            assert_eq!(
+                out.as_object().unwrap()["foo"],
+                obj(vec![("x", n(1)), ("y", n(2)), ("z", n(2))])
+            );
+            assert_eq!(
+                out.as_object().unwrap()["c"],
+                obj(vec![("p", n(1)), ("q", n(2))])
+            );
         }
 
         #[test]
         fn non_object_referents_replace_on_either_side() {
-            for referent in [n(1), s("text"), Value::array(vec![n(1)])] {
+            for referent in [n(1), s("text"), Value::Array(vec![n(1)])] {
                 let out = fold(vec![
                     obj(vec![
                         ("r", referent.clone()),
@@ -293,8 +315,8 @@ macro_rules! common_tests {
                     obj(vec![("left", obj(vec![("y", n(2))])), ("right", s("${r}"))]),
                 ])
                 .unwrap();
-                assert_eq!(out["left"], obj(vec![("y", n(2))]));
-                assert_eq!(out["right"], referent);
+                assert_eq!(out.as_object().unwrap()["left"], obj(vec![("y", n(2))]));
+                assert_eq!(out.as_object().unwrap()["right"], referent);
             }
         }
 
@@ -308,12 +330,12 @@ macro_rules! common_tests {
                 ]),
                 obj(vec![
                     ("a", n(1)),
-                    ("b", Value::array(vec![])),
+                    ("b", Value::Array(vec![])),
                     ("c", obj(vec![("k", n(1))])),
                 ]),
             ])
             .unwrap();
-            assert_eq!(replaced["c"], obj(vec![("k", n(1))]));
+            assert_eq!(replaced.as_object().unwrap()["c"], obj(vec![("k", n(1))]));
             let err = fold(vec![
                 obj(vec![
                     ("a", s("${missing}")),
@@ -353,7 +375,7 @@ macro_rules! common_tests {
             ];
             let deep = fold_with(layers.clone(), None, Some("gone"), &StubEnv::default()).unwrap();
             assert_eq!(
-                deep["foo"],
+                deep.as_object().unwrap()["foo"],
                 obj(vec![("db", obj(vec![("host", s("h")), ("port", n(2))]))])
             );
             for glob in ["foo.db", "{foo.db,gone}", "*"] {
@@ -366,7 +388,7 @@ macro_rules! common_tests {
                     }
                 };
                 assert_eq!(
-                    out["foo"],
+                    out.as_object().unwrap()["foo"],
                     obj(vec![("db", obj(vec![("port", n(2))]))]),
                     "{glob}"
                 );
@@ -390,10 +412,16 @@ macro_rules! common_tests {
                 )]),
             ])
             .unwrap();
-            assert_eq!(out["read"], n(1));
-            assert_eq!(out["copy"], obj(vec![("a", n(4)), ("d", n(1))]));
-            assert_eq!(out["through"], n(1));
-            assert_eq!(out["foo"]["c"], n(4));
+            assert_eq!(out.as_object().unwrap()["read"], n(1));
+            assert_eq!(
+                out.as_object().unwrap()["copy"],
+                obj(vec![("a", n(4)), ("d", n(1))])
+            );
+            assert_eq!(out.as_object().unwrap()["through"], n(1));
+            assert_eq!(
+                out.as_object().unwrap()["foo"].as_object().unwrap()["c"],
+                n(4)
+            );
         }
 
         #[test]
@@ -416,8 +444,27 @@ macro_rules! common_tests {
         }
 
         #[test]
+        fn environment_date_uses_the_input_format_and_embedded_digits_keep_their_spelling() {
+            let out = interp_env(
+                obj(vec![
+                    ("date", s("${env:DATE}")),
+                    ("label", s("n=${env:DIGITS}")),
+                ]),
+                &[("DATE", "1979-05-27"), ("DIGITS", "01")],
+            )
+            .unwrap();
+            let fields = out.as_object().unwrap();
+            let expected = match FORMAT {
+                InputFormat::Json => s("1979-05-27"),
+                InputFormat::Toml => Value::Datetime("1979-05-27".parse().unwrap()),
+            };
+            assert_eq!(fields["date"], expected);
+            assert_eq!(fields["label"], s("n=01"));
+        }
+
+        #[test]
         fn environment_objects_merge_with_overrides_and_stay_terminal() {
-            let text = if Value::FORMAT == crate::Format::Json {
+            let text = if FORMAT == InputFormat::Json {
                 r#"{"raw":"${missing}","other":"${missing}","port":1}"#
             } else {
                 r#"{raw="${missing}", other="${missing}", port=1}"#
@@ -434,7 +481,7 @@ macro_rules! common_tests {
             )
             .unwrap();
             assert_eq!(
-                out["conf"],
+                out.as_object().unwrap()["conf"],
                 obj(vec![
                     ("raw", s("${missing}")),
                     ("other", s("${missing}")),
@@ -485,7 +532,7 @@ macro_rules! common_tests {
         #[test]
         fn an_embedded_float_keeps_its_point() {
             let doc = obj(vec![
-                ("v", Value::parse_inline("1.0".into())),
+                ("v", FORMAT.parse_inline("1.0".into())),
                 ("tag", s("v${v}")),
             ]);
             let out = interp(doc).unwrap();
@@ -496,7 +543,7 @@ macro_rules! common_tests {
         #[test]
         fn embedded_exponents_keep_existing_spelling_while_whole_references_keep_values() {
             for spelling in ["1e20", "1e300", "1e-7"] {
-                let value = Value::parse_inline(spelling.into());
+                let value = FORMAT.parse_inline(spelling.into());
                 let doc = obj(vec![
                     ("v", value.clone()),
                     ("tag", s("n=${v}")),
@@ -506,8 +553,11 @@ macro_rules! common_tests {
                 let map = out.as_object().unwrap();
                 assert_eq!(map["tag"], s(&format!("n={spelling}")));
                 assert_eq!(map["whole"], value);
-                let emitted = crate::format::emit(out.clone(), false).unwrap();
-                let round = Value::parse_document(&emitted).unwrap();
+                let emitted = OutputFormat::from(FORMAT)
+                    .emit(&out, Policy::Strict, false)
+                    .unwrap()
+                    .value;
+                let round = FORMAT.parse_document(&emitted).unwrap();
                 assert_eq!(round, out);
             }
         }
@@ -925,7 +975,7 @@ macro_rules! common_tests {
             for (key, value) in extra {
                 map.insert(key.to_string(), value);
             }
-            Value::object(map)
+            Value::Object(map)
         }
 
         #[test]
@@ -981,13 +1031,7 @@ macro_rules! common_tests {
                 vec![("region", s("eu")), ("pick", s("${regions.${region}}"))],
             );
             let over = obj(vec![("pick", obj(vec![("extra", n(1))]))]);
-            let out = merge_interpolate(
-                [doc, over],
-                None,
-                &StubEnv::default(),
-                &InterpOptions::default(),
-            )
-            .unwrap();
+            let out = fold(vec![doc, over]).unwrap();
             assert_eq!(
                 out.as_object().unwrap()["pick"],
                 obj(vec![("endpoint", s("eu.example")), ("extra", n(1))])
@@ -1004,13 +1048,7 @@ macro_rules! common_tests {
                 ],
             );
             let over = obj(vec![("region", s("us"))]);
-            let out = merge_interpolate(
-                [base, over],
-                None,
-                &StubEnv::default(),
-                &InterpOptions::default(),
-            )
-            .unwrap();
+            let out = fold(vec![base, over]).unwrap();
             assert_eq!(out.as_object().unwrap()["e"], s("us.example"));
         }
 
@@ -1091,8 +1129,7 @@ macro_rules! common_tests {
 
 mod json {
     use super::*;
-    use serde_json::Value;
-    type Map = serde_json::Map<String, Value>;
+    const FORMAT: InputFormat = InputFormat::Json;
     common_tests!();
 
     #[test]
@@ -1105,13 +1142,18 @@ mod json {
     }
     #[test]
     fn context_preserves_unsigned_integers_and_null_precedence() {
-        let doc = serde_json::json!({"value": null, "copy": "${value}", "big": "${big_value}", "nested": "${value.child}", "null": "${null_value}"});
-        let context =
-            serde_json::json!({"value": {"child": 4}, "big_value": u64::MAX, "null_value": null});
+        let doc = knf_convert::from_json(
+            serde_json::json!({"value": null, "copy": "${value}", "big": "${big_value}", "nested": "${value.child}", "null": "${null_value}"}),
+        );
+        let context = knf_convert::from_json(
+            serde_json::json!({"value": {"child": 4}, "big_value": u64::MAX, "null_value": null}),
+        );
         let out = interpolate_with_context(doc, &context, &StubEnv::default()).unwrap();
         assert_eq!(
             out,
-            serde_json::json!({"value": null, "copy": null, "big": u64::MAX, "nested": 4, "null": null})
+            knf_convert::from_json(
+                serde_json::json!({"value": null, "copy": null, "big": u64::MAX, "nested": 4, "null": null})
+            )
         );
     }
     #[test]
@@ -1134,21 +1176,30 @@ mod json {
 
 mod toml {
     use super::*;
-    use ::toml::Value;
-    type Map = ::toml::Table;
+    const FORMAT: InputFormat = InputFormat::Toml;
     common_tests!();
     #[test]
     fn context_preserves_native_datetimes_and_nonfinite_floats() {
-        let doc = Value::parse_document("date = '${day}'\nfloat = '${infinite}'\n").unwrap();
-        let context = Value::parse_document("day = 1979-05-27\ninfinite = inf\n").unwrap();
+        let doc = FORMAT
+            .parse_document("date = '${day}'\nfloat = '${infinite}'\n")
+            .unwrap();
+        let context = FORMAT
+            .parse_document("day = 1979-05-27\ninfinite = inf\n")
+            .unwrap();
         let out = interpolate_with_context(doc, &context, &StubEnv::default()).unwrap();
-        assert_eq!(out["date"], context["day"]);
-        assert_eq!(out["float"], context["infinite"]);
+        assert_eq!(
+            out.as_object().unwrap()["date"],
+            context.as_object().unwrap()["day"]
+        );
+        assert_eq!(
+            out.as_object().unwrap()["float"],
+            context.as_object().unwrap()["infinite"]
+        );
     }
     #[test]
     fn a_datetime_splices_as_its_source_spelling() {
         let doc = obj(vec![
-            ("d", Value::parse_inline("1979-05-27T07:32:00Z".into())),
+            ("d", FORMAT.parse_inline("1979-05-27T07:32:00Z".into())),
             ("stamp", s("at ${d}")),
             ("copy", s("${d}")),
         ]);
@@ -1158,7 +1209,7 @@ mod toml {
         // Whole-string keeps the *type*: a copied datetime, not a string.
         assert_eq!(
             map["copy"],
-            Value::parse_inline("1979-05-27T07:32:00Z".into())
+            FORMAT.parse_inline("1979-05-27T07:32:00Z".into())
         );
     }
     #[test]
@@ -1166,7 +1217,7 @@ mod toml {
         let doc = obj(vec![
             (
                 "dates",
-                Value::Array(vec![Value::parse_inline("1979-05-27T07:32:00Z".into())]),
+                Value::Array(vec![FORMAT.parse_inline("1979-05-27T07:32:00Z".into())]),
             ),
             ("stamp", s("${dates[0]}")),
         ]);
@@ -1174,7 +1225,7 @@ mod toml {
         let map = out.as_object().expect("an object");
         assert_eq!(
             map["stamp"],
-            Value::parse_inline("1979-05-27T07:32:00Z".into())
+            FORMAT.parse_inline("1979-05-27T07:32:00Z".into())
         );
     }
 }

@@ -3,8 +3,8 @@
 
 use std::rc::Rc;
 
-use crate::merge::{merge_fields, shallow_at};
-use crate::{ConfigFormat, ConfigObject, Seg};
+use crate::merge::shallow_at;
+use crate::{Seg, Value};
 
 use super::scan::{Piece, scan};
 use super::{Cycle, ENV, Resolver, child};
@@ -14,11 +14,11 @@ pub(super) type Id = usize;
 /// An object's fields in order, shared between caches.
 pub(super) type Fields = Rc<[(String, Id)]>;
 
-pub(super) enum Expr<V> {
+pub(super) enum Expr {
     /// A non-container layer value; strings are scanned on demand.
-    Value(V),
+    Value(Value),
     /// An environment value: never scanned, and its children stay terminal.
-    Terminal(V),
+    Terminal(Value),
     Object(Vec<(String, Id)>),
     Array(Vec<Id>),
     /// `over` merged onto `base` at this node's path.
@@ -28,8 +28,8 @@ pub(super) enum Expr<V> {
     },
 }
 
-pub(super) struct Node<V> {
-    pub expr: Expr<V>,
+pub(super) struct Node {
+    pub expr: Expr,
     /// Where the expression was written, or where a merge lands.
     pub path: Vec<Seg>,
 }
@@ -60,66 +60,31 @@ pub(super) fn whole_ref(text: &str) -> Option<&str> {
     }
 }
 
-impl ConfigObject<Id> for Vec<(String, Id)> {
-    fn new() -> Self {
-        Vec::new()
-    }
-    fn iter<'b>(&'b self) -> impl Iterator<Item = (&'b String, &'b Id)>
-    where
-        Id: 'b,
-    {
-        self.as_slice().iter().map(|(key, id)| (key, id))
-    }
-    fn get(&self, key: &str) -> Option<&Id> {
-        self.as_slice()
-            .iter()
-            .find(|(name, _)| name == key)
-            .map(|(_, id)| id)
-    }
-    fn get_mut(&mut self, key: &str) -> Option<&mut Id> {
-        self.as_mut_slice()
-            .iter_mut()
-            .find(|(name, _)| name == key)
-            .map(|(_, id)| id)
-    }
-    fn insert(&mut self, key: String, id: Id) {
-        if let Some(slot) = ConfigObject::get_mut(self, &key) {
-            *slot = id;
-        } else {
-            self.push((key, id));
-        }
-    }
-}
-
-impl<V: ConfigFormat> Resolver<'_, V> {
-    pub(super) fn add(&mut self, expr: Expr<V>, path: Vec<Seg>) -> Id {
+impl Resolver<'_> {
+    pub(super) fn add(&mut self, expr: Expr, path: Vec<Seg>) -> Id {
         self.nodes.push(Node { expr, path });
         self.nodes.len() - 1
     }
 
-    /// Converts a native value into nodes.
-    pub(super) fn build(&mut self, value: V, path: Vec<Seg>) -> Id {
-        let expr = if let Some(items) = value.as_array() {
-            let items = items.to_vec();
-            Expr::Array(
+    /// Converts a layer value into nodes.
+    pub(super) fn build(&mut self, value: Value, path: Vec<Seg>) -> Id {
+        let expr = match value {
+            Value::Array(items) => Expr::Array(
                 items
                     .into_iter()
                     .enumerate()
                     .map(|(index, item)| self.build(item, child(&path, Seg::Index(index))))
                     .collect(),
-            )
-        } else {
-            match value.into_object() {
-                Ok(map) => Expr::Object(
-                    map.into_iter()
-                        .map(|(key, value)| {
-                            let id = self.build(value, child(&path, Seg::Key(key.clone())));
-                            (key, id)
-                        })
-                        .collect(),
-                ),
-                Err(value) => Expr::Value(value),
-            }
+            ),
+            Value::Object(map) => Expr::Object(
+                map.into_iter()
+                    .map(|(key, value)| {
+                        let id = self.build(value, child(&path, Seg::Key(key.clone())));
+                        (key, id)
+                    })
+                    .collect(),
+            ),
+            value => Expr::Value(value),
         };
         self.add(expr, path)
     }
@@ -191,8 +156,9 @@ impl<V: ConfigFormat> Resolver<'_, V> {
             None => None,
             Some(body) => {
                 if let Some(name) = body.strip_prefix(ENV) {
-                    self.env_value(name, &body, &path)
-                        .map(|found| self.add(Expr::Terminal(V::parse_inline(found)), path.clone()))
+                    self.env_value(name, &body, &path).map(|found| {
+                        self.add(Expr::Terminal((self.parse_inline)(found)), path.clone())
+                    })
                 } else {
                     self.target(&body, &path)?
                 }
@@ -236,30 +202,28 @@ impl<V: ConfigFormat> Resolver<'_, V> {
         Ok(shape)
     }
 
-    fn terminal_shape(&mut self, id: Id, value: V) -> Shape {
+    fn terminal_shape(&mut self, id: Id, value: Value) -> Shape {
         let path = self.nodes[id].path.clone();
-        if let Some(items) = value.as_array() {
-            Shape::Array(
+        match value {
+            Value::Array(items) => Shape::Array(
                 items
-                    .iter()
+                    .into_iter()
                     .enumerate()
                     .map(|(index, item)| {
-                        let path = child(&path, Seg::Index(index));
-                        self.add(Expr::Terminal(item.clone()), path)
+                        self.add(Expr::Terminal(item), child(&path, Seg::Index(index)))
                     })
                     .collect(),
-            )
-        } else if let Some(map) = value.as_object() {
-            Shape::Object(
-                map.iter()
+            ),
+            Value::Object(map) => Shape::Object(
+                map.into_iter()
                     .map(|(key, item)| {
-                        let path = child(&path, Seg::Key(key.clone()));
-                        (key.clone(), self.add(Expr::Terminal(item.clone()), path))
+                        let id =
+                            self.add(Expr::Terminal(item), child(&path, Seg::Key(key.clone())));
+                        (key, id)
                     })
                     .collect(),
-            )
-        } else {
-            Shape::Scalar
+            ),
+            _ => Shape::Scalar,
         }
     }
 
@@ -283,11 +247,15 @@ impl<V: ConfigFormat> Resolver<'_, V> {
         over: Vec<(String, Id)>,
         dest: &[Seg],
     ) -> Vec<(String, Id)> {
-        let mut fields = base.to_vec();
-        merge_fields(&mut fields, over, |slot: &mut Id, value, key| {
-            *slot = self.combine(*slot, value, child(dest, Seg::Key(key)));
-        });
-        fields
+        let mut fields: indexmap::IndexMap<_, _> = base.iter().cloned().collect();
+        for (key, value) in over {
+            if let Some(slot) = fields.get_mut(&key) {
+                *slot = self.combine(*slot, value, child(dest, Seg::Key(key)));
+            } else {
+                fields.insert(key, value);
+            }
+        }
+        fields.into_iter().collect()
     }
 
     /// Output first by complete path, then context.
@@ -330,7 +298,10 @@ impl<V: ConfigFormat> Resolver<'_, V> {
     /// written locally; anything else is absent from the output.
     fn explicit(&self, id: Id, seg: &Seg) -> Option<Id> {
         match (&self.nodes[id].expr, seg) {
-            (Expr::Object(fields), Seg::Key(key)) => ConfigObject::get(fields, key).copied(),
+            (Expr::Object(fields), Seg::Key(key)) => fields
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, id)| *id),
             (&Expr::Merge { base, over }, _) => self.explicit(over, seg).or_else(|| {
                 matches!(self.nodes[over].expr, Expr::Object(_))
                     .then(|| self.explicit(base, seg))

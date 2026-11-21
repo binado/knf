@@ -1,6 +1,6 @@
 [package]
 name = "knf-core"
-description = "Load, merge and emit layered JSON and TOML configuration files"
+description = "Ordered configuration values, layered merging and interpolation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,11 +11,10 @@ repository.workspace = true
 name = "knf"
 
 [dependencies]
-anyhow.workspace = true
+indexmap = "2"
+toml_datetime = "1"
 fast-glob.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
-toml.workspace = true
 
 [dev-dependencies]
 proptest = "1"

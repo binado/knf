@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use anyhow::anyhow;
-use knf::{InterpError, LoadError, PathError, Problem};
+use knf::{InterpError, PathError, Problem};
+use knf_convert::LoadError;
 
 /// Adds CLI help to unwrapped `LoadError` or `InterpError` pipeline errors.
 ///

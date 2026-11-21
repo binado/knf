@@ -4,8 +4,6 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-use crate::Format;
-
 /// An invalid glob pattern.
 pub use crate::glob::{GlobError, GlobPattern};
 
@@ -13,7 +11,6 @@ pub use crate::glob::{GlobError, GlobPattern};
 #[derive(Debug, Clone)]
 pub struct AccumulateTarget {
     path: PathBuf,
-    format: Format,
 }
 
 /// Why a target cannot be used for discovery.
@@ -43,8 +40,18 @@ impl TryFrom<PathBuf> for AccumulateTarget {
             .components()
             .filter(|component| !matches!(component, Component::CurDir))
             .collect();
-        let format = Format::from_path(&path).ok_or(AccumulateTargetError::UnknownExtension)?;
-        Ok(Self { path, format })
+        if !path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| {
+                ["json", "toml"]
+                    .iter()
+                    .any(|name| ext.eq_ignore_ascii_case(name))
+            })
+        {
+            return Err(AccumulateTargetError::UnknownExtension);
+        }
+        Ok(Self { path })
     }
 }
 
@@ -137,7 +144,11 @@ pub fn accumulate(
             for entry in entries {
                 let entry = entry.map_err(listing_error)?;
                 let path = entry.path();
-                if path == target_path || Format::from_path(&path) != Some(target.format) {
+                if path == target_path
+                    || !path.extension().is_some_and(|ext| {
+                        ext.eq_ignore_ascii_case(target.path.extension().unwrap())
+                    })
+                {
                     continue;
                 }
                 let metadata = fs::metadata(&path).map_err(|source| AccumulateError::Inspect {

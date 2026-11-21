@@ -1,7 +1,6 @@
 //! Python bindings for `knf-core`, published as `pyknf`. The wheel's `knf`
 //! command runs the same `main_from` as `knf-cli`.
 
-use anyhow::Context;
 use std::io;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
@@ -13,9 +12,10 @@ mod cli_bin;
 use knf::fs::{AccumulateError, AccumulateTarget};
 use knf::glob::{GlobError, GlobPattern, KeyGlobError, KeyGlobPattern};
 use knf::{
-    ConfigFormat, Format, InterpError, InterpOptions, LoadError, MergeOptions, ProcessEnv, Seg,
-    merge, merge_interpolate, render_path, resolve_format,
+    InterpError, InterpolationOptions, MergeOptions, ProcessEnv, Seg, Value, merge,
+    merge_with_interpolation, render_path,
 };
+use knf_convert::{LoadError, resolve_format};
 use pyo3::PyTypeInfo;
 use pyo3::create_exception;
 use pyo3::exceptions::{
@@ -140,12 +140,9 @@ fn load<'py>(
         .transpose()
         .map_err(|err: KeyGlobError| PyValueError::new_err(err.to_string()))?;
     let opts = MergeOptions { shallow };
-    let interp_options = InterpOptions {
-        shallow: opts.shallow.clone(),
-    };
     let merged = py
         .detach(move || {
-            let mut inputs = files.clone();
+            let mut inputs = files;
             inputs.extend(context.iter().cloned());
             let format = resolve_format(&inputs).map_err(|err| {
                 Failure::File(
@@ -153,63 +150,35 @@ fn load<'py>(
                     err.into(),
                 )
             })?;
-            match format {
-                Format::Json => load_native(
-                    &files,
-                    context.as_deref(),
-                    interpolate,
+            let mut layers = inputs
+                .iter()
+                .map(|path| {
+                    format
+                        .load(path)
+                        .map_err(|err| Failure::File(path.clone(), err))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let context = context.map(|_| layers.pop().expect("context loaded last"));
+            if interpolate {
+                merge_with_interpolation(
+                    layers,
                     &opts,
-                    &interp_options,
+                    &InterpolationOptions {
+                        context: context.as_ref(),
+                        env: &ProcessEnv,
+                        parse_inline: &|text| format.parse_inline(text),
+                    },
                 )
-                .map(Document::Json),
-                Format::Toml => load_native(
-                    &files,
-                    context.as_deref(),
-                    interpolate,
-                    &opts,
-                    &interp_options,
-                )
-                .map(Document::Toml),
+                .map_err(Failure::Interpolate)
+            } else {
+                Ok(merge(layers, &opts))
             }
         })
         .map_err(|failure| match failure {
             Failure::File(path, err) => file_error(py, &path, err),
             Failure::Interpolate(err) => InterpolationError::new_err(err.to_string()),
         })?;
-    match merged {
-        Document::Json(value) => json_to_py(py, value),
-        Document::Toml(value) => toml_to_py(py, value, &mut Vec::new()),
-    }
-}
-
-enum Document {
-    Json(serde_json::Value),
-    Toml(toml::Value),
-}
-
-fn load_native<V: ConfigFormat>(
-    files: &[PathBuf],
-    context_path: Option<&Path>,
-    interpolate: bool,
-    opts: &MergeOptions,
-    interp_options: &InterpOptions,
-) -> Result<V, Failure> {
-    let mut layers = Vec::with_capacity(files.len() + usize::from(context_path.is_some()));
-    for path in files.iter().map(PathBuf::as_path).chain(context_path) {
-        let read = || -> anyhow::Result<V> {
-            let text = std::fs::read_to_string(path)
-                .with_context(|| format!("reading `{}`", path.display()))?;
-            knf::format::parse(&text, path)
-        };
-        layers.push(read().map_err(|err| Failure::File(path.to_path_buf(), err))?);
-    }
-    let context = context_path.map(|_| layers.pop().expect("context was loaded last"));
-    if interpolate {
-        merge_interpolate(layers, context.as_ref(), &ProcessEnv, interp_options)
-            .map_err(Failure::Interpolate)
-    } else {
-        Ok(merge(layers, opts))
-    }
+    value_to_py(py, merged, &mut Vec::new())
 }
 
 enum Failure {
@@ -306,51 +275,15 @@ fn _knf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-// --- Native values → Python -----------------------------------------------
-
-fn json_to_py(py: Python<'_>, value: serde_json::Value) -> PyResult<Bound<'_, PyAny>> {
-    use serde_json::Value;
-    Ok(match value {
-        Value::Null => py.None().into_bound(py),
-        Value::Bool(b) => PyBool::new(py, b).to_owned().into_any(),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                i.into_pyobject(py)?.into_any()
-            } else if let Some(u) = n.as_u64() {
-                u.into_pyobject(py)?.into_any()
-            } else {
-                n.as_f64()
-                    .expect("a native JSON number is i64/u64/f64")
-                    .into_pyobject(py)?
-                    .into_any()
-            }
-        }
-        Value::String(s) => PyString::new(py, &s).into_any(),
-        Value::Array(items) => {
-            let list = PyList::empty(py);
-            for item in items {
-                list.append(json_to_py(py, item)?)?;
-            }
-            list.into_any()
-        }
-        Value::Object(map) => {
-            let dict = PyDict::new(py);
-            for (key, value) in map {
-                dict.set_item(key, json_to_py(py, value)?)?;
-            }
-            dict.into_any()
-        }
-    })
-}
-
-fn toml_to_py<'py>(
+fn value_to_py<'py>(
     py: Python<'py>,
-    value: toml::Value,
+    value: Value,
     path: &mut Vec<Seg>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    use toml::Value;
     Ok(match value {
-        Value::Boolean(b) => PyBool::new(py, b).to_owned().into_any(),
+        Value::Null => py.None().into_bound(py),
+        Value::Unsigned(u) => u.into_pyobject(py)?.into_any(),
+        Value::Bool(b) => PyBool::new(py, b).to_owned().into_any(),
         Value::Integer(i) => i.into_pyobject(py)?.into_any(),
         Value::Float(f) => f.into_pyobject(py)?.into_any(),
         Value::String(s) => PyString::new(py, &s).into_any(),
@@ -369,16 +302,16 @@ fn toml_to_py<'py>(
             let list = PyList::empty(py);
             for (index, item) in items.into_iter().enumerate() {
                 path.push(Seg::Index(index));
-                list.append(toml_to_py(py, item, path)?)?;
+                list.append(value_to_py(py, item, path)?)?;
                 path.pop();
             }
             list.into_any()
         }
-        Value::Table(map) => {
+        Value::Object(map) => {
             let dict = PyDict::new(py);
             for (key, value) in map {
                 path.push(Seg::Key(key.clone()));
-                dict.set_item(key, toml_to_py(py, value, path)?)?;
+                dict.set_item(key, value_to_py(py, value, path)?)?;
                 path.pop();
             }
             dict.into_any()

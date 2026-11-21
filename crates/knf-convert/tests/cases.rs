@@ -1,7 +1,8 @@
 //! Table-driven merge tests. Adding a case is one line in `CASES`.
 
+use knf::Value;
 use knf::{MergeOptions, merge};
-use serde_json::Value;
+use knf_convert::InputFormat;
 
 struct Case {
     name: &'static str,
@@ -146,37 +147,5 @@ fn merge_into_matches_merge() {
 }
 
 fn ir(s: &str) -> Value {
-    serde_json::from_str(s).unwrap_or_else(|e| panic!("bad JSON literal `{s}`: {e}"))
-}
-
-/// Exercise the same structural cases as JSON, excluding JSON-only null values.
-#[test]
-fn toml_table_and_merge_into() {
-    for case in CASES {
-        let fixtures: Vec<Value> = case.layers.iter().map(|text| ir(text)).collect();
-        if fixtures.iter().any(has_null) {
-            continue;
-        }
-        let layers: Vec<toml::Value> = fixtures
-            .into_iter()
-            .map(|value| toml::Value::try_from(value).unwrap())
-            .collect();
-        let opts = options(case);
-        let expected = toml::Value::try_from(ir(case.expect)).unwrap();
-        assert_eq!(merge(layers.clone(), &opts), expected, "{}", case.name);
-        let mut acc = toml::Value::Table(Default::default());
-        for layer in layers {
-            knf::merge_into(&mut acc, layer, &opts);
-        }
-        assert_eq!(acc, expected, "{}", case.name);
-    }
-}
-
-fn has_null(value: &Value) -> bool {
-    match value {
-        Value::Null => true,
-        Value::Array(items) => items.iter().any(has_null),
-        Value::Object(map) => map.values().any(has_null),
-        _ => false,
-    }
+    InputFormat::Json.parse_document(s).unwrap()
 }

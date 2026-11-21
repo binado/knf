@@ -1,6 +1,15 @@
-//! Convert native JSON and TOML values after configuration resolution.
+//! Load ordered configuration layers and emit resolved [`Value`]s.
+//!
+//! # Example
+//!
+//! With `base.toml` and `prod.toml` in the working directory:
+//! ```no_run
+#![doc = include_str!("../examples/toml_to_json.rs")]
+//! ```
 
-use knf::{Seg, render_path};
+mod input;
+pub use input::{InputFormat, Layers, LoadError, load_layers, resolve_format};
+use knf::{Seg, Value, render_path};
 use serde_json::{Number, Value as Json};
 use toml::Value as Toml;
 
@@ -43,39 +52,113 @@ pub struct Converted<T> {
     pub lossy: bool,
 }
 
-/// Converts TOML to JSON. Under [`Policy::Lossy`], dates, times and datetimes
-/// become strings in TOML's standard notation, and non-finite floats become
-/// `"nan"`, `"inf"` or `"-inf"`. [`Policy::Strict`] rejects those mappings.
-pub fn toml_to_json(value: Toml, policy: Policy) -> Result<Converted<Json>> {
-    let mut converter = Converter::new(policy);
-    let value = converter.convert_to_json(value)?;
-    Ok(converter.finish(value))
+/// Output encoding and conversion rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    Json,
+    Toml,
+    #[cfg(feature = "yaml")]
+    Yaml,
+}
+impl From<InputFormat> for OutputFormat {
+    fn from(format: InputFormat) -> Self {
+        match format {
+            InputFormat::Json => Self::Json,
+            InputFormat::Toml => Self::Toml,
+        }
+    }
 }
 
-/// Prepares TOML for YAML output. Under [`Policy::Lossy`], dates, times and
-/// datetimes become strings in TOML's standard notation. Every other value,
-/// including non-finite floats, is kept, and the result contains no
-/// datetimes. [`Policy::Strict`] rejects the date mapping.
-pub fn toml_to_yaml_ready(value: Toml, policy: Policy) -> Result<Converted<Toml>> {
-    let mut converter = Converter::new(policy);
-    let value = converter.stringify_datetimes(value)?;
-    Ok(converter.finish(value))
+impl OutputFormat {
+    /// Encode a value with a trailing newline, reporting any lossy mappings.
+    ///
+    /// With [`Policy::Lossy`], JSON and YAML stringify datetimes. JSON also
+    /// stringifies non-finite floats. TOML omits null fields and converts
+    /// oversized unsigned integers to floats. A null array entry or root
+    /// cannot be emitted as TOML under either policy.
+    pub fn emit(
+        self,
+        value: &Value,
+        policy: Policy,
+        pretty: bool,
+    ) -> anyhow::Result<Converted<String>> {
+        let mut converter = Converter::new(policy);
+        let mut text = match self {
+            Self::Json => {
+                let native = converter.convert_to_json(value)?;
+                if pretty {
+                    serde_json::to_string_pretty(&native)?
+                } else {
+                    serde_json::to_string(&native)?
+                }
+            }
+            Self::Toml => {
+                let native = converter.convert_to_toml(value)?;
+                if pretty {
+                    toml::to_string_pretty(&native)?
+                } else {
+                    toml::to_string(&native)?
+                }
+            }
+            #[cfg(feature = "yaml")]
+            Self::Yaml => {
+                use anyhow::Context;
+                serde_saphyr::to_string(&converter.convert_to_yaml(value)?)
+                    .context("emitting YAML")?
+            }
+        };
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        Ok(converter.finish(text))
+    }
 }
 
-/// Serializes a JSON value or a YAML-ready TOML value as YAML.
+/// Preserve the native JSON value and normalize integers that fit in i64.
+pub fn from_json(value: Json) -> Value {
+    match value {
+        Json::Null => Value::Null,
+        Json::Bool(b) => Value::Bool(b),
+        Json::String(s) => Value::String(s),
+        Json::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Integer(i)
+            } else if let Some(u) = n.as_u64() {
+                Value::Unsigned(u)
+            } else {
+                Value::Float(n.as_f64().expect("JSON number"))
+            }
+        }
+        Json::Array(a) => Value::Array(a.into_iter().map(from_json).collect()),
+        Json::Object(o) => Value::Object(o.into_iter().map(|(k, v)| (k, from_json(v))).collect()),
+    }
+}
+
+/// Preserve the native TOML value, including datetimes and non-finite floats.
+pub fn from_toml(value: Toml) -> Value {
+    match value {
+        Toml::Boolean(b) => Value::Bool(b),
+        Toml::Integer(i) => Value::Integer(i),
+        Toml::Float(f) => Value::Float(f),
+        Toml::String(s) => Value::String(s),
+        Toml::Datetime(d) => Value::Datetime(d),
+        Toml::Array(a) => Value::Array(a.into_iter().map(from_toml).collect()),
+        Toml::Table(o) => Value::Object(o.into_iter().map(|(k, v)| (k, from_toml(v))).collect()),
+    }
+}
+
 #[cfg(feature = "yaml")]
-pub fn emit_yaml(value: &impl serde::Serialize) -> anyhow::Result<String> {
-    use anyhow::Context;
-    serde_saphyr::to_string(value).context("emitting YAML")
-}
-
-/// Converts JSON to TOML. Under [`Policy::Lossy`], null object fields are
-/// omitted and integers above `i64::MAX` become floats. Strict conversion
-/// rejects those mappings. Null array entries and root null always fail.
-pub fn json_to_toml(value: Json, policy: Policy) -> Result<Converted<Toml>> {
-    let mut converter = Converter::new(policy);
-    let value = converter.convert_to_toml(value)?;
-    Ok(converter.finish(value))
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum Yaml<'a> {
+    Null,
+    Bool(bool),
+    Integer(i64),
+    Unsigned(u64),
+    Float(f64),
+    String(std::borrow::Cow<'a, str>),
+    Array(Vec<Yaml<'a>>),
+    Object(indexmap::IndexMap<&'a str, Yaml<'a>>),
 }
 
 struct Converter {
@@ -124,41 +207,46 @@ impl Converter {
         result
     }
 
-    fn stringify_datetimes(&mut self, value: Toml) -> Result<Toml> {
+    #[cfg(feature = "yaml")]
+    fn convert_to_yaml<'a>(&mut self, value: &'a Value) -> Result<Yaml<'a>> {
         Ok(match value {
-            Toml::Datetime(value) => {
+            Value::Null => Yaml::Null,
+            Value::Bool(b) => Yaml::Bool(*b),
+            Value::Integer(i) => Yaml::Integer(*i),
+            Value::Unsigned(u) => Yaml::Unsigned(*u),
+            Value::Float(f) => Yaml::Float(*f),
+            Value::String(s) => Yaml::String(s.as_str().into()),
+            Value::Datetime(dt) => {
                 self.allow_loss("YAML output writes TOML dates, times and datetimes as strings")?;
-                Toml::String(value.to_string())
+                Yaml::String(dt.to_string().into())
             }
-            Toml::Array(values) => Toml::Array(
-                values
-                    .into_iter()
+            Value::Array(items) => Yaml::Array(
+                items
+                    .iter()
                     .enumerate()
-                    .map(|(index, value)| {
-                        self.at(Seg::Index(index), |this| this.stringify_datetimes(value))
+                    .map(|(i, v)| self.at(Seg::Index(i), |this| this.convert_to_yaml(v)))
+                    .collect::<Result<_>>()?,
+            ),
+            Value::Object(map) => Yaml::Object(
+                map.iter()
+                    .map(|(k, v)| {
+                        Ok((
+                            k.as_str(),
+                            self.at(Seg::Key(k.clone()), |this| this.convert_to_yaml(v))?,
+                        ))
                     })
                     .collect::<Result<_>>()?,
             ),
-            Toml::Table(values) => Toml::Table(
-                values
-                    .into_iter()
-                    .map(|(key, value)| {
-                        let value = self.at(Seg::Key(key.clone()), |this| {
-                            this.stringify_datetimes(value)
-                        })?;
-                        Ok((key, value))
-                    })
-                    .collect::<Result<_>>()?,
-            ),
-            other => other,
         })
     }
 
-    fn convert_to_json(&mut self, value: Toml) -> Result<Json> {
+    fn convert_to_json(&mut self, value: &Value) -> Result<Json> {
         Ok(match value {
-            Toml::Boolean(value) => Json::Bool(value),
-            Toml::Integer(value) => Json::Number(value.into()),
-            Toml::Float(value) => match Number::from_f64(value) {
+            Value::Null => Json::Null,
+            Value::Unsigned(value) => Json::Number((*value).into()),
+            Value::Bool(value) => Json::Bool(*value),
+            Value::Integer(value) => Json::Number((*value).into()),
+            Value::Float(value) => match Number::from_f64(*value) {
                 Some(number) => Json::Number(number),
                 None => {
                     self.allow_loss("the JSON data model cannot represent non-finite floats")?;
@@ -172,72 +260,70 @@ impl Converter {
                     Json::String(text.into())
                 }
             },
-            Toml::String(value) => Json::String(value),
-            Toml::Datetime(value) => {
+            Value::String(value) => Json::String(value.clone()),
+            Value::Datetime(value) => {
                 self.allow_loss(
                     "the JSON data model cannot represent TOML dates, times or datetimes",
                 )?;
                 Json::String(value.to_string())
             }
-            Toml::Array(values) => Json::Array(
+            Value::Array(values) => Json::Array(
                 values
-                    .into_iter()
+                    .iter()
                     .enumerate()
                     .map(|(index, value)| {
                         self.at(Seg::Index(index), |this| this.convert_to_json(value))
                     })
                     .collect::<Result<_>>()?,
             ),
-            Toml::Table(values) => Json::Object(
+            Value::Object(values) => Json::Object(
                 values
-                    .into_iter()
+                    .iter()
                     .map(|(key, value)| {
                         let value =
                             self.at(Seg::Key(key.clone()), |this| this.convert_to_json(value))?;
-                        Ok((key, value))
+                        Ok((key.clone(), value))
                     })
                     .collect::<Result<_>>()?,
             ),
         })
     }
 
-    fn convert_to_toml(&mut self, value: Json) -> Result<Toml> {
+    fn convert_to_toml(&mut self, value: &Value) -> Result<Toml> {
         Ok(match value {
-            Json::Null => return Err(self.error("TOML cannot represent null")),
-            Json::Bool(value) => Toml::Boolean(value),
-            Json::Number(value) => match value.as_i64() {
-                Some(integer) => Toml::Integer(integer),
-                None => {
-                    if !value.is_f64() {
-                        self.allow_loss("integer exceeds TOML's signed 64-bit range")?;
-                    }
-                    match value.as_f64() {
-                        Some(float) => Toml::Float(float),
-                        None => return Err(self.error("number cannot be represented in TOML")),
-                    }
+            Value::Null => return Err(self.error("TOML cannot represent null")),
+            Value::Bool(value) => Toml::Boolean(*value),
+            Value::Integer(value) => Toml::Integer(*value),
+            Value::Unsigned(value) => match i64::try_from(*value) {
+                Ok(i) => Toml::Integer(i),
+                Err(_) => {
+                    self.allow_loss("integer exceeds TOML's signed 64-bit range")?;
+                    Toml::Float(*value as f64)
                 }
             },
-            Json::String(value) => Toml::String(value),
-            Json::Array(values) => Toml::Array(
+            Value::Float(value) => Toml::Float(*value),
+            Value::Datetime(value) => Toml::Datetime(*value),
+            Value::String(value) => Toml::String(value.clone()),
+            Value::Array(values) => Toml::Array(
                 values
-                    .into_iter()
+                    .iter()
                     .enumerate()
                     .map(|(index, value)| {
                         self.at(Seg::Index(index), |this| this.convert_to_toml(value))
                     })
                     .collect::<Result<_>>()?,
             ),
-            Json::Object(values) => {
+            Value::Object(values) => {
                 let mut table = toml::Table::new();
                 for (key, value) in values {
-                    if value.is_null() {
-                        self.at(Seg::Key(key), |this| {
+                    if matches!(value, Value::Null) {
+                        self.at(Seg::Key(key.clone()), |this| {
                             this.allow_loss("TOML cannot represent null object fields")
                         })?;
                     } else {
                         let value =
                             self.at(Seg::Key(key.clone()), |this| this.convert_to_toml(value))?;
-                        table.insert(key, value);
+                        table.insert(key.clone(), value);
                     }
                 }
                 Toml::Table(table)
@@ -255,6 +341,16 @@ mod tests {
         toml::from_str::<toml::Table>(text).unwrap().into()
     }
 
+    fn json_to_toml(value: Json, policy: Policy) -> Result<Converted<Toml>> {
+        let mut c = Converter::new(policy);
+        let native = c.convert_to_toml(&from_json(value))?;
+        Ok(c.finish(native))
+    }
+    fn toml_to_json(value: Toml, policy: Policy) -> Result<Converted<Json>> {
+        let mut c = Converter::new(policy);
+        let native = c.convert_to_json(&from_toml(value))?;
+        Ok(c.finish(native))
+    }
     fn err(result: Result<impl std::fmt::Debug>) -> String {
         result.unwrap_err().to_string()
     }
@@ -276,34 +372,6 @@ mod tests {
                 "offset": "1979-05-27T07:32:00-07:00",
                 "floats": ["nan", "inf", "-inf", "nan"]
             }})
-        );
-    }
-
-    #[test]
-    fn yaml_ready_toml_keeps_floats_and_stringifies_datetimes() {
-        let converted = toml_to_yaml_ready(
-            toml("a = nan\nb = [inf, 1979-05-27]\n[t]\nc = 07:32:00"),
-            Policy::Lossy,
-        )
-        .unwrap();
-        assert!(converted.lossy);
-        let table = converted.value.as_table().unwrap();
-        assert!(table["a"].as_float().unwrap().is_nan());
-        assert_eq!(table["b"][0].as_float(), Some(f64::INFINITY));
-        assert_eq!(table["b"][1].as_str(), Some("1979-05-27"));
-        assert_eq!(table["t"]["c"].as_str(), Some("07:32:00"));
-    }
-
-    #[test]
-    fn yaml_ready_toml_without_datetimes_is_lossless_and_strict_names_the_key() {
-        let converted = toml_to_yaml_ready(toml("a = nan"), Policy::Strict).unwrap();
-        assert!(!converted.lossy);
-        assert_eq!(
-            err(toml_to_yaml_ready(
-                toml("[n]\nd = 1979-05-27"),
-                Policy::Strict
-            )),
-            "n.d: YAML output writes TOML dates, times and datetimes as strings"
         );
     }
 
