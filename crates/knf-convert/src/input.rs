@@ -163,14 +163,18 @@ pub fn resolve_format<P: AsRef<Path>>(
     selected.or(fallback).ok_or(LoadError::NoInputs)
 }
 
-/// Infer one format for `files` and `context`, then read them in order.
-///
-/// `fallback` is the format when there are no inputs at all.
-pub fn load_layers<P: AsRef<Path>>(
-    files: &[P],
-    context: Option<&Path>,
-    fallback: Option<InputFormat>,
-) -> Result<Layers, LoadError> {
+/// What [`load_layers`] reads besides the layers themselves.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LoadOptions<'a> {
+    /// Interpolation context file, read in the same format as the layers.
+    pub context: Option<&'a Path>,
+    /// The format when there are no inputs at all.
+    pub fallback: Option<InputFormat>,
+}
+
+/// Infer one format for `files` and `options.context`, then read them in order.
+pub fn load_layers<P: AsRef<Path>>(files: &[P], options: LoadOptions) -> Result<Layers, LoadError> {
+    let LoadOptions { context, fallback } = options;
     let paths = files.iter().map(AsRef::as_ref).chain(context);
     let format = resolve_format(paths, fallback)?;
     let load = |path: &Path| {

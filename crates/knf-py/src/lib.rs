@@ -11,7 +11,7 @@ mod cli_bin;
 
 use knf::glob::{GlobError, GlobPattern, KeyGlobError, KeyGlobPattern};
 use knf::{InterpError, InterpolationOptions, MergeOptions, Seg, Value, merge_layers, render_path};
-use knf_convert::{InputFormat, Layers, LoadError, ReadError, load_layers};
+use knf_convert::{InputFormat, Layers, LoadError, LoadOptions, ReadError, load_layers};
 use pyo3::PyTypeInfo;
 use pyo3::create_exception;
 use pyo3::exceptions::{
@@ -78,8 +78,14 @@ fn load<'py>(
                 format,
                 values,
                 context,
-            } = load_layers(&files, context.as_deref(), Some(InputFormat::Json))
-                .map_err(Failure::Load)?;
+            } = load_layers(
+                &files,
+                LoadOptions {
+                    context: context.as_deref(),
+                    fallback: Some(InputFormat::Json),
+                },
+            )
+            .map_err(Failure::Load)?;
             let parse_inline = |text| format.parse_inline(text);
             let interpolation = interpolate
                 .then(|| InterpolationOptions::new(&parse_inline).with_context(context.as_ref()));

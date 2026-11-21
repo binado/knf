@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
 use knf::{InterpolationOptions, MergeOptions, merge_layers};
-use knf_convert::{Layers, Layout, Policy, load_layers};
+use knf_convert::{Layers, Layout, LoadOptions, Policy, load_layers};
 
 use cli::{Cli, ExecFormat, OutputFormat};
 use explain::{explain_load, name_the_inline_layer_flag};
@@ -100,8 +100,14 @@ fn run_pipeline(
         format,
         mut values,
         context,
-    } = load_layers(files, cli.with.as_deref(), cli.to.map(Into::into))
-        .map_err(|err| explain_load(err, cli.with.as_deref()))?;
+    } = load_layers(
+        files,
+        LoadOptions {
+            context: cli.with.as_deref(),
+            fallback: cli.to.map(Into::into),
+        },
+    )
+    .map_err(|err| explain_load(err, cli.with.as_deref()))?;
     let parse_inline = |text| format.parse_inline(text);
     for leaf in &cli.set {
         values.push(

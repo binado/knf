@@ -9,7 +9,7 @@
 
 mod input;
 pub use input::{
-    InputFormat, Layers, LoadError, ParseError, ReadError, load_layers, resolve_format,
+    InputFormat, Layers, LoadError, LoadOptions, ParseError, ReadError, load_layers, resolve_format,
 };
 use knf::{Seg, Value, render_path};
 use serde::ser::{self, Serialize, SerializeMap, SerializeSeq, Serializer};
