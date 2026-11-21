@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/binado/knf/compare/v0.8.1...v0.9.0) - 2026-11-21
+
+### Added
+
+- [**breaking**] unify configuration layers on knf::Value ([#82](https://github.com/binado/knf/pull/82))
+- *(cli)* add YAML output ([#78](https://github.com/binado/knf/pull/78))
+- run commands with resolved config and add conversion and Python helpers ([#69](https://github.com/binado/knf/pull/69))
+- *(python)* expose TOML serialization helpers ([#63](https://github.com/binado/knf/pull/63))
+- [**breaking**] remove --strict and make native merge infallible ([#58](https://github.com/binado/knf/pull/58))
+- [**breaking**] merge interpolation references as the values they name ([#57](https://github.com/binado/knf/pull/57))
+- add configurable object inheritance ([#55](https://github.com/binado/knf/pull/55))
+- add interpolation context sources ([#51](https://github.com/binado/knf/pull/51))
+- *(cli)* replace --set with -c and add -i alias ([#49](https://github.com/binado/knf/pull/49))
+- *(python)* expose shallow key-path globs in load ([#48](https://github.com/binado/knf/pull/48))
+- [**breaking**] select shallow replacements with quoted path globs ([#46](https://github.com/binado/knf/pull/46))
+- [**breaking**] keep JSON and TOML pipelines native ([#45](https://github.com/binado/knf/pull/45))
+- expose shared file discovery and filtering APIs ([#42](https://github.com/binado/knf/pull/42))
+- *(cli)* add glob filters for input files ([#40](https://github.com/binado/knf/pull/40))
+- add cascading configuration file discovery ([#34](https://github.com/binado/knf/pull/34))
+- expose opt-in interpolation in pyknf ([#32](https://github.com/binado/knf/pull/32))
+
+### Fixed
+
+- support YAML output in the Python API ([#79](https://github.com/binado/knf/pull/79))
+
+### Other
+
+- *(cli)* [**breaking**] select input format by file extension only ([#76](https://github.com/binado/knf/pull/76))
+- [**breaking**] remove merge-key object inheritance ([#74](https://github.com/binado/knf/pull/74))
+- split AGENTS.md and clean up invariant-enforcing comments ([#72](https://github.com/binado/knf/pull/72))
+- *(python)* move Python sources and pyproject to repo root ([#71](https://github.com/binado/knf/pull/71))
+- condense README, --help text and code comments ([#50](https://github.com/binado/knf/pull/50))
+- rename Python API to load ([#35](https://github.com/binado/knf/pull/35))
+- publish only the pyknf wheel ([#30](https://github.com/binado/knf/pull/30))
+
 ## [0.8.1](https://github.com/binado/knf/compare/knf-cli-v0.8.0...knf-cli-v0.8.1) - 2026-11-20
 
 ### Fixed

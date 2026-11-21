@@ -4,7 +4,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.8.1"
+version = "0.9.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/binado/knf"
@@ -26,8 +26,8 @@ tempfile = "3"
 ctrlc = "3"
 
 # Version is required so cargo publish can rewrite path deps for crates.io.
-knf-core = { path = "crates/knf-core", version = "0.8.1" }
-knf-convert = { path = "crates/knf-convert", version = "0.8.1" }
+knf-core = { path = "crates/knf-core", version = "0.9.0" }
+knf-convert = { path = "crates/knf-convert", version = "0.9.0" }
 
 [profile.release]
 lto = "thin"
