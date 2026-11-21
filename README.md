@@ -21,7 +21,7 @@ cargo install knf-cli --features yaml  # with `--to yaml` (Rust 1.89+)
 cargo add knf-core knf-convert         # Rust libraries
 ```
 
-Rust: `knf_convert::load_layers`, then `knf::merge_with_interpolation`, then
+Rust: `knf_convert::load_layers`, then `knf::merge_layers`, then
 `OutputFormat::emit`; see the [example](crates/knf-convert/examples/toml_to_json.rs).
 
 ## Usage

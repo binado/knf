@@ -1,7 +1,7 @@
 //! Layered configuration merge.
 
 use crate::glob::KeyGlobPattern;
-use crate::{Seg, Value};
+use crate::{InterpError, InterpolationOptions, Seg, Value, merge_with_interpolation};
 
 /// Matches `path` or any ancestor against `glob`; paths containing an index never match.
 pub(crate) fn shallow_at(glob: Option<&KeyGlobPattern>, path: &[Seg]) -> bool {
@@ -66,6 +66,21 @@ pub fn merge(layers: impl IntoIterator<Item = Value>, opts: &MergeOptions) -> Va
     acc
 }
 
+/// Left-folds layers into one document, resolving references when
+/// `interpolation` is given.
+///
+/// `None` is [`merge`] and cannot fail; `Some` is [`merge_with_interpolation`].
+pub fn merge_layers(
+    layers: impl IntoIterator<Item = Value>,
+    merge_options: &MergeOptions,
+    interpolation: Option<InterpolationOptions>,
+) -> Result<Value, InterpError> {
+    match interpolation {
+        Some(options) => merge_with_interpolation(layers, merge_options, &options),
+        None => Ok(merge(layers, merge_options)),
+    }
+}
+
 fn merge_at(base: &mut Value, over: Value, opts: &MergeOptions, path: &mut Vec<String>) {
     match (base, over) {
         (Value::Object(base), Value::Object(over)) => {
@@ -88,5 +103,37 @@ fn merge_at(base: &mut Value, over: Value, opts: &MergeOptions, path: &mut Vec<S
             }
         }
         (slot, value) => *slot = value,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn object(entries: &[(&str, &str)]) -> Value {
+        Value::Object(
+            entries
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), Value::String((*value).to_owned())))
+                .collect(),
+        )
+    }
+
+    fn layers() -> [Value; 2] {
+        [object(&[("a", "1")]), object(&[("b", "${a}")])]
+    }
+
+    #[test]
+    fn merge_layers_resolves_references_only_with_interpolation() {
+        let opts = MergeOptions::default();
+        assert_eq!(
+            merge_layers(layers(), &opts, None).unwrap(),
+            object(&[("a", "1"), ("b", "${a}")])
+        );
+        let interpolation = InterpolationOptions::new(&Value::String);
+        assert_eq!(
+            merge_layers(layers(), &opts, Some(interpolation)).unwrap(),
+            object(&[("a", "1"), ("b", "1")])
+        );
     }
 }

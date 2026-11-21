@@ -10,7 +10,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
-use knf::{InterpolationOptions, MergeOptions, merge, merge_with_interpolation};
+use knf::{InterpolationOptions, MergeOptions, merge_layers};
 use knf_convert::{Layers, Layout, Policy, load_layers};
 
 use cli::{Cli, ExecFormat, OutputFormat};
@@ -111,16 +111,11 @@ fn run_pipeline(
                 .map_err(name_the_inline_layer_flag)?,
         );
     }
-    let merged = if cli.interpolate {
-        merge_with_interpolation(
-            values,
-            opts,
-            &InterpolationOptions::new(&parse_inline).with_context(context.as_ref()),
-        )
-        .map_err(|err| explain::explain_interp(err, context.is_some()))?
-    } else {
-        merge(values, opts)
-    };
+    let interpolation = cli
+        .interpolate
+        .then(|| InterpolationOptions::new(&parse_inline).with_context(context.as_ref()));
+    let merged = merge_layers(values, opts, interpolation)
+        .map_err(|err| explain::explain_interp(err, context.is_some()))?;
     let output = cli.to.unwrap_or_else(|| format.into());
     let target = knf_convert::OutputFormat::from(output);
     let converted = target.emit(

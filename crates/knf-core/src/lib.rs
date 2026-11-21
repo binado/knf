@@ -15,7 +15,7 @@ pub use interp::{
     Cycle, Env, InterpError, InterpolationOptions, Problem, Syntax, interpolate,
     merge_with_interpolation,
 };
-pub use merge::{MergeOptions, merge, merge_into};
+pub use merge::{MergeOptions, merge, merge_into, merge_layers};
 pub use path::{PathError, RefPath, Seg, render_path};
 pub use toml_datetime::Datetime;
 pub use value::{Unsigned, Value};

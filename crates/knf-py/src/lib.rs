@@ -10,10 +10,7 @@ use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 mod cli_bin;
 
 use knf::glob::{GlobError, GlobPattern, KeyGlobError, KeyGlobPattern};
-use knf::{
-    InterpError, InterpolationOptions, MergeOptions, Seg, Value, merge, merge_with_interpolation,
-    render_path,
-};
+use knf::{InterpError, InterpolationOptions, MergeOptions, Seg, Value, merge_layers, render_path};
 use knf_convert::{InputFormat, Layers, LoadError, ReadError, load_layers};
 use pyo3::PyTypeInfo;
 use pyo3::create_exception;
@@ -83,17 +80,10 @@ fn load<'py>(
                 context,
             } = load_layers(&files, context.as_deref(), Some(InputFormat::Json))
                 .map_err(Failure::Load)?;
-            if interpolate {
-                merge_with_interpolation(
-                    values,
-                    &opts,
-                    &InterpolationOptions::new(&|text| format.parse_inline(text))
-                        .with_context(context.as_ref()),
-                )
-                .map_err(Failure::Interpolate)
-            } else {
-                Ok(merge(values, &opts))
-            }
+            let parse_inline = |text| format.parse_inline(text);
+            let interpolation = interpolate
+                .then(|| InterpolationOptions::new(&parse_inline).with_context(context.as_ref()));
+            merge_layers(values, &opts, interpolation).map_err(Failure::Interpolate)
         })
         .map_err(|failure| match failure {
             Failure::Load(err) => load_error(py, err),
