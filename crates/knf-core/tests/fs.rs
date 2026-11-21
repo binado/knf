@@ -65,9 +65,6 @@ fn patterns_cover_case_negation_classes_braces_and_native_bytes() {
 }
 
 #[cfg(unix)]
-#[cfg(unix)]
-#[cfg(target_os = "linux")]
-#[cfg(unix)]
 #[test]
 fn non_utf8_candidates_are_matched_without_replacement_characters() {
     use std::os::unix::ffi::OsStringExt;
@@ -78,7 +75,6 @@ fn non_utf8_candidates_are_matched_without_replacement_characters() {
     );
 }
 
-#[cfg(windows)]
 #[cfg(windows)]
 #[test]
 fn windows_separators_are_normalized_only_for_matching() {
