@@ -20,7 +20,7 @@ use toml::Value as Toml;
 #[error("{path}: {reason}")]
 pub struct ConversionError {
     path: String,
-    kind: &'static str,
+    category: Unrepresentable,
     reason: &'static str,
 }
 
@@ -30,14 +30,47 @@ impl ConversionError {
         &self.path
     }
 
-    /// Kind of the offending value, as named by [`Value::kind`].
-    pub fn kind(&self) -> &str {
-        self.kind
+    /// What the output format lacks to hold the value.
+    pub fn category(&self) -> Unrepresentable {
+        self.category
     }
 
     /// Why the value cannot be converted.
     pub fn reason(&self) -> &str {
         self.reason
+    }
+}
+
+/// Why an output format cannot hold a value as is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unrepresentable {
+    /// The format has no such type, such as TOML null or a JSON datetime.
+    Type,
+    /// The format has the type but not this value, such as a JSON infinity
+    /// or an unsigned integer beyond TOML's `i64`.
+    Range,
+}
+
+/// A value the output format cannot hold as is.
+#[derive(Clone, Copy)]
+struct Limit {
+    category: Unrepresentable,
+    reason: &'static str,
+}
+
+impl Limit {
+    const fn of_type(reason: &'static str) -> Self {
+        Self {
+            category: Unrepresentable::Type,
+            reason,
+        }
+    }
+
+    const fn of_range(reason: &'static str) -> Self {
+        Self {
+            category: Unrepresentable::Range,
+            reason,
+        }
     }
 }
 
@@ -158,7 +191,7 @@ impl OutputFormat {
     fn represent(self, value: &Value) -> Repr<'_> {
         match (self, value) {
             (Self::Json, Value::Float(f)) if !f.is_finite() => Repr::Lossy {
-                reason: "the JSON data model cannot represent non-finite floats",
+                limit: Limit::of_range("the JSON data model cannot represent non-finite floats"),
                 fallback: Fallback::Str(if f.is_nan() {
                     "nan"
                 } else if f.is_sign_negative() {
@@ -168,17 +201,23 @@ impl OutputFormat {
                 }),
             },
             (Self::Json, Value::Datetime(dt)) => Repr::Lossy {
-                reason: "the JSON data model cannot represent TOML dates, times or datetimes",
+                limit: Limit::of_type(
+                    "the JSON data model cannot represent TOML dates, times or datetimes",
+                ),
                 fallback: Fallback::Datetime(dt),
             },
             #[cfg(feature = "yaml")]
             (Self::Yaml, Value::Datetime(dt)) => Repr::Lossy {
-                reason: "YAML output writes TOML dates, times and datetimes as strings",
+                limit: Limit::of_type(
+                    "YAML output writes TOML dates, times and datetimes as strings",
+                ),
                 fallback: Fallback::Datetime(dt),
             },
-            (Self::Toml, Value::Null) => Repr::Rejected("TOML cannot represent null"),
+            (Self::Toml, Value::Null) => {
+                Repr::Rejected(Limit::of_type("TOML cannot represent null"))
+            }
             (Self::Toml, Value::Unsigned(u)) => Repr::Lossy {
-                reason: "integer exceeds TOML's signed 64-bit range",
+                limit: Limit::of_range("integer exceeds TOML's signed 64-bit range"),
                 fallback: Fallback::Float(u.get() as f64),
             },
             _ => Repr::Native,
@@ -187,9 +226,9 @@ impl OutputFormat {
 
     /// Why this format drops an object field under [`Policy::Lossy`], or
     /// `None` to keep it.
-    fn omits_field(self, value: &Value) -> Option<&'static str> {
+    fn omits_field(self, value: &Value) -> Option<Limit> {
         (self == Self::Toml && matches!(value, Value::Null))
-            .then_some("TOML cannot represent null object fields")
+            .then_some(Limit::of_type("TOML cannot represent null object fields"))
     }
 }
 
@@ -234,11 +273,11 @@ enum Repr<'a> {
     Native,
     /// Written as `fallback` under [`Policy::Lossy`], rejected under [`Policy::Strict`].
     Lossy {
-        reason: &'static str,
+        limit: Limit,
         fallback: Fallback<'a>,
     },
     /// Rejected under either policy.
-    Rejected(&'static str),
+    Rejected(Limit),
 }
 
 /// The replacement written for a lossy value.
@@ -308,20 +347,20 @@ impl<'n, 'a> Node<'n, 'a> {
     }
 
     /// Record the conversion failure and abort serialization.
-    fn fail<E: ser::Error>(&self, reason: &'static str) -> E {
+    fn fail<E: ser::Error>(&self, limit: Limit) -> E {
         let error = ConversionError {
             path: self.path(),
-            kind: self.value.kind(),
-            reason,
+            category: limit.category,
+            reason: limit.reason,
         };
         let abort = E::custom(&error);
         self.emitter.error.set(Some(error));
         abort
     }
 
-    fn allow_loss<E: ser::Error>(&self, reason: &'static str) -> Result<(), E> {
+    fn allow_loss<E: ser::Error>(&self, limit: Limit) -> Result<(), E> {
         match self.emitter.policy {
-            Policy::Strict => Err(self.fail(reason)),
+            Policy::Strict => Err(self.fail(limit)),
             Policy::Lossy => {
                 self.emitter.lossy.set(true);
                 Ok(())
@@ -335,11 +374,11 @@ impl Serialize for Node<'_, '_> {
         let format = self.emitter.format;
         match format.represent(self.value) {
             Repr::Native => {}
-            Repr::Lossy { reason, fallback } => {
-                self.allow_loss(reason)?;
+            Repr::Lossy { limit, fallback } => {
+                self.allow_loss(limit)?;
                 return fallback.serialize(serializer);
             }
-            Repr::Rejected(reason) => return Err(self.fail(reason)),
+            Repr::Rejected(limit) => return Err(self.fail(limit)),
         }
         match self.value {
             Value::Null => serializer.serialize_unit(),
@@ -365,7 +404,7 @@ impl Serialize for Node<'_, '_> {
                 for (key, value) in fields {
                     let child = self.child(Step::Key(key), value);
                     match format.omits_field(value) {
-                        Some(reason) => child.allow_loss(reason)?,
+                        Some(limit) => child.allow_loss(limit)?,
                         None => map.serialize_entry(key, &child)?,
                     }
                 }
@@ -543,8 +582,32 @@ mod tests {
         let error = emit(OutputFormat::Toml, input, Policy::Lossy).unwrap_err();
         let error = error.downcast_ref::<ConversionError>().unwrap();
         assert_eq!(error.path(), "a[0]");
-        assert_eq!(error.kind(), "null");
+        assert_eq!(error.category(), Unrepresentable::Type);
         assert_eq!(error.reason(), "TOML cannot represent null");
+    }
+
+    #[test]
+    fn error_category_separates_missing_types_from_ranges() {
+        for (format, value, category) in [
+            (
+                OutputFormat::Toml,
+                json!({"a": null}),
+                Unrepresentable::Type,
+            ),
+            (
+                OutputFormat::Toml,
+                json!({"a": u64::MAX}),
+                Unrepresentable::Range,
+            ),
+        ] {
+            let error = emit(format, from_json(value), Policy::Strict).unwrap_err();
+            let error = error.downcast_ref::<ConversionError>().unwrap();
+            assert_eq!(error.category(), category);
+        }
+        let float = Value::Object([("a".into(), Value::Float(f64::NAN))].into_iter().collect());
+        let error = emit(OutputFormat::Json, float, Policy::Strict).unwrap_err();
+        let error = error.downcast_ref::<ConversionError>().unwrap();
+        assert_eq!(error.category(), Unrepresentable::Range);
     }
 
     #[test]
