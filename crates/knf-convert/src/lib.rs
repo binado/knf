@@ -50,6 +50,13 @@ pub enum Policy {
     Strict,
 }
 
+impl Policy {
+    /// [`Policy::Strict`] when `strict`, else [`Policy::Lossy`].
+    pub fn strict(strict: bool) -> Self {
+        if strict { Self::Strict } else { Self::Lossy }
+    }
+}
+
 /// A converted value and whether any mapping was lossy.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Converted<T> {
@@ -65,6 +72,13 @@ pub enum Layout {
     Compact,
     /// Indented, human-readable output.
     Pretty,
+}
+
+impl Layout {
+    /// [`Layout::Pretty`] when `pretty`, else [`Layout::Compact`].
+    pub fn pretty(pretty: bool) -> Self {
+        if pretty { Self::Pretty } else { Self::Compact }
+    }
 }
 
 /// Output encoding and conversion rules.

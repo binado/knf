@@ -28,13 +28,12 @@ pub(super) fn dumps(data: &Bound<'_, PyDict>, format: &str, pretty: bool) -> PyR
             return Err(PyValueError::new_err(message));
         }
     };
-    let layout = if pretty {
-        Layout::Pretty
-    } else {
-        Layout::Compact
-    };
     output
-        .emit(&dict_to_value(data)?, Policy::Strict, layout)
+        .emit(
+            &dict_to_value(data)?,
+            Policy::Strict,
+            Layout::pretty(pretty),
+        )
         .map(|result| result.value)
         .map_err(|err| match err.downcast_ref::<ConversionError>() {
             // The format has no such type, as opposed to a number it cannot hold.

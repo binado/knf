@@ -11,8 +11,8 @@ mod cli_bin;
 
 use knf::glob::{GlobError, GlobPattern, KeyGlobError, KeyGlobPattern};
 use knf::{
-    InterpError, InterpolationOptions, MergeOptions, ProcessEnv, Seg, Value, merge,
-    merge_with_interpolation, render_path,
+    InterpError, InterpolationOptions, MergeOptions, Seg, Value, merge, merge_with_interpolation,
+    render_path,
 };
 use knf_convert::{InputFormat, Layers, LoadError, load_layers};
 use pyo3::PyTypeInfo;
@@ -87,11 +87,8 @@ fn load<'py>(
                 merge_with_interpolation(
                     values,
                     &opts,
-                    &InterpolationOptions {
-                        context: context.as_ref(),
-                        env: &ProcessEnv,
-                        parse_inline: &|text| format.parse_inline(text),
-                    },
+                    &InterpolationOptions::new(&|text| format.parse_inline(text))
+                        .with_context(context.as_ref()),
                 )
                 .map_err(Failure::Interpolate)
             } else {

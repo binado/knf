@@ -46,6 +46,22 @@ pub struct InterpolationOptions<'a> {
     pub parse_inline: &'a dyn Fn(String) -> Value,
 }
 
+impl<'a> InterpolationOptions<'a> {
+    /// Read the process environment, with no context.
+    pub fn new(parse_inline: &'a dyn Fn(String) -> Value) -> Self {
+        Self {
+            context: None,
+            env: &crate::ProcessEnv,
+            parse_inline,
+        }
+    }
+
+    /// Replace the context document.
+    pub fn with_context(self, context: Option<&'a Value>) -> Self {
+        Self { context, ..self }
+    }
+}
+
 /// Left-folds `layers` like [`merge`](crate::merge), then resolves references
 /// against the result, looking up each complete path in it first, then in
 /// `context`. Only the merged document is returned.

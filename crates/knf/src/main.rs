@@ -10,7 +10,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
-use knf::{InterpolationOptions, MergeOptions, ProcessEnv, merge, merge_with_interpolation};
+use knf::{InterpolationOptions, MergeOptions, merge, merge_with_interpolation};
 use knf_convert::{Layers, Layout, Policy, load_layers};
 
 use cli::{Cli, ExecFormat, OutputFormat};
@@ -115,11 +115,7 @@ fn run_pipeline(
         merge_with_interpolation(
             values,
             opts,
-            &InterpolationOptions {
-                context: context.as_ref(),
-                env: &ProcessEnv,
-                parse_inline: &parse_inline,
-            },
+            &InterpolationOptions::new(&parse_inline).with_context(context.as_ref()),
         )
         .map_err(|err| explain::explain_interp(err, context.is_some()))?
     } else {
@@ -127,17 +123,11 @@ fn run_pipeline(
     };
     let output = cli.to.unwrap_or_else(|| format.into());
     let target = knf_convert::OutputFormat::from(output);
-    let policy = if cli.strict {
-        Policy::Strict
-    } else {
-        Policy::Lossy
-    };
-    let layout = if cli.compact {
-        Layout::Compact
-    } else {
-        Layout::Pretty
-    };
-    let converted = target.emit(&merged, policy, layout)?;
+    let converted = target.emit(
+        &merged,
+        Policy::strict(cli.strict),
+        Layout::pretty(!cli.compact),
+    )?;
     if converted.lossy {
         eprintln!("warning: conversion was lossy; rerun with --strict to find the affected keys");
     }
