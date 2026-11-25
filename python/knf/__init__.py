@@ -55,13 +55,13 @@ def dump(data, target, *, format=None, pretty=True):
 
 
 def deep_merge(cfg, overrides):
-    """Return ``merge([cfg, overrides])``.
+    """Return ``merge(cfg, overrides)``.
 
     Dicts merge recursively; lists, scalars and None replace wholesale. The
     result is a new tree and does not re-run interpolation. Use :func:`merge`
     for shallow paths, interpolation, or a lookup context.
     """
-    return merge([cfg, overrides])
+    return merge(cfg, overrides)
 
 
 def dump_toml(data, fp, *, pretty=True):

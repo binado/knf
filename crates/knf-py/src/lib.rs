@@ -100,17 +100,17 @@ fn load<'py>(
 
 /// Merge in-memory objects left to right into one `dict`.
 ///
-/// `layers` merge left to right. `shallow` is a key-path glob whose matches
-/// replace wholesale. With `interpolate`, references bind to the final
-/// document and a whole-string reference merges as the value it names.
-/// `context` is one object used only for interpolation, with output-first
-/// lookup; it requires `interpolate=True`. `format` selects how whole-string
-/// environment values are parsed (`json` or `toml`).
+/// `configs` merge left to right. No configs yields an empty dict. `shallow`
+/// is a key-path glob whose matches replace wholesale. With `interpolate`,
+/// references bind to the final document and a whole-string reference merges
+/// as the value it names. `context` is one object used only for interpolation,
+/// with output-first lookup; it requires `interpolate=True`. `format` selects
+/// how whole-string environment values are parsed (`json` or `toml`).
 #[pyfunction]
-#[pyo3(signature = (layers, *, interpolate = false, shallow = None, context = None, format = "json"))]
+#[pyo3(signature = (*configs, interpolate = false, shallow = None, context = None, format = "json"))]
 fn merge<'py>(
     py: Python<'py>,
-    layers: Vec<Bound<'py, PyDict>>,
+    configs: Vec<Bound<'py, PyDict>>,
     interpolate: bool,
     shallow: Option<&str>,
     context: Option<Bound<'py, PyDict>>,
@@ -129,7 +129,7 @@ fn merge<'py>(
         _ => return Err(PyValueError::new_err("format must be 'json' or 'toml'")),
     };
     let opts = MergeOptions { shallow };
-    let values = layers
+    let values = configs
         .iter()
         .map(from_py::dict_to_value)
         .collect::<PyResult<Vec<_>>>()?;

@@ -39,15 +39,14 @@ def config() -> dict[str, Any]:
     """
 
 def deep_merge(cfg: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
-    """Return ``merge([cfg, overrides])``.
+    """Return ``merge(cfg, overrides)``.
 
     Dicts merge recursively; lists, scalars and None replace. The result is a
     new tree and does not re-run interpolation.
     """
 
 def merge(
-    layers: Sequence[dict[str, Any]],
-    *,
+    *configs: dict[str, Any],
     interpolate: bool = False,
     shallow: Optional[str] = None,
     context: Optional[dict[str, Any]] = None,
@@ -55,23 +54,24 @@ def merge(
 ) -> dict[str, Any]:
     """Merge in-memory dicts with the same pipeline as ``load``.
 
-    ``layers`` merge left to right. ``shallow`` is a key-path glob whose
-    matches replace wholesale (``"*"``, ``"foo"``, ``"foo.*"``).
-    ``interpolate=True`` resolves ``${key.path}`` and ``${env:NAME}`` against
-    the final document; a whole-string reference merges as the value it names.
-    ``context`` is one dict used only for interpolation and requires
-    ``interpolate=True``. Complete paths prefer the merged document, then
-    context, including references inside context. Unused context references
-    are not resolved. ``format`` selects how whole-string environment values
-    are parsed (``"json"`` by default, or ``"toml"``), matching ``load`` of
-    files in that format.
+    ``configs`` merge left to right. ``merge()`` returns ``{}``. ``shallow``
+    is a key-path glob whose matches replace wholesale (``"*"``, ``"foo"``,
+    ``"foo.*"``). ``interpolate=True`` resolves ``${key.path}`` and
+    ``${env:NAME}`` against the final document; a whole-string reference
+    merges as the value it names. ``context`` is one dict used only for
+    interpolation and requires ``interpolate=True``. Complete paths prefer
+    the merged document, then context, including references inside context.
+    Unused context references are not resolved. ``format`` selects how
+    whole-string environment values are parsed (``"json"`` by default, or
+    ``"toml"``), matching ``load`` of files in that format.
 
-    Layers and context accept ``None``, bool, str, float, integers from
-    ``-2**63`` through ``2**64 - 1``, list, tuple, dict with string keys, and
-    datetime, date, or time. Tuples become lists. The result is a new tree.
+    Each config, and ``context``, accepts ``None``, bool, str, float,
+    integers from ``-2**63`` through ``2**64 - 1``, list, tuple, dict with
+    string keys, and datetime, date, or time. Tuples become lists. The result
+    is a new tree.
 
     Raises:
-        TypeError: A layer or context is not a dict, a key is not a string,
+        TypeError: A config or context is not a dict, a key is not a string,
             or a value has an unsupported type.
         InterpolationError: A reference is invalid, unresolved, or cyclic.
         ValueError: Invalid glob or format, context without interpolation,
