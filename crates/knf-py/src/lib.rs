@@ -108,7 +108,7 @@ fn load<'py>(
 /// how whole-string environment values are parsed (`json` or `toml`).
 #[pyfunction]
 #[pyo3(signature = (*configs, interpolate = false, shallow = None, context = None, format = "json"))]
-fn merge<'py>(
+fn deep_merge<'py>(
     py: Python<'py>,
     configs: Vec<Bound<'py, PyDict>>,
     interpolate: bool,
@@ -237,7 +237,7 @@ fn cli(py: Python<'_>) -> PyResult<()> {
 #[pymodule]
 fn _knf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load, m)?)?;
-    m.add_function(wrap_pyfunction!(merge, m)?)?;
+    m.add_function(wrap_pyfunction!(deep_merge, m)?)?;
     m.add_function(wrap_pyfunction!(writer::dumps, m)?)?;
     m.add_function(wrap_pyfunction!(writer::dumps_toml, m)?)?;
     m.add_function(wrap_pyfunction!(filter_paths, m)?)?;

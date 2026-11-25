@@ -38,14 +38,7 @@ def config() -> dict[str, Any]:
     Raises RuntimeError outside --exec or if the snapshot cannot be loaded.
     """
 
-def deep_merge(cfg: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
-    """Return ``merge(cfg, overrides)``.
-
-    Dicts merge recursively; lists, scalars and None replace. The result is a
-    new tree and does not re-run interpolation.
-    """
-
-def merge(
+def deep_merge(
     *configs: dict[str, Any],
     interpolate: bool = False,
     shallow: Optional[str] = None,
@@ -54,8 +47,9 @@ def merge(
 ) -> dict[str, Any]:
     """Merge in-memory dicts with the same pipeline as ``load``.
 
-    ``configs`` merge left to right. ``merge()`` returns ``{}``. ``shallow``
-    is a key-path glob whose matches replace wholesale (``"*"``, ``"foo"``,
+    ``configs`` merge left to right. ``deep_merge()`` returns ``{}``.
+    ``deep_merge(cfg, overrides)`` is the two-dict form. ``shallow`` is a
+    key-path glob whose matches replace wholesale (``"*"``, ``"foo"``,
     ``"foo.*"``). ``interpolate=True`` resolves ``${key.path}`` and
     ``${env:NAME}`` against the final document; a whole-string reference
     merges as the value it names. ``context`` is one dict used only for
@@ -68,7 +62,7 @@ def merge(
     Each config, and ``context``, accepts ``None``, bool, str, float,
     integers from ``-2**63`` through ``2**64 - 1``, list, tuple, dict with
     string keys, and datetime, date, or time. Tuples become lists. The result
-    is a new tree.
+    is a new tree. Interpolation stays off unless ``interpolate=True``.
 
     Raises:
         TypeError: A config or context is not a dict, a key is not a string,

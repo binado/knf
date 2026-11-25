@@ -181,12 +181,12 @@ knf base.toml pilot.toml -c seed=42 --exec -- python fit.py --replicate 2
 ## Python API
 
 ```python
-from knf import deep_merge, dump, dumps, filter_paths, load, merge
+from knf import deep_merge, dump, dumps, filter_paths, load
 
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
 config = load(["foo.toml", "bar.toml"], interpolate=True, context="config.toml")
-pilot = merge(config, {"solver": {"steps": 10}})
+pilot = deep_merge(config, {"solver": {"steps": 10}})
 
 files = filter_paths(candidates, "{defaults,prod}.toml", filename_only=True)
 config = load(files)
@@ -215,17 +215,17 @@ requires `format` for a stream. JSON and TOML support `pretty=False` for compact
 output. YAML also accepts `nan` and `inf` and requires `pretty=True`.
 See the `dumps_toml` and `dump_toml` docs for TOML types and limits.
 
-`merge(base, exp, overrides)` applies the same pipeline to dicts, left to
-right. `merge()` returns `{}`. `context` is one dict and requires
-`interpolate=True`. `format` (`"json"` by default, or `"toml"`) parses
-whole-string `${env:NAME}` values the way files of that format do. The result
-is a new tree. `deep_merge(cfg, overrides)` is `merge(cfg, overrides)` and
-does not re-run interpolation.
+`deep_merge(base, exp, overrides)` applies the same pipeline to dicts, left to
+right. `deep_merge()` returns `{}`. `deep_merge(cfg, overrides)` is the
+two-dict form and does not re-run interpolation unless `interpolate=True`.
+`context` is one dict and requires `interpolate=True`. `format` (`"json"` by
+default, or `"toml"`) parses whole-string `${env:NAME}` values the way files
+of that format do. The result is a new tree.
 
 ```python
 cfg = load(["base.toml"], interpolate=True)
 pilot = deep_merge(cfg, {"solver": {"steps": 10}})
-pilot = merge(cfg, {"port": "${env:PORT}"}, interpolate=True, format="toml")
+pilot = deep_merge(cfg, {"port": "${env:PORT}"}, interpolate=True, format="toml")
 ```
 
 ## License

@@ -13,9 +13,9 @@ The same Rust pipeline the ``knf`` command line runs, called natively::
 
 ``filter_paths`` selects from a list of paths without filesystem access and
 returns ``pathlib.Path`` objects that can be passed directly to ``load``.
-``merge`` runs that pipeline on dicts; ``deep_merge`` is ``merge`` of a base
-and an overrides dict. ``dumps`` and ``dump`` serialize a dict as JSON, TOML,
-or YAML. Under ``knf --exec``, ``config()`` returns the resolved configuration.
+``deep_merge`` runs that pipeline on dicts. ``dumps`` and ``dump`` serialize a
+dict as JSON, TOML, or YAML. Under ``knf --exec``, ``config()`` returns the
+resolved configuration.
 """
 
 import os as _os
@@ -24,11 +24,11 @@ from typing import Any
 from ._knf import (
     InterpolationError,
     ParseError,
+    deep_merge,
     dumps,
     dumps_toml,
     filter_paths,
     load,
-    merge,
 )
 
 
@@ -52,16 +52,6 @@ def dump(data, target, *, format=None, pretty=True):
         if format is None:
             raise ValueError("format is required for a text stream")
         target.write(dumps(data, format=format, pretty=pretty))
-
-
-def deep_merge(cfg, overrides):
-    """Return ``merge(cfg, overrides)``.
-
-    Dicts merge recursively; lists, scalars and None replace wholesale. The
-    result is a new tree and does not re-run interpolation. Use :func:`merge`
-    for shallow paths, interpolation, or a lookup context.
-    """
-    return merge(cfg, overrides)
 
 
 def dump_toml(data, fp, *, pretty=True):
@@ -99,5 +89,5 @@ def config() -> dict[str, Any]:
 
 __all__ = [
     "InterpolationError", "ParseError", "config", "deep_merge", "dump",
-    "dump_toml", "dumps", "dumps_toml", "filter_paths", "load", "merge",
+    "dump_toml", "dumps", "dumps_toml", "filter_paths", "load",
 ]
