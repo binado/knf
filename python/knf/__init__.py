@@ -12,9 +12,10 @@ The same Rust pipeline the ``knf`` command line runs, called natively::
     >>> config["server"]["port"] = 8080
 
 ``filter_paths`` selects from a list of paths without filesystem access and
-returns ``pathlib.Path`` objects that can be passed directly to ``load``. ``deep_merge`` applies in-memory
-overrides. ``dumps`` and ``dump`` serialize a dict as JSON, TOML, or YAML. Under
-``knf --exec``, ``config()`` returns the resolved configuration.
+returns ``pathlib.Path`` objects that can be passed directly to ``load``.
+``merge`` runs that pipeline on dicts; ``deep_merge`` is ``merge`` of a base
+and an overrides dict. ``dumps`` and ``dump`` serialize a dict as JSON, TOML,
+or YAML. Under ``knf --exec``, ``config()`` returns the resolved configuration.
 """
 
 import os as _os
@@ -27,6 +28,7 @@ from ._knf import (
     dumps_toml,
     filter_paths,
     load,
+    merge,
 )
 
 
@@ -53,18 +55,13 @@ def dump(data, target, *, format=None, pretty=True):
 
 
 def deep_merge(cfg, overrides):
-    """Return a new dict with overrides applied recursively to dict pairs.
+    """Return ``merge([cfg, overrides])``.
 
-    Other values replace wholesale, including lists and None. Values outside a
-    recursive merge are shared with the inputs. Interpolation happens in load().
+    Dicts merge recursively; lists, scalars and None replace wholesale. The
+    result is a new tree and does not re-run interpolation. Use :func:`merge`
+    for shallow paths, interpolation, or a lookup context.
     """
-    merged = cfg.copy()
-    for key, value in overrides.items():
-        original = cfg.get(key)
-        if isinstance(original, dict) and isinstance(value, dict):
-            value = deep_merge(original, value)
-        merged[key] = value
-    return merged
+    return merge([cfg, overrides])
 
 
 def dump_toml(data, fp, *, pretty=True):
@@ -102,5 +99,5 @@ def config() -> dict[str, Any]:
 
 __all__ = [
     "InterpolationError", "ParseError", "config", "deep_merge", "dump",
-    "dump_toml", "dumps", "dumps_toml", "filter_paths", "load",
+    "dump_toml", "dumps", "dumps_toml", "filter_paths", "load", "merge",
 ]

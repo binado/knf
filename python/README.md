@@ -8,11 +8,12 @@ pip install pyknf  # the `knf` module and the `knf` executable
 ```
 
 ```python
-from knf import deep_merge, dump, dumps, filter_paths, load
+from knf import deep_merge, dump, dumps, filter_paths, load, merge
 
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
 config = load(["foo.toml", "bar.toml"], interpolate=True, context="config.toml")
+pilot = merge([config, {"solver": {"steps": 10}}], interpolate=True, shallow="solver")
 pilot = deep_merge(config, {"solver": {"steps": 10}})
 
 files = filter_paths(candidates, "{defaults,prod}.toml", filename_only=True)
@@ -24,8 +25,12 @@ dump(config, "merged.toml")
 
 - `load` merges left to right: objects recurse; arrays, scalars and `None`
   replace. All files must share one format. An empty list returns `{}`.
-- `deep_merge(cfg, overrides)` returns a new dict: dicts merge recursively;
-  lists, scalars and `None` replace. It does not re-run interpolation.
+- `merge` applies that pipeline to dicts. `context` is one dict and requires
+  `interpolate=True`. `format` (`"json"` by default, or `"toml"`) parses
+  whole-string `${env:NAME}` values the way files of that format do. The
+  result is a new tree.
+- `deep_merge(cfg, overrides)` is `merge([cfg, overrides])`. It does not
+  re-run interpolation.
 - `interpolate=True` resolves `${key.path}` and `${env:NAME}` against the
   final document. A whole-string reference merges as the value it names, so
   an object referent merges with an object from another file.

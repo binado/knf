@@ -36,7 +36,7 @@ def test_deep_merge_does_not_reinterpolate_resolved_values(tmp_path):
     assert deep_merge(cfg, {"root": "new"}) == {"root": "new", "path": "old/data"}
 
 
-def test_deep_merge_copies_merged_dicts_but_shares_other_values():
+def test_deep_merge_returns_an_independent_tree():
     shared_list = [1, 2]
     shared_table = {"a": 1}
     cfg = {"solver": {"steps": 100, "items": shared_list}}
@@ -45,10 +45,12 @@ def test_deep_merge_copies_merged_dicts_but_shares_other_values():
     merged = deep_merge(cfg, overrides)
 
     merged["solver"]["steps"] = -1
-    assert cfg["solver"]["steps"] == 100
-    assert overrides["solver"]["steps"] == 10
-    assert merged["solver"]["items"] is shared_list
-    assert merged["table"] is shared_table
+    merged["solver"]["items"].append(3)
+    merged["table"]["a"] = 9
+    assert cfg["solver"] == {"steps": 100, "items": [1, 2]}
+    assert overrides == {"solver": {"steps": 10}, "table": {"a": 1}}
+    assert merged["solver"]["items"] is not shared_list
+    assert merged["table"] is not shared_table
 
 
 def test_deep_merge_handles_empty_inputs():
