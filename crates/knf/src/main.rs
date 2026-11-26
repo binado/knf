@@ -11,9 +11,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
 use knf::{InterpolationOptions, MergeOptions, merge_configs};
-use knf_convert::{Configs, Layout, LoadOptions, Policy, load_configs};
+use knf_convert::{Configs, Emit, InputFormat, Layout, LoadOptions, Policy, load_configs};
 
-use cli::{Cli, ExecFormat, OutputFormat};
+use cli::{Cli, Exec, Invocation, OutputFormat};
 use explain::explain_load;
 
 /// Set while an `--exec` child runs, so Ctrl-C is left to the child.
@@ -41,9 +41,9 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
 {
-    let (cli, command) = Cli::parse_command(args.into_iter().map(Into::into));
+    let invocation = Cli::parse_command(args.into_iter().map(Into::into));
 
-    match run(cli, &command) {
+    match run(invocation) {
         Ok(0) => (),
         Ok(code) => std::process::exit(code),
         Err(err) => {
@@ -56,16 +56,20 @@ where
     }
 }
 
-fn run(cli: Cli, command: &[OsString]) -> anyhow::Result<i32> {
+fn run(invocation: Invocation) -> anyhow::Result<i32> {
+    let Invocation {
+        cli,
+        filter,
+        to,
+        exec,
+    } = invocation;
     let opts = MergeOptions {
         shallow: cli.shallow.clone(),
     };
 
     let mut files = cli.files.clone();
-    if let Some(pattern) = &cli.glob {
-        files = knf::fs::filter_paths(&files, pattern, false);
-    } else if let Some(pattern) = &cli.glob_filename {
-        files = knf::fs::filter_paths(&files, pattern, true);
+    if let Some((pattern, target)) = &filter {
+        files = knf::fs::filter_paths(&files, pattern, *target);
     }
     if cli.list_files {
         let mut text = String::new();
@@ -77,21 +81,23 @@ fn run(cli: Cli, command: &[OsString]) -> anyhow::Result<i32> {
         return Ok(0);
     }
 
-    let (text, format) = run_pipeline(&cli, &files, &opts)?;
-    if let Some((program, args)) = command.split_first() {
-        let format = ExecFormat::try_from(format).map_err(anyhow::Error::msg)?;
-        run_child(program, args, &text, format)
+    let (text, inputs) = run_pipeline(&cli, to, &files, &opts)?;
+    if let Some(exec) = exec {
+        let format = exec.format.unwrap_or(inputs);
+        run_child(&exec, &text, format)
     } else {
         write_stdout(&text)?;
         Ok(0)
     }
 }
 
+/// The emitted document, and the format of the inputs.
 fn run_pipeline(
     cli: &Cli,
+    to: Option<Emit>,
     files: &[PathBuf],
     opts: &MergeOptions,
-) -> anyhow::Result<(String, OutputFormat)> {
+) -> anyhow::Result<(String, InputFormat)> {
     let Configs {
         format,
         mut values,
@@ -100,7 +106,7 @@ fn run_pipeline(
         files,
         LoadOptions {
             context: cli.with.as_deref(),
-            fallback: cli.to.map(Into::into),
+            fallback: cli.to.map(OutputFormat::inline_format),
         },
     )
     .map_err(explain_load)?;
@@ -113,25 +119,16 @@ fn run_pipeline(
         .then(|| InterpolationOptions::new(&parse_inline).with_context(context.as_ref()));
     let merged = merge_configs(values, opts, interpolation)
         .map_err(|err| explain::explain_interp(err, cli.with.as_deref()))?;
-    let output = cli.to.unwrap_or_else(|| format.into());
-    let target = knf_convert::OutputFormat::from(output);
-    let converted = target.emit(
-        &merged,
-        Policy::strict(cli.strict),
-        Layout::pretty(!cli.compact),
-    )?;
+    let emit = to.unwrap_or_else(|| Emit::matching(format, Layout::pretty(!cli.compact)));
+    let converted = emit.emit(&merged, Policy::strict(cli.strict))?;
     if converted.lossy {
         eprintln!("warning: conversion was lossy; rerun with --strict to find the affected keys");
     }
-    Ok((converted.value, output))
+    Ok((converted.value, format))
 }
 
-fn run_child(
-    program: &OsString,
-    args: &[OsString],
-    text: &str,
-    format: ExecFormat,
-) -> anyhow::Result<i32> {
+fn run_child(exec: &Exec, text: &str, format: InputFormat) -> anyhow::Result<i32> {
+    let Exec { program, args, .. } = exec;
     let mut snapshot = tempfile::Builder::new()
         .prefix("knf-")
         .suffix(&format!(".{}", format.extension()))

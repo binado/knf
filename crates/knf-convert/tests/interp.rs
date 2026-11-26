@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use knf::{Env, InterpError, InterpolationOptions, MergeOptions, Value, merge_with_interpolation};
-use knf_convert::{InputFormat, Layout, OutputFormat, Policy};
+use knf_convert::{Emit, InputFormat, Layout, Policy};
 
 /// A raw-text environment, with no process reads.
 #[derive(Default)]
@@ -553,8 +553,8 @@ macro_rules! common_tests {
                 let map = out.as_object().unwrap();
                 assert_eq!(map["tag"], s(&format!("n={spelling}")));
                 assert_eq!(map["whole"], value);
-                let emitted = OutputFormat::from(FORMAT)
-                    .emit(&out, Policy::Strict, Layout::Compact)
+                let emitted = Emit::matching(FORMAT, Layout::Compact)
+                    .emit(&out, Policy::Strict)
                     .unwrap()
                     .value;
                 let round = FORMAT.parse_document(&emitted).unwrap();

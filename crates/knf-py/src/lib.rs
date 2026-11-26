@@ -9,6 +9,7 @@ use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 #[path = "../../knf/src/main.rs"]
 mod cli_bin;
 
+use knf::fs::GlobTarget;
 use knf::glob::{GlobError, GlobPattern, KeyGlobError, KeyGlobPattern};
 use knf::{
     InterpError, InterpolationOptions, MergeOptions, Seg, Value, merge_configs, render_path,
@@ -47,7 +48,12 @@ fn filter_paths(files: Vec<PathBuf>, pattern: &str, filename_only: bool) -> PyRe
     let pattern: GlobPattern = pattern
         .parse()
         .map_err(|err: GlobError| PyValueError::new_err(err.to_string()))?;
-    Ok(knf::fs::filter_paths(&files, &pattern, filename_only))
+    let target = if filename_only {
+        GlobTarget::Filename
+    } else {
+        GlobTarget::Path
+    };
+    Ok(knf::fs::filter_paths(&files, &pattern, target))
 }
 
 /// Load and merge homogeneous JSON or TOML files into one `dict`.
