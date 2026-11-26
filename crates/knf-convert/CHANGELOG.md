@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/binado/knf/compare/knf-convert-v0.9.0...knf-convert-v0.10.0) - 2026-11-26
+
+### Fixed
+
+- [**breaking**] name the failing input, key and file in diagnostics ([#98](https://github.com/binado/knf/pull/98))
+
+### Other
+
+- *(convert)* [**breaking**] make option combinations unrepresentable ([#99](https://github.com/binado/knf/pull/99))
+- *(interp)* [**breaking**] parse strings once and carry failures in the caches ([#97](https://github.com/binado/knf/pull/97))
+- [**breaking**] rename layers to configs ([#94](https://github.com/binado/knf/pull/94))
+
 ## [0.9.0](https://github.com/binado/knf/compare/knf-convert-v0.8.1...knf-convert-v0.9.0) - 2026-11-21
 
 ### Added
