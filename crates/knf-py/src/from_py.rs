@@ -6,23 +6,34 @@ use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 /// Maximum container nesting accepted when converting Python values.
 const MAX_DEPTH: usize = 128;
 
-/// Traversal state: the current key path and the containers being visited (for cycle detection).
+/// Traversal state: the input's name, the current key path and the containers
+/// being visited (for cycle detection).
 #[derive(Default)]
-struct Walk {
+struct Walk<'a> {
+    source: Option<&'a str>,
     path: Vec<Seg>,
     ancestors: Vec<usize>,
 }
 
-impl Walk {
+impl Walk<'_> {
     fn location(&self) -> String {
-        format!("at `{}`", render_path(&self.path))
+        let path = render_path(&self.path);
+        match self.source {
+            Some(source) => format!("at `{path}` in {source}"),
+            None => format!("at `{path}`"),
+        }
     }
 }
 
 /// Convert a dict to a [`Value`], keeping every scalar some output format can
-/// carry; the output format rejects what it cannot represent.
-pub(super) fn dict_to_value(data: &Bound<'_, PyDict>) -> PyResult<Value> {
-    convert(data.as_any(), &mut Walk::default())
+/// carry; the output format rejects what it cannot represent. Errors name
+/// `source`, when given, after the key path.
+pub(super) fn dict_to_value(data: &Bound<'_, PyDict>, source: Option<&str>) -> PyResult<Value> {
+    let mut walk = Walk {
+        source,
+        ..Walk::default()
+    };
+    convert(data.as_any(), &mut walk)
 }
 
 fn convert(value: &Bound<'_, PyAny>, walk: &mut Walk) -> PyResult<Value> {

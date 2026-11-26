@@ -222,10 +222,15 @@ two-dict form and does not re-run interpolation unless `interpolate=True`.
 default, or `"toml"`) parses whole-string `${env:NAME}` values the way files
 of that format do. The result is a new tree.
 
+Don't pass an already-interpolated config with `interpolate=True`: escaped or
+environment-supplied `${...}` text would be resolved again.
+
 ```python
 cfg = load(["base.toml"], interpolate=True)
 pilot = deep_merge(cfg, {"solver": {"steps": 10}})
-pilot = deep_merge(cfg, {"port": "${env:PORT}"}, interpolate=True, format="toml")
+
+base = load(["base.toml"])  # references stay unresolved
+pilot = deep_merge(base, {"port": "${env:PORT}"}, interpolate=True, format="toml")
 ```
 
 ## License

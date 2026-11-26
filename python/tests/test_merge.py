@@ -3,6 +3,9 @@
 import datetime
 import json
 import math
+import re
+from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -303,3 +306,64 @@ def test_argument_errors():
         deep_merge(shallow=True)
     with pytest.raises(TypeError):
         deep_merge([{"a": 1}], True)
+
+
+def self_referencing_dict() -> dict[str, object]:
+    value: dict[str, object] = {}
+    value["me"] = value
+    return value
+
+
+@pytest.mark.parametrize(
+    ("make_value", "error", "message", "path"),
+    [
+        pytest.param(
+            lambda: {1}, TypeError, "unsupported type `set`", "a.bad", id="set"
+        ),
+        # The class is PosixPath or WindowsPath.
+        pytest.param(
+            lambda: Path("x"),
+            TypeError,
+            r"unsupported type `\w*Path`",
+            "a.bad",
+            id="path",
+        ),
+        pytest.param(
+            lambda: {1: 2},
+            TypeError,
+            "keys must be strings",
+            "a.bad",
+            id="non-string-key",
+        ),
+        pytest.param(
+            lambda: 2**64,
+            ValueError,
+            "integer outside the 64-bit range.*",
+            "a.bad",
+            id="big-int",
+        ),
+        pytest.param(
+            self_referencing_dict,
+            ValueError,
+            "circular reference",
+            "a.bad.me",
+            id="cycle",
+        ),
+    ],
+)
+@pytest.mark.parametrize("source", ["configs[1]", "context"])
+def test_deep_merge_invalid_value_raises_naming_input(
+    make_value: Callable[[], object],
+    error: type[Exception],
+    message: str,
+    path: str,
+    source: str,
+) -> None:
+    invalid = {"a": {"bad": make_value()}}
+    with pytest.raises(
+        error, match=rf"{message} at `{re.escape(path)}` in {re.escape(source)}$"
+    ):
+        if source == "context":
+            deep_merge({"ok": 1}, interpolate=True, context=invalid)
+        else:
+            deep_merge({"ok": 1}, invalid)

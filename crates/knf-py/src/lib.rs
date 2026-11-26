@@ -106,6 +106,9 @@ fn load<'py>(
 /// as the value it names. `context` is one object used only for interpolation,
 /// with output-first lookup; it requires `interpolate=True`. `format` selects
 /// how whole-string environment values are parsed (`json` or `toml`).
+///
+/// Don't pass an already-interpolated config with `interpolate=True`: escaped
+/// or environment-supplied `${...}` text would be resolved again.
 #[pyfunction]
 #[pyo3(signature = (*configs, interpolate = false, shallow = None, context = None, format = "json"))]
 fn deep_merge<'py>(
@@ -131,9 +134,13 @@ fn deep_merge<'py>(
     let opts = MergeOptions { shallow };
     let values = configs
         .iter()
-        .map(from_py::dict_to_value)
+        .enumerate()
+        .map(|(index, config)| from_py::dict_to_value(config, Some(&format!("configs[{index}]"))))
         .collect::<PyResult<Vec<_>>>()?;
-    let context = context.as_ref().map(from_py::dict_to_value).transpose()?;
+    let context = context
+        .as_ref()
+        .map(|context| from_py::dict_to_value(context, Some("context")))
+        .transpose()?;
     let merged = py
         .detach(move || {
             let parse_inline = |text| format.parse_inline(text);

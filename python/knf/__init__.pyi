@@ -59,17 +59,27 @@ def deep_merge(
     whole-string environment values are parsed (``"json"`` by default, or
     ``"toml"``), matching ``load`` of files in that format.
 
-    Each config, and ``context``, accepts ``None``, bool, str, float,
-    integers from ``-2**63`` through ``2**64 - 1``, list, tuple, dict with
-    string keys, and datetime, date, or time. Tuples become lists. The result
-    is a new tree. Interpolation stays off unless ``interpolate=True``.
+    Each config, and ``context``, must be a dict. Values inside them may be
+    ``None``, bool, str, float, integers from ``-2**63`` through
+    ``2**64 - 1``, list, tuple, dict with string keys, and datetime, date, or
+    time. Tuples become lists. The result is a new tree.
+
+    Don't pass an already-interpolated config with ``interpolate=True``:
+    escaped or environment-supplied ``${...}`` text would be resolved again.
 
     Raises:
         TypeError: A config or context is not a dict, a key is not a string,
             or a value has an unsupported type.
         InterpolationError: A reference is invalid, unresolved, or cyclic.
         ValueError: Invalid glob or format, context without interpolation,
-            an integer outside the 64-bit range, or a circular reference.
+            an integer outside the 64-bit range, a self-referencing container,
+            nesting beyond 128 containers, a time with a tzinfo, a datetime
+            whose offset isn't whole minutes or whose ``utcoffset()`` is
+            ``None``, an otherwise invalid datetime, or a TOML environment
+            datetime that Python can't represent.
+
+    Errors converting a value inside an input name the input (``configs[i]``,
+    zero-based, or ``context``) and the key path.
     """
 
 def dumps_toml(data: dict[str, Any], *, pretty: bool = True) -> str:
