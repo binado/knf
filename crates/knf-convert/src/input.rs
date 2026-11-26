@@ -1,4 +1,4 @@
-use knf::Value;
+use knf::{Value, ValueKind};
 use std::path::{Path, PathBuf};
 use std::{fmt, io};
 
@@ -69,7 +69,7 @@ pub enum ParseError {
     #[error("expected an object at the top level, found {kind}")]
     NotObject {
         /// The root's kind, as named by [`Value::kind`].
-        kind: &'static str,
+        kind: ValueKind,
     },
 }
 

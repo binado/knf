@@ -189,7 +189,7 @@ macro_rules! common_tests {
             let err = interpolate_with_context(doc, &context, &StubEnv::default()).unwrap_err();
             assert_eq!(
                 err.to_string(),
-                "unresolved reference\n  --> settings.bad: `missing`"
+                "unresolved reference\n  --> settings.bad (context): `missing`"
             );
             assert!(!err.to_string().ends_with('\n'));
         }

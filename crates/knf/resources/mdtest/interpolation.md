@@ -389,3 +389,31 @@ $ knf f.json --interpolate
 error: reference cycle: `a` -> `b` -> `c` -> `a`
 help: a reference may not resolve, directly or indirectly, to itself
 ```
+
+### A failed reference is reported once
+
+Resolving `a` reaches `x` before `x` is evaluated. `b` embeds the failed `x`, so
+it adds no report of its own.
+
+`bug.toml`:
+
+```toml
+a = "${x.k}"
+b = "${t.${x}}"
+x = "${missing}"
+```
+
+```console
+$ knf bug.toml -i
+? 1
+```
+
+`stderr`:
+
+```text
+error: unresolved reference
+  --> x: `missing`
+  --> a: `x.k`
+help: `${key.path}` names a key in the merged document, `${env:NAME}` an environment variable
+help: drop --interpolate to pass `${...}` through untouched
+```

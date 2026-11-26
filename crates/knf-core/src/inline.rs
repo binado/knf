@@ -94,21 +94,31 @@ impl TryFrom<PathLeaf<Value>> for Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RefPathError;
 
     #[test]
     fn rejects_malformed_expressions() {
         for (bad, want) in [
             ("noequals", PathError::MissingEquals),
-            ("=1", PathError::EmptyPath),
+            ("=1", PathError::Ref(RefPathError::EmptyPath)),
             (
                 "a..b=1",
-                PathError::EmptySegment {
+                PathError::Ref(RefPathError::EmptySegment {
                     path: "a..b".into(),
-                },
+                }),
             ),
-            (".a=1", PathError::EmptySegment { path: ".a".into() }),
-            ("a.=1", PathError::EmptySegment { path: "a.".into() }),
-            ("a[]=1", PathError::BadIndex { path: "a[]".into() }),
+            (
+                ".a=1",
+                PathError::Ref(RefPathError::EmptySegment { path: ".a".into() }),
+            ),
+            (
+                "a.=1",
+                PathError::Ref(RefPathError::EmptySegment { path: "a.".into() }),
+            ),
+            (
+                "a[]=1",
+                PathError::Ref(RefPathError::BadIndex { path: "a[]".into() }),
+            ),
         ] {
             assert_eq!(bad.parse::<PathLeaf<String>>().unwrap_err(), want, "{bad}");
         }
@@ -118,15 +128,15 @@ mod tests {
     fn new_rejects_empty_path_and_empty_segments() {
         assert_eq!(
             PathLeaf::<String>::new(vec![], "1".into()).unwrap_err(),
-            PathError::EmptyPath
+            PathError::Ref(RefPathError::EmptyPath)
         );
         assert_eq!(
             PathLeaf::<String>::new(vec!["".into()], "1".into()).unwrap_err(),
-            PathError::EmptySegment { path: "".into() }
+            PathError::Ref(RefPathError::EmptySegment { path: "".into() })
         );
         assert_eq!(
             PathLeaf::<String>::new(vec!["a".into(), "".into()], "1".into()).unwrap_err(),
-            PathError::EmptySegment { path: "a.".into() }
+            PathError::Ref(RefPathError::EmptySegment { path: "a.".into() })
         );
     }
 

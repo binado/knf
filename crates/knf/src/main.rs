@@ -121,7 +121,7 @@ fn run_pipeline(
         .interpolate
         .then(|| InterpolationOptions::new(&parse_inline).with_context(context.as_ref()));
     let merged = merge_configs(values, opts, interpolation)
-        .map_err(|err| explain::explain_interp(err, context.is_some()))?;
+        .map_err(|err| explain::explain_interp(err, cli.with.as_deref()))?;
     let output = cli.to.unwrap_or_else(|| format.into());
     let target = knf_convert::OutputFormat::from(output);
     let converted = target.emit(
