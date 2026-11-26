@@ -370,8 +370,9 @@ $ knf a.json -i --with config.json
 
 ```text
 error: unresolved reference
-  --> settings.bad: `missing`
+  --> settings.bad (context): `missing`
 help: `${key.path}` names a key in the merged document or --with context, `${env:NAME}` an environment variable
+help: (context) paths are in `config.json`
 help: drop --interpolate and --with to pass `${...}` through untouched
 ```
 
@@ -397,4 +398,33 @@ $ KNF_CONTEXT_VALUE=8080 knf a.json -i --with config.json --compact
 
 ```text
 {"copy":8080}
+```
+
+## A problem inside the context names the context file
+
+`doc.json`:
+
+```json
+{"settings":{"other":1},"copy":"${settings.url}"}
+```
+
+`ctx.json`:
+
+```json
+{"settings":{"url":"${missing}"}}
+```
+
+```console
+$ knf doc.json -i --with ctx.json
+? 1
+```
+
+`stderr`:
+
+```text
+error: unresolved reference
+  --> settings.url (context): `missing`
+help: `${key.path}` names a key in the merged document or --with context, `${env:NAME}` an environment variable
+help: (context) paths are in `ctx.json`
+help: drop --interpolate and --with to pass `${...}` through untouched
 ```

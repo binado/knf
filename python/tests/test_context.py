@@ -102,7 +102,7 @@ def test_context_is_parsed_even_when_unused(tmp_path, text, message):
 
 
 @pytest.mark.parametrize("context_text, message", [
-    ('{"a":"${missing}"}', "a: `missing`"),
+    ('{"a":"${missing}"}', r"a \(context\): `missing`"),
     ('{"a":"${b}","b":"${a}"}', "reference cycle: `a` -> `b` -> `a`"),
     ('{"a":"${copy}"}', "reference cycle: `copy` -> `a` -> `copy`"),
 ])

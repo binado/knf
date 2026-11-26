@@ -12,18 +12,22 @@
 
 mod error;
 mod graph;
+mod report;
 mod scan;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use indexmap::IndexMap;
 
 use crate::glob::KeyGlobPattern;
-use crate::{MergeOptions, PathError, RefPath, Seg, Value};
+use crate::{MergeOptions, RefPath, Seg, Value};
 
-pub use error::{Cycle, InterpError, Problem};
-pub use scan::Syntax;
+pub use error::{Cycle, InterpError, Origin, Problem, ProblemKind, Problems, Syntax};
+pub use scan::ScanError;
 
-use graph::{Expr, Id, Node, Object, Shape};
-use scan::{Piece, Spelled, scan};
+use graph::{Body, Expr, Id, Node, Object, Part, Shape, Stack};
+use report::{Outcome, Reported, Sink};
 
 /// The environment namespace, matched as a literal prefix so `${a:b}` is the
 /// ordinary key `a:b`.
@@ -91,25 +95,24 @@ pub fn merge_with_interpolation(
         targets: HashMap::new(),
         shaping: Vec::new(),
         values: HashMap::new(),
-        failed: HashSet::new(),
         visiting: Vec::new(),
-        problems: Vec::new(),
+        sink: Sink::default(),
     };
-    let mut doc = resolver.add(Expr::Object(Object::new()), Vec::new());
+    let output = Origin::Output;
+    let mut doc = resolver.add(Expr::Object(Object::new()), output, Vec::new());
     for config in configs {
-        let config = resolver.build(config, Vec::new());
-        doc = resolver.combine(doc, config, Vec::new());
+        let config = resolver.build(config, output, Vec::new());
+        doc = resolver.combine(doc, config, output, Vec::new());
     }
     resolver.doc = doc;
     resolver.context = options
         .context
-        .map(|context| resolver.build(context.clone(), Vec::new()));
+        .map(|context| resolver.build(context.clone(), Origin::Context, Vec::new()));
     let resolved = resolver.eval(doc).map_err(InterpError::Cycle)?;
-    if resolver.problems.is_empty() {
-        Ok(resolved)
-    } else {
-        Err(InterpError::Problems(resolver.problems))
-    }
+    resolver
+        .sink
+        .finish(resolved)
+        .map_err(InterpError::Problems)
 }
 
 /// Resolves every reference in `doc`.
@@ -130,236 +133,161 @@ struct Resolver<'a> {
     context: Option<Id>,
     merges: HashMap<(Id, Id, Vec<Seg>), Id>,
     shapes: HashMap<Id, Shape>,
-    targets: HashMap<Id, Option<Id>>,
-    /// Nodes whose structure or target is being decided, innermost last.
+    targets: HashMap<Id, Outcome<Id>>,
+    /// [`Stack::Shaping`], innermost last.
     shaping: Vec<Id>,
-    values: HashMap<Id, Value>,
-    /// Evaluated nodes whose evaluation recorded a problem.
-    failed: HashSet<Id>,
-    /// Nodes being evaluated, innermost last; also the cycle chain.
+    values: HashMap<Id, Outcome<Value>>,
+    /// [`Stack::Visiting`], innermost last.
     visiting: Vec<Id>,
-    problems: Vec<Problem>,
+    sink: Sink,
+}
+
+/// How a node gets its value.
+enum Evaluated {
+    Here(Outcome<Value>),
+    /// A merge that is its right operand. That node is evaluated once the
+    /// merge is off the stack, so the merge is not a hop in a cycle chain.
+    Forward(Id),
 }
 
 impl Resolver<'_> {
-    fn eval(&mut self, id: Id) -> Result<Value, Cycle> {
+    fn eval(&mut self, id: Id) -> Result<Outcome<Value>, Cycle> {
         if let Some(done) = self.values.get(&id) {
             return Ok(done.clone());
         }
-        if let Some(start) = self.visiting.iter().position(|&seen| seen == id) {
-            let mut chain: Vec<_> = self.visiting[start..]
-                .iter()
-                .map(|&seen| self.nodes[seen].path.clone())
-                .collect();
-            chain.push(self.nodes[id].path.clone());
-            return Err(Cycle::new(chain));
-        }
-        self.visiting.push(id);
-        let problems = self.problems.len();
-        let value = match &self.nodes[id].expr {
-            Expr::Terminal(value) => value.clone(),
-            Expr::Value(value) => match value.as_str() {
-                Some(text) => {
-                    let text = text.to_owned();
-                    self.resolve_string(id, &text)?
-                }
-                None => value.clone(),
-            },
-            Expr::Array(items) => {
-                let items = items.clone();
-                let mut out = Vec::with_capacity(items.len());
-                for item in items {
-                    out.push(self.eval(item)?);
-                }
-                Value::Array(out)
-            }
-            Expr::Object(_) | Expr::Merge { .. } => match self.shape(id)? {
-                Shape::Object(fields) => {
-                    let mut out = indexmap::IndexMap::new();
-                    for (key, field) in fields.iter() {
-                        out.insert(key.clone(), self.eval(*field)?);
-                    }
-                    Value::Object(out)
-                }
-                // Only a merge resolves to a non-object: its right operand.
-                _ => {
-                    let Expr::Merge { over, .. } = self.nodes[id].expr else {
-                        unreachable!("an object node always shapes as an object")
-                    };
-                    self.visiting.pop();
-                    let value = self.eval(over)?;
-                    if self.failed.contains(&over) {
-                        self.failed.insert(id);
-                    }
-                    self.values.insert(id, value.clone());
-                    return Ok(value);
-                }
-            },
+        let value = match self.within(Stack::Visiting, id, |resolver| resolver.eval_uncached(id))? {
+            Evaluated::Here(value) => value,
+            Evaluated::Forward(over) => self.eval(over)?,
         };
-        self.visiting.pop();
-        if self.problems.len() > problems {
-            self.failed.insert(id);
-        }
         self.values.insert(id, value.clone());
         Ok(value)
     }
 
-    fn resolve_string(&mut self, id: Id, text: &str) -> Result<Value, Cycle> {
-        let pieces = scan(text);
-
-        // No `$` anywhere.
-        if pieces.is_empty() {
-            return Ok(Value::String(text.to_string()));
-        }
-        if let [Piece::Ref(body)] = pieces.as_slice() {
-            return Ok(match self.resolve_ref(id)? {
-                Some(target) => self.eval(target)?,
-                None => Value::String(Spelled(body).to_string()),
-            });
-        }
-
-        let path = self.nodes[id].path.clone();
-        let mut out = String::new();
-        for piece in pieces {
-            match piece {
-                Piece::Literal(literal) => out.push_str(literal),
-                Piece::Ref(body) => match self.splice(body, &path)? {
-                    Some(text) => out.push_str(&text),
-                    None => out.push_str(&Spelled(body).to_string()),
-                },
-                Piece::Malformed { spelling, error } => {
-                    self.problems.push(Problem::Syntax {
-                        path: path.clone(),
-                        error,
-                    });
-                    out.push_str(spelling);
+    fn eval_uncached(&mut self, id: Id) -> Result<Evaluated, Cycle> {
+        Ok(Evaluated::Here(match &self.nodes[id].expr {
+            Expr::Scalar(scalar) => Ok(scalar.value().clone()),
+            Expr::Terminal(value) => Ok(value.clone()),
+            Expr::WholeRef(body) => {
+                let body = body.clone();
+                match self.resolve_ref(id, &body)? {
+                    Ok(target) => self.eval(target)?,
+                    Err(reported) => Err(reported),
                 }
             }
-        }
-        Ok(Value::String(out))
+            Expr::Template(parts) => {
+                let parts = Rc::clone(parts);
+                self.expand(&parts, id)?.map(Value::String)
+            }
+            Expr::Array(items) => {
+                let items = items.clone();
+                self.eval_array(&items)?
+            }
+            Expr::Object(fields) => {
+                let fields = fields.clone();
+                self.eval_object(&fields)?
+            }
+            &Expr::Merge { over, .. } => match self.shape(id)? {
+                Shape::Object(fields) => self.eval_object(&fields)?,
+                Shape::Missing(reported) => Err(reported),
+                Shape::Array(_) | Shape::Scalar => return Ok(Evaluated::Forward(over)),
+            },
+        }))
     }
 
-    /// Embedded position: the referent is rendered as text. `None` if a
-    /// problem was recorded, now or when the referent was first evaluated.
-    fn splice(&mut self, body: &str, path: &[Seg]) -> Result<Option<String>, Cycle> {
-        let Some(expanded) = self.expand(body, path)? else {
-            return Ok(None);
-        };
-        let body = expanded.as_str();
-        if let Some(name) = body.strip_prefix(ENV) {
-            return Ok(self.env_value(name, body, path));
+    /// Evaluates every item, so that one failure does not hide another.
+    fn eval_array(&mut self, items: &[Id]) -> Result<Outcome<Value>, Cycle> {
+        let mut values = Vec::with_capacity(items.len());
+        for &item in items {
+            values.push(self.eval(item)?);
         }
-        let Some(target) = self.target(body, path)? else {
-            return Ok(None);
-        };
-        let value = self.eval(target)?;
-        if self.failed.contains(&target) {
-            return Ok(None);
+        let values: Outcome<Vec<_>> = values.into_iter().collect();
+        Ok(values.map(Value::Array))
+    }
+
+    /// Evaluates every field, so that one failure does not hide another.
+    fn eval_object(&mut self, fields: &Object) -> Result<Outcome<Value>, Cycle> {
+        let mut entries = Vec::with_capacity(fields.len());
+        for (key, &field) in fields {
+            entries.push(self.eval(field)?.map(|value| (key.clone(), value)));
         }
-        Ok(match value.stringify() {
-            Some(text) => Some(text),
-            None => {
-                self.problems.push(Problem::NotStringifiable {
-                    path: path.to_vec(),
-                    reference: body.to_string(),
-                    kind: value.kind(),
-                });
-                None
-            }
+        let entries: Outcome<IndexMap<_, _>> = entries.into_iter().collect();
+        Ok(entries.map(Value::Object))
+    }
+
+    /// The text of the string or reference body written at `at`, with its
+    /// references spliced in. The result is not scanned again. Every part is
+    /// tried, so that all of their problems are reported.
+    fn expand(&mut self, parts: &[Part], at: Id) -> Result<Outcome<String>, Cycle> {
+        let mut texts = Vec::with_capacity(parts.len());
+        for part in parts {
+            texts.push(match part {
+                Part::Literal(literal) => Ok(literal.clone()),
+                Part::Ref(body) => self.splice(body, at)?,
+                Part::Malformed(error) => {
+                    Err(self.report(at, ProblemKind::Syntax(error.clone().into())))
+                }
+            });
+        }
+        Ok(texts.into_iter().collect())
+    }
+
+    /// Embedded position: the referent is rendered as text.
+    fn splice(&mut self, body: &Body, at: Id) -> Result<Outcome<String>, Cycle> {
+        let reference = match self.expand(&body.0, at)? {
+            Ok(reference) => reference,
+            Err(reported) => return Ok(Err(reported)),
+        };
+        if let Some(name) = reference.strip_prefix(ENV) {
+            return Ok(self.env_value(name, &reference, at));
+        }
+        let target = match self.target(&reference, at)? {
+            Ok(target) => target,
+            Err(reported) => return Ok(Err(reported)),
+        };
+        Ok(self.eval(target)?.and_then(|value| {
+            value.stringify().ok_or_else(|| {
+                let kind = value.kind();
+                self.report(at, ProblemKind::NotStringifiable { reference, kind })
+            })
+        }))
+    }
+
+    /// The variable `reference` names, which must be set.
+    fn env_value(&mut self, name: &str, reference: &str, at: Id) -> Outcome<String> {
+        if name.is_empty() {
+            return Err(self.report(at, ProblemKind::Syntax(Syntax::EmptyEnvName)));
+        }
+        self.env.lookup(name).ok_or_else(|| {
+            let reference = reference.to_string();
+            self.report(at, ProblemKind::Unresolved { reference })
         })
     }
 
-    /// A reference body with its inner references spliced in as text, or
-    /// `None` if any of them failed. The result is not scanned again.
-    pub(super) fn expand(&mut self, body: &str, path: &[Seg]) -> Result<Option<String>, Cycle> {
-        let pieces = scan(body);
-        if pieces.is_empty() {
-            return Ok(Some(body.to_string()));
-        }
-        let mut ok = true;
-        let mut out = String::new();
-        for piece in pieces {
-            match piece {
-                Piece::Literal(literal) => out.push_str(literal),
-                Piece::Ref(inner) => match self.splice(inner, path)? {
-                    Some(text) => out.push_str(&text),
-                    None => ok = false,
-                },
-                Piece::Malformed { error, .. } => {
-                    self.problems.push(Problem::Syntax {
-                        path: path.to_vec(),
-                        error,
-                    });
-                    ok = false;
-                }
+    /// The node a reference names, which must be a path to something.
+    fn target(&mut self, reference: &str, at: Id) -> Result<Outcome<Id>, Cycle> {
+        let path = match reference.parse::<RefPath>() {
+            Ok(path) => path.into_segs(),
+            Err(error) => {
+                let body = reference.to_string();
+                let syntax = Syntax::Path { body, error };
+                return Ok(Err(self.report(at, ProblemKind::Syntax(syntax))));
             }
-        }
-        Ok(ok.then_some(out))
-    }
-
-    /// The variable, recording a problem and returning `None` if the name is
-    /// empty or the variable is unset.
-    fn env_value(&mut self, name: &str, body: &str, path: &[Seg]) -> Option<String> {
-        if name.is_empty() {
-            self.problems.push(Problem::Syntax {
-                path: path.to_vec(),
-                error: Syntax::EmptyEnvName,
-            });
-            return None;
-        }
-        let found = self.env.lookup(name);
-        if found.is_none() {
-            self.problems.push(Problem::Unresolved {
-                path: path.to_vec(),
-                reference: body.to_string(),
-            });
-        }
-        found
-    }
-
-    /// The node a reference names, recording a problem and returning `None`
-    /// if it is malformed or names nothing.
-    fn target(&mut self, body: &str, path: &[Seg]) -> Result<Option<Id>, Cycle> {
-        let Some(target) = parse_target(body, path, &mut self.problems) else {
-            return Ok(None);
         };
-        let found = self.lookup(&target)?;
-        if found.is_none() {
-            self.problems.push(Problem::Unresolved {
-                path: path.to_vec(),
-                reference: body.to_string(),
-            });
-        }
-        Ok(found)
+        Ok(self.lookup(&path)?.ok_or_else(|| {
+            let reference = reference.to_string();
+            self.report(at, ProblemKind::Unresolved { reference })
+        }))
     }
-}
 
-fn parse_target(body: &str, path: &[Seg], problems: &mut Vec<Problem>) -> Option<Vec<Seg>> {
-    Some(match body.parse::<RefPath>() {
-        Ok(parsed) => parsed.into_segs(),
-        Err(PathError::BadIndex { .. }) => {
-            problems.push(Problem::Syntax {
-                path: path.to_vec(),
-                error: Syntax::BadIndex {
-                    body: body.to_string(),
-                },
-            });
-            return None;
-        }
-        // `EmptyPath` occurs when a nested reference expands to `""`.
-        Err(PathError::EmptySegment { .. } | PathError::EmptyPath) => {
-            problems.push(Problem::Syntax {
-                path: path.to_vec(),
-                error: Syntax::EmptySegment {
-                    body: body.to_string(),
-                },
-            });
-            return None;
-        }
-        Err(PathError::MissingEquals | PathError::IndexInKeyPath { .. }) => {
-            unreachable!("parsing a reference body never reports these")
-        }
-    })
+    /// Records a problem with the string at node `at`.
+    fn report(&mut self, at: Id, kind: ProblemKind) -> Reported {
+        let Node { origin, path, .. } = &self.nodes[at];
+        self.sink.report(Problem {
+            origin: *origin,
+            path: path.clone(),
+            kind,
+        })
+    }
 }
 
 fn child(path: &[Seg], seg: Seg) -> Vec<Seg> {
@@ -367,4 +295,57 @@ fn child(path: &[Seg], seg: Seg) -> Vec<Seg> {
     out.extend_from_slice(path);
     out.push(seg);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn object(entries: &[(&str, Value)]) -> Value {
+        Value::Object(
+            entries
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), value.clone()))
+                .collect(),
+        )
+    }
+
+    fn text(s: &str) -> Value {
+        Value::String(s.to_owned())
+    }
+
+    fn failure(doc: Value) -> String {
+        interpolate(doc, &InterpolationOptions::new(&Value::String))
+            .expect_err("should fail")
+            .to_string()
+    }
+
+    #[test]
+    fn a_failure_found_while_shaping_is_not_reported_again() {
+        let b = ("b", text("${t.${x}}"));
+        let x = ("x", text("${missing}"));
+        let a = ("a", text("${x.k}"));
+        // Only `a` reads through `x`, which shapes it before it is evaluated.
+        assert_eq!(
+            failure(object(&[a, b.clone(), x.clone()])),
+            "unresolved reference\n  --> x: `missing`\n  --> a: `x.k`"
+        );
+        assert_eq!(
+            failure(object(&[b, x])),
+            "unresolved reference\n  --> x: `missing`"
+        );
+    }
+
+    #[test]
+    fn a_container_reports_every_failing_child() {
+        let children = || [("a", text("${one}")), ("b", text("x${two}"))];
+        let list = Value::Array(children().map(|(_, value)| value).to_vec());
+        for container in [object(&children()), list] {
+            let report = failure(object(&[("c", container), ("copy", text("n=${c}"))]));
+            assert!(report.contains("`one`"), "{report}");
+            assert!(report.contains("`two`"), "{report}");
+            // Embedding the failed container adds nothing.
+            assert_eq!(report.lines().count(), 3, "{report}");
+        }
+    }
 }

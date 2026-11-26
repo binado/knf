@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use anyhow::anyhow;
-use knf::{InterpError, PathError, Problem};
+use knf::{InterpError, Origin, PathError, ProblemKind};
 use knf_convert::LoadError;
 
 /// Adds help to a load error.
@@ -46,7 +46,10 @@ pub fn name_the_inline_config_flag(err: PathError) -> anyhow::Error {
 }
 
 /// Adds `--interpolate` help to interpolation errors.
-pub fn explain_interp(err: InterpError, has_context: bool) -> anyhow::Error {
+///
+/// `context` is the `--with` path when one was supplied.
+pub fn explain_interp(err: InterpError, context: Option<&Path>) -> anyhow::Error {
+    let has_context = context.is_some();
     let mut help = String::new();
     match &err {
         InterpError::Cycle(_) => {
@@ -54,9 +57,9 @@ pub fn explain_interp(err: InterpError, has_context: bool) -> anyhow::Error {
         }
         InterpError::Problems(problems) => {
             // One help line per kind present, then the opt-out hint.
-            let has = |f: fn(&Problem) -> bool| problems.iter().any(f);
-            let syntax = has(|p| matches!(p, Problem::Syntax { .. }));
-            let unresolved = has(|p| matches!(p, Problem::Unresolved { .. }));
+            let has = |f: fn(&ProblemKind) -> bool| problems.iter().any(|p| f(&p.kind));
+            let syntax = has(|kind| matches!(kind, ProblemKind::Syntax(_)));
+            let unresolved = has(|kind| matches!(kind, ProblemKind::Unresolved { .. }));
             if syntax {
                 help.push_str(
                     "\nhelp: a reference is `${key.path}` (with `[n]` for array elements) or `${env:NAME}`; write `$$` for a literal `$`",
@@ -73,10 +76,18 @@ pub fn explain_interp(err: InterpError, has_context: bool) -> anyhow::Error {
                     );
                 }
             }
-            if has(|p| matches!(p, Problem::NotStringifiable { .. })) {
+            if has(|kind| matches!(kind, ProblemKind::NotStringifiable { .. })) {
                 help.push_str(
                     "\nhelp: an object or array reference must be the whole string, not embedded in one",
                 );
+            }
+            if let Some(path) = context
+                && problems.iter().any(|p| p.origin == Origin::Context)
+            {
+                help.push_str(&format!(
+                    "\nhelp: (context) paths are in `{}`",
+                    path.display()
+                ));
             }
             if syntax || unresolved {
                 if has_context {

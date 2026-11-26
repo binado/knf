@@ -1,18 +1,29 @@
-//! Splitting a parsed string value into literal text and reference bodies.
+//! Splitting a string value into literal text and reference bodies.
 
-use std::fmt;
+use std::borrow::Cow;
 
-/// One span of a scanned string. `Ref` bodies are left unparsed.
+/// What a string value holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Scanned<'a> {
+    /// No reference: the text, with each `$$` unescaped.
+    Plain(Cow<'a, str>),
+    /// Exactly one reference and nothing else: its raw body.
+    Whole(&'a str),
+    /// References, well formed or not, possibly among literal text.
+    Template(Vec<Piece<'a>>),
+}
+
+/// One span of a [`Scanned::Template`]. `Ref` bodies are left unparsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Piece<'a> {
     Literal(&'a str),
     Ref(&'a str),
-    Malformed { spelling: &'a str, error: Syntax },
+    Malformed(ScanError),
 }
 
-/// A malformed reference.
+/// A reference the scanner cannot delimit or accept.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum Syntax {
+pub enum ScanError {
     /// `${` with no `}` after it.
     #[error("unterminated `${{` at offset {offset}")]
     Unterminated { offset: usize },
@@ -22,29 +33,35 @@ pub enum Syntax {
     /// `${}` — a reference to nothing.
     #[error("empty reference `${{}}`")]
     EmptyRef,
-    /// `${env:}`. Raised by the resolver.
-    #[error("empty variable name in `${{env:}}`")]
-    EmptyEnvName,
-    /// `${a..b}`. Raised by the resolver.
-    #[error("empty segment in reference `${{{body}}}`")]
-    EmptySegment { body: String },
-    /// `${servers[x]}`. Raised by the resolver.
-    #[error("malformed index in reference `${{{body}}}`")]
-    BadIndex { body: String },
 }
 
 /// The deepest `${` nesting a reference may have; `${a}` is one level.
 pub const MAX_NESTING: usize = 10;
 
-/// Splits `s` into literals and reference bodies.
-///
-/// Returns an empty vector when `s` has no `$`. Malformed references become
-/// [`Piece::Malformed`]; an unterminated one consumes the rest of the string.
-pub fn scan(s: &str) -> Vec<Piece<'_>> {
+/// Classifies `s`. A malformed reference becomes [`Piece::Malformed`]; an
+/// unterminated one consumes the rest of the string.
+pub fn scan(s: &str) -> Scanned<'_> {
     if !s.contains('$') {
-        return Vec::new();
+        return Scanned::Plain(Cow::Borrowed(s));
     }
+    let pieces = pieces(s);
+    if let [Piece::Ref(body)] = pieces[..] {
+        return Scanned::Whole(body);
+    }
+    let literals: Option<String> = pieces
+        .iter()
+        .map(|piece| match piece {
+            Piece::Literal(text) => Some(*text),
+            Piece::Ref(_) | Piece::Malformed(_) => None,
+        })
+        .collect();
+    match literals {
+        Some(text) => Scanned::Plain(Cow::Owned(text)),
+        None => Scanned::Template(pieces),
+    }
+}
 
+fn pieces(s: &str) -> Vec<Piece<'_>> {
     let mut pieces = Vec::new();
     let mut cursor = 0; // where the next `$` is searched from
     let mut literal = 0; // start of the pending literal run
@@ -59,42 +76,22 @@ pub fn scan(s: &str) -> Vec<Piece<'_>> {
                 literal = cursor;
             }
             Some(b'{') => {
+                push_literal(&mut pieces, &s[literal..at]);
                 let body_start = at + 2;
                 let Some((rel_end, depth)) = closing_brace(&s[body_start..]) else {
-                    push_literal(&mut pieces, &s[literal..at]);
-                    pieces.push(Piece::Malformed {
-                        spelling: &s[at..],
-                        error: Syntax::Unterminated { offset: at },
-                    });
-                    cursor = s.len();
-                    literal = cursor;
+                    pieces.push(Piece::Malformed(ScanError::Unterminated { offset: at }));
+                    literal = s.len();
                     break;
                 };
                 let body = &s[body_start..body_start + rel_end];
-                let after = body_start + rel_end + 1;
-                if depth > MAX_NESTING {
-                    push_literal(&mut pieces, &s[literal..at]);
-                    pieces.push(Piece::Malformed {
-                        spelling: &s[at..after],
-                        error: Syntax::TooDeep { offset: at },
-                    });
-                    cursor = after;
-                    literal = cursor;
-                    continue;
-                }
-                if body.is_empty() {
-                    push_literal(&mut pieces, &s[literal..at]);
-                    pieces.push(Piece::Malformed {
-                        spelling: &s[at..after],
-                        error: Syntax::EmptyRef,
-                    });
-                    cursor = after;
-                    literal = cursor;
-                    continue;
-                }
-                push_literal(&mut pieces, &s[literal..at]);
-                pieces.push(Piece::Ref(body));
-                cursor = after;
+                pieces.push(if depth > MAX_NESTING {
+                    Piece::Malformed(ScanError::TooDeep { offset: at })
+                } else if body.is_empty() {
+                    Piece::Malformed(ScanError::EmptyRef)
+                } else {
+                    Piece::Ref(body)
+                });
+                cursor = body_start + rel_end + 1;
                 literal = cursor;
             }
             // A bare `$` is ordinary text.
@@ -139,15 +136,6 @@ fn push_literal<'a>(pieces: &mut Vec<Piece<'a>>, text: &'a str) {
     }
 }
 
-/// Renders a reference body back as `${body}`.
-pub struct Spelled<'a>(pub &'a str);
-
-impl fmt::Display for Spelled<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "${{{}}}", self.0)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,26 +148,38 @@ mod tests {
         Piece::Ref(s)
     }
 
-    fn malformed(spelling: &str, error: Syntax) -> Piece<'_> {
-        Piece::Malformed { spelling, error }
+    fn malformed<'a>(error: ScanError) -> Piece<'a> {
+        Piece::Malformed(error)
+    }
+
+    fn plain(s: &str) -> Scanned<'_> {
+        Scanned::Plain(s.into())
+    }
+
+    fn template(s: &str) -> Vec<Piece<'_>> {
+        match scan(s) {
+            Scanned::Template(pieces) => pieces,
+            other => panic!("{s}: {other:?}"),
+        }
     }
 
     #[test]
-    fn a_string_without_a_dollar_scans_to_nothing() {
-        assert_eq!(scan("plain text"), []);
-        assert_eq!(scan(""), []);
+    fn a_string_without_a_dollar_is_plain_and_borrowed() {
+        for s in ["plain text", ""] {
+            assert!(matches!(scan(s), Scanned::Plain(Cow::Borrowed(text)) if text == s));
+        }
     }
 
     #[test]
-    fn a_whole_string_reference_is_one_piece() {
-        assert_eq!(scan("${db.host}"), [re("db.host")]);
-        assert_eq!(scan("${env:PORT}"), [re("env:PORT")]);
+    fn a_whole_string_reference_is_whole() {
+        assert_eq!(scan("${db.host}"), Scanned::Whole("db.host"));
+        assert_eq!(scan("${env:PORT}"), Scanned::Whole("env:PORT"));
     }
 
     #[test]
     fn embedded_references_keep_their_surroundings() {
         assert_eq!(
-            scan("http://${host}:${port}/health"),
+            template("http://${host}:${port}/health"),
             [
                 lit("http://"),
                 re("host"),
@@ -192,86 +192,78 @@ mod tests {
 
     #[test]
     fn adjacent_references_have_no_literal_between_them() {
-        assert_eq!(scan("${a}${b}"), [re("a"), re("b")]);
+        assert_eq!(template("${a}${b}"), [re("a"), re("b")]);
     }
 
     #[test]
     fn dollar_dollar_is_a_literal_dollar() {
-        assert_eq!(scan("$$"), [lit("$")]);
-        assert_eq!(scan("$${a}"), [lit("$"), lit("{a}")]);
-        assert_eq!(scan("a$$b"), [lit("a"), lit("$"), lit("b")]);
+        assert_eq!(scan("$$"), plain("$"));
+        assert_eq!(scan("$${a}"), plain("${a}"));
+        assert_eq!(scan("a$$b"), plain("a$b"));
+        assert_eq!(template("$$${a}"), [lit("$"), re("a")]);
     }
 
     #[test]
     fn a_bare_dollar_is_ordinary_text() {
-        assert_eq!(scan("USD $5"), [lit("USD $5")]);
-        assert_eq!(scan("$"), [lit("$")]);
-        assert_eq!(scan("$ {a}"), [lit("$ {a}")]);
-        assert_eq!(scan("a$"), [lit("a$")]);
+        for s in ["USD $5", "$", "$ {a}", "a$"] {
+            assert_eq!(scan(s), plain(s));
+        }
     }
 
     #[test]
     fn malformed_references_are_returned_as_pieces() {
         assert_eq!(
-            scan("a ${b"),
-            [
-                lit("a "),
-                malformed("${b", Syntax::Unterminated { offset: 2 })
-            ]
+            template("a ${b"),
+            [lit("a "), malformed(ScanError::Unterminated { offset: 2 })]
         );
-        assert_eq!(scan("${}"), [malformed("${}", Syntax::EmptyRef)]);
+        assert_eq!(template("${}"), [malformed(ScanError::EmptyRef)]);
         assert_eq!(
-            scan("${a${b}"),
-            [malformed("${a${b}", Syntax::Unterminated { offset: 0 })]
+            template("${a${b}"),
+            [malformed(ScanError::Unterminated { offset: 0 })]
         );
     }
 
     #[test]
     fn nested_references_keep_their_raw_body() {
-        assert_eq!(scan("${a${b}}"), [re("a${b}")]);
-        assert_eq!(scan("${a.${b}.c}"), [re("a.${b}.c")]);
-        assert_eq!(scan("${${${a}}}"), [re("${${a}}")]);
-        assert_eq!(scan("x${a.${b}}y"), [lit("x"), re("a.${b}"), lit("y")]);
+        assert_eq!(scan("${a${b}}"), Scanned::Whole("a${b}"));
+        assert_eq!(scan("${a.${b}.c}"), Scanned::Whole("a.${b}.c"));
+        assert_eq!(scan("${${${a}}}"), Scanned::Whole("${${a}}"));
+        assert_eq!(template("x${a.${b}}y"), [lit("x"), re("a.${b}"), lit("y")]);
     }
 
     #[test]
     fn nesting_is_limited() {
         let deep = |n: usize| format!("{}a{}", "${".repeat(n), "}".repeat(n));
-        assert_eq!(scan(&deep(MAX_NESTING)).len(), 1);
-        assert!(matches!(
-            scan(&deep(MAX_NESTING)).as_slice(),
-            [Piece::Ref(_)]
-        ));
-        let too_deep = deep(MAX_NESTING + 1);
+        assert!(matches!(scan(&deep(MAX_NESTING)), Scanned::Whole(_)));
         assert_eq!(
-            scan(&too_deep),
-            [malformed(&too_deep, Syntax::TooDeep { offset: 0 })]
+            template(&deep(MAX_NESTING + 1)),
+            [malformed(ScanError::TooDeep { offset: 0 })]
         );
     }
 
     #[test]
     fn an_escaped_open_inside_a_body_does_not_nest() {
-        assert_eq!(scan("${a$${b}"), [re("a$${b")]);
+        assert_eq!(scan("${a$${b}"), Scanned::Whole("a$${b"));
     }
 
     #[test]
     fn scanning_continues_around_malformed_references() {
         assert_eq!(
-            scan("${before} ${} ${after}"),
+            template("${before} ${} ${after}"),
             [
                 re("before"),
                 lit(" "),
-                malformed("${}", Syntax::EmptyRef),
+                malformed(ScanError::EmptyRef),
                 lit(" "),
                 re("after"),
             ]
         );
         assert_eq!(
-            scan("${before} ${after"),
+            template("${before} ${after"),
             [
                 re("before"),
                 lit(" "),
-                malformed("${after", Syntax::Unterminated { offset: 10 }),
+                malformed(ScanError::Unterminated { offset: 10 }),
             ]
         );
     }
@@ -279,13 +271,8 @@ mod tests {
     #[test]
     fn non_ascii_literals_survive() {
         assert_eq!(
-            scan("héllo ${who} ☃"),
+            template("héllo ${who} ☃"),
             [lit("héllo "), re("who"), lit(" ☃")]
         );
-    }
-
-    #[test]
-    fn spelling_round_trips_a_reference() {
-        assert_eq!(Spelled("db.host").to_string(), "${db.host}");
     }
 }

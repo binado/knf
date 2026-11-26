@@ -12,12 +12,12 @@ mod value;
 pub use env::ProcessEnv;
 pub use inline::PathLeaf;
 pub use interp::{
-    Cycle, Env, InterpError, InterpolationOptions, Problem, Syntax, interpolate,
-    merge_with_interpolation,
+    Cycle, Env, InterpError, InterpolationOptions, Origin, Problem, ProblemKind, Problems,
+    ScanError, Syntax, interpolate, merge_with_interpolation,
 };
 #[allow(deprecated)]
 pub use merge::merge_layers;
 pub use merge::{MergeOptions, merge, merge_configs, merge_into};
-pub use path::{PathError, RefPath, Seg, render_path};
+pub use path::{PathError, RefPath, RefPathError, Seg, render_path};
 pub use toml_datetime::Datetime;
-pub use value::{Unsigned, Value};
+pub use value::{Unsigned, Value, ValueKind};

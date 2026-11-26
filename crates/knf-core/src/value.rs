@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::Datetime;
 use indexmap::IndexMap;
 
@@ -13,6 +15,43 @@ pub enum Value {
     Datetime(Datetime),
     Array(Vec<Value>),
     Object(IndexMap<String, Value>),
+}
+
+/// A [`Value`]'s type, as named in configuration diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueKind {
+    Null,
+    Bool,
+    /// Any integer or float.
+    Number,
+    String,
+    Datetime,
+    Array,
+    Object,
+}
+
+impl ValueKind {
+    /// The indefinite article the name takes: `an object`, `a null`.
+    pub fn article(self) -> &'static str {
+        match self {
+            Self::Array | Self::Object => "an",
+            Self::Null | Self::Bool | Self::Number | Self::String | Self::Datetime => "a",
+        }
+    }
+}
+
+impl fmt::Display for ValueKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Null => "null",
+            Self::Bool => "bool",
+            Self::Number => "number",
+            Self::String => "string",
+            Self::Datetime => "datetime",
+            Self::Array => "array",
+            Self::Object => "object",
+        })
+    }
 }
 
 /// An integer above `i64::MAX`, built by [`Value::unsigned`].
@@ -33,15 +72,15 @@ impl Value {
     }
 
     /// The kind used in configuration diagnostics.
-    pub fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> ValueKind {
         match self {
-            Self::Null => "null",
-            Self::Bool(_) => "bool",
-            Self::Integer(_) | Self::Unsigned(_) | Self::Float(_) => "number",
-            Self::String(_) => "string",
-            Self::Datetime(_) => "datetime",
-            Self::Array(_) => "array",
-            Self::Object(_) => "object",
+            Self::Null => ValueKind::Null,
+            Self::Bool(_) => ValueKind::Bool,
+            Self::Integer(_) | Self::Unsigned(_) | Self::Float(_) => ValueKind::Number,
+            Self::String(_) => ValueKind::String,
+            Self::Datetime(_) => ValueKind::Datetime,
+            Self::Array(_) => ValueKind::Array,
+            Self::Object(_) => ValueKind::Object,
         }
     }
 
@@ -138,7 +177,7 @@ mod tests {
             (Value::Object(IndexMap::new()), "object"),
         ];
         for (value, kind) in kinds {
-            assert_eq!(value.kind(), kind);
+            assert_eq!(value.kind().to_string(), kind);
         }
     }
 

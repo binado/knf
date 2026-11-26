@@ -9,6 +9,20 @@ pub enum PathError {
     /// No `=` in a `key.path=value` expression.
     #[error("expected KEY.PATH=VALUE")]
     MissingEquals,
+    /// The path itself does not parse.
+    #[error(transparent)]
+    Ref(#[from] RefPathError),
+    /// A path given to a writer contains an array index.
+    #[error("`{path}` contains an array index; merge paths take keys only")]
+    IndexInKeyPath {
+        /// The full path, rendered.
+        path: String,
+    },
+}
+
+/// Why text or keys are not a [`RefPath`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RefPathError {
     /// The path is empty (`=1`, an empty `${...}` body, an empty vec).
     #[error("empty path")]
     EmptyPath,
@@ -22,12 +36,6 @@ pub enum PathError {
     #[error("malformed index in path `{path}`")]
     BadIndex {
         /// The path that contained the bad bracket.
-        path: String,
-    },
-    /// A path given to a writer contains an array index.
-    #[error("`{path}` contains an array index; merge paths take keys only")]
-    IndexInKeyPath {
-        /// The full path, rendered.
         path: String,
     },
 }
@@ -68,12 +76,12 @@ pub struct RefPath {
 
 impl RefPath {
     /// Build from key strings. Rejects an empty path or any empty segment.
-    pub fn from_keys(keys: Vec<String>) -> Result<Self, PathError> {
+    pub fn from_keys(keys: Vec<String>) -> Result<Self, RefPathError> {
         if keys.is_empty() {
-            return Err(PathError::EmptyPath);
+            return Err(RefPathError::EmptyPath);
         }
         if keys.iter().any(|k| k.is_empty()) {
-            return Err(PathError::EmptySegment {
+            return Err(RefPathError::EmptySegment {
                 path: keys.join("."),
             });
         }
@@ -111,17 +119,17 @@ impl RefPath {
 }
 
 impl FromStr for RefPath {
-    type Err = PathError;
+    type Err = RefPathError;
 
     /// Grammar: a key, then any mix of `.key` and `[N]` steps.
     fn from_str(body: &str) -> Result<Self, Self::Err> {
         if body.is_empty() {
-            return Err(PathError::EmptyPath);
+            return Err(RefPathError::EmptyPath);
         }
-        let bad_index = || PathError::BadIndex {
+        let bad_index = || RefPathError::BadIndex {
             path: body.to_string(),
         };
-        let empty_segment = || PathError::EmptySegment {
+        let empty_segment = || RefPathError::EmptySegment {
             path: body.to_string(),
         };
 
@@ -228,7 +236,7 @@ mod tests {
 
     #[test]
     fn ref_path_rejects_malformed_bodies() {
-        let cases: &[(&str, PathError)] = &[
+        let cases: &[(&str, RefPathError)] = &[
             (".a", empty_segment(".a")),
             ("a..b", empty_segment("a..b")),
             ("a[0]..b", empty_segment("a[0]..b")),
@@ -246,15 +254,15 @@ mod tests {
         for (body, want) in cases {
             assert_eq!(&body.parse::<RefPath>().unwrap_err(), want, "{body}");
         }
-        assert_eq!("".parse::<RefPath>().unwrap_err(), PathError::EmptyPath);
+        assert_eq!("".parse::<RefPath>().unwrap_err(), RefPathError::EmptyPath);
     }
 
-    fn empty_segment(path: &str) -> PathError {
-        PathError::EmptySegment { path: path.into() }
+    fn empty_segment(path: &str) -> RefPathError {
+        RefPathError::EmptySegment { path: path.into() }
     }
 
-    fn bad_index(path: &str) -> PathError {
-        PathError::BadIndex { path: path.into() }
+    fn bad_index(path: &str) -> RefPathError {
+        RefPathError::BadIndex { path: path.into() }
     }
 
     #[test]
@@ -268,15 +276,15 @@ mod tests {
     fn from_keys_rejects_empty_path_and_empty_segments() {
         assert_eq!(
             RefPath::from_keys(vec![]).unwrap_err(),
-            PathError::EmptyPath
+            RefPathError::EmptyPath
         );
         assert_eq!(
             RefPath::from_keys(vec!["".into()]).unwrap_err(),
-            PathError::EmptySegment { path: "".into() }
+            RefPathError::EmptySegment { path: "".into() }
         );
         assert_eq!(
             RefPath::from_keys(vec!["a".into(), "".into()]).unwrap_err(),
-            PathError::EmptySegment { path: "a.".into() }
+            RefPathError::EmptySegment { path: "a.".into() }
         );
         assert_eq!(
             RefPath::from_keys(vec!["db".into(), "plugins".into()]).unwrap(),

@@ -2,13 +2,13 @@
 
 use std::fmt;
 
-use super::scan::Syntax;
-use crate::{Seg, render_path};
+use super::scan::ScanError;
+use crate::{RefPathError, Seg, ValueKind, render_path};
 
 /// Why interpolation failed: every problem found, or a single cycle.
 #[derive(Debug)]
 pub enum InterpError {
-    Problems(Vec<Problem>),
+    Problems(Problems),
     Cycle(Cycle),
 }
 
@@ -22,7 +22,7 @@ impl fmt::Display for InterpError {
                 // No trailing newline.
                 let mut lines: Vec<String> = Vec::new();
                 for group in Group::ALL {
-                    let members = problems.iter().filter(|p| p.group() == group);
+                    let members = problems.iter().filter(|p| p.kind.group() == group);
                     let mut any = false;
                     for problem in members {
                         if !any {
@@ -30,9 +30,10 @@ impl fmt::Display for InterpError {
                             any = true;
                         }
                         lines.push(format!(
-                            "  --> {}: {}",
-                            render_path(problem.path()),
-                            problem.detail()
+                            "  --> {}{}: {}",
+                            render_path(&problem.path),
+                            problem.origin.suffix(),
+                            problem.kind.detail()
                         ));
                     }
                 }
@@ -42,34 +43,88 @@ impl fmt::Display for InterpError {
     }
 }
 
-/// One thing wrong with one reference.
+/// At least one [`Problem`], in the order found.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Problem {
-    /// A reference that is not spelled like one.
-    Syntax { path: Vec<Seg>, error: Syntax },
-    /// A missing key or unset environment variable.
-    Unresolved { path: Vec<Seg>, reference: String },
-    /// A container or null in embedded position: `url = "http://${db}/"`.
-    NotStringifiable {
-        path: Vec<Seg>,
-        reference: String,
-        kind: &'static str,
-    },
-}
+pub struct Problems(Vec<Problem>);
 
-impl Problem {
-    /// Where in the merged document or context the offending string lives.
-    pub fn path(&self) -> &[Seg] {
-        match self {
-            Self::Syntax { path, .. }
-            | Self::Unresolved { path, .. }
-            | Self::NotStringifiable { path, .. } => path,
-        }
+impl Problems {
+    pub(super) fn new(problems: Vec<Problem>) -> Option<Self> {
+        (!problems.is_empty()).then_some(Self(problems))
     }
 
+    /// The problems as a non-empty slice.
+    pub fn as_slice(&self) -> &[Problem] {
+        &self.0
+    }
+
+    /// Iterate in the order found.
+    pub fn iter(&self) -> std::slice::Iter<'_, Problem> {
+        self.0.iter()
+    }
+}
+
+impl IntoIterator for Problems {
+    type Item = Problem;
+    type IntoIter = std::vec::IntoIter<Problem>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Problems {
+    type Item = &'a Problem;
+    type IntoIter = std::slice::Iter<'a, Problem>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// One thing wrong with one reference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Problem {
+    /// The tree that holds the offending string.
+    pub origin: Origin,
+    /// Where in that tree the string lives.
+    pub path: Vec<Seg>,
+    pub kind: ProblemKind,
+}
+
+/// The tree a string was written in, or merged into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// The configs being merged.
+    Output,
+    /// [`InterpolationOptions::context`](crate::InterpolationOptions::context).
+    Context,
+}
+
+impl Origin {
+    /// What follows a path in a report; output paths are unmarked.
+    fn suffix(self) -> &'static str {
+        match self {
+            Self::Output => "",
+            Self::Context => " (context)",
+        }
+    }
+}
+
+/// What is wrong with a reference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProblemKind {
+    /// A reference that is not spelled like one.
+    Syntax(Syntax),
+    /// A missing key or unset environment variable.
+    Unresolved { reference: String },
+    /// A container or null in embedded position: `url = "http://${db}/"`.
+    NotStringifiable { reference: String, kind: ValueKind },
+}
+
+impl ProblemKind {
     fn group(&self) -> Group {
         match self {
-            Self::Syntax { .. } => Group::Syntax,
+            Self::Syntax(_) => Group::Syntax,
             Self::Unresolved { .. } => Group::Unresolved,
             Self::NotStringifiable { .. } => Group::NotStringifiable,
         }
@@ -77,21 +132,34 @@ impl Problem {
 
     fn detail(&self) -> String {
         match self {
-            Self::Syntax { error, .. } => error.to_string(),
-            Self::Unresolved { reference, .. } => format!("`{reference}`"),
-            Self::NotStringifiable {
-                reference, kind, ..
-            } => format!("`{reference}` is {} {kind}", article(kind)),
+            Self::Syntax(error) => error.to_string(),
+            Self::Unresolved { reference } => format!("`{reference}`"),
+            Self::NotStringifiable { reference, kind } => {
+                format!("`{reference}` is {} {kind}", kind.article())
+            }
         }
     }
 }
 
-/// `an` for `object`/`array`, `a` for `null`.
-fn article(kind: &str) -> &'static str {
-    if kind.starts_with(['a', 'e', 'i', 'o', 'u']) {
-        "an"
-    } else {
-        "a"
+/// A malformed reference.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum Syntax {
+    /// Rejected while delimiting `${...}`.
+    #[error(transparent)]
+    Scan(#[from] ScanError),
+    /// `${env:}`.
+    #[error("empty variable name in `${{env:}}`")]
+    EmptyEnvName,
+    /// A body that is not a path: `${a..b}`, `${servers[x]}`.
+    #[error("{} in reference `${{{body}}}`", defect(error))]
+    Path { body: String, error: RefPathError },
+}
+
+fn defect(error: &RefPathError) -> &'static str {
+    match error {
+        // A body is only empty when a nested reference expands to `""`.
+        RefPathError::EmptyPath | RefPathError::EmptySegment { .. } => "empty segment",
+        RefPathError::BadIndex { .. } => "malformed index",
     }
 }
 
@@ -146,20 +214,39 @@ mod tests {
         dotted.split('.').map(|s| Seg::Key(s.to_string())).collect()
     }
 
+    fn output(path: Vec<Seg>, kind: ProblemKind) -> Problem {
+        Problem {
+            origin: Origin::Output,
+            path,
+            kind,
+        }
+    }
+
+    fn unresolved(reference: &str) -> ProblemKind {
+        ProblemKind::Unresolved {
+            reference: reference.into(),
+        }
+    }
+
+    fn report(problems: Vec<Problem>) -> String {
+        InterpError::Problems(Problems::new(problems).expect("non-empty")).to_string()
+    }
+
+    #[test]
+    fn problems_cannot_be_empty() {
+        assert_eq!(Problems::new(Vec::new()), None);
+    }
+
     #[test]
     fn one_kind_renders_as_a_header_and_a_list() {
-        let err = InterpError::Problems(vec![
-            Problem::Unresolved {
-                path: key("server.url"),
-                reference: "db.hostname".into(),
-            },
-            Problem::Unresolved {
-                path: vec![Seg::Key("tags".into()), Seg::Index(0)],
-                reference: "env:REGION".into(),
-            },
-        ]);
         assert_eq!(
-            err.to_string(),
+            report(vec![
+                output(key("server.url"), unresolved("db.hostname")),
+                output(
+                    vec![Seg::Key("tags".into()), Seg::Index(0)],
+                    unresolved("env:REGION")
+                ),
+            ]),
             "unresolved reference\n\
              \x20 --> server.url: `db.hostname`\n\
              \x20 --> tags[0]: `env:REGION`"
@@ -168,23 +255,18 @@ mod tests {
 
     #[test]
     fn kinds_group_in_a_fixed_order() {
-        let err = InterpError::Problems(vec![
-            Problem::NotStringifiable {
-                path: key("url"),
-                reference: "db".into(),
-                kind: "object",
-            },
-            Problem::Unresolved {
-                path: key("a"),
-                reference: "nope".into(),
-            },
-            Problem::Syntax {
-                path: key("b"),
-                error: Syntax::EmptyRef,
-            },
-        ]);
         assert_eq!(
-            err.to_string(),
+            report(vec![
+                output(
+                    key("url"),
+                    ProblemKind::NotStringifiable {
+                        reference: "db".into(),
+                        kind: ValueKind::Object,
+                    }
+                ),
+                output(key("a"), unresolved("nope")),
+                output(key("b"), ProblemKind::Syntax(ScanError::EmptyRef.into())),
+            ]),
             "invalid reference\n\
              \x20 --> b: empty reference `${}`\n\
              unresolved reference\n\
@@ -195,15 +277,37 @@ mod tests {
     }
 
     #[test]
-    fn a_cycle_reads_as_a_chain() {
-        let err = InterpError::Cycle(Cycle::new(vec![key("a"), key("b"), key("a")]));
-        assert_eq!(err.to_string(), "reference cycle: `a` -> `b` -> `a`");
+    fn context_paths_are_marked() {
+        let problem = Problem {
+            origin: Origin::Context,
+            path: key("settings.url"),
+            kind: unresolved("missing"),
+        };
+        assert_eq!(
+            report(vec![problem]),
+            "unresolved reference\n  --> settings.url (context): `missing`"
+        );
     }
 
     #[test]
-    fn articles_match_the_three_possible_kinds() {
-        assert_eq!(article("object"), "an");
-        assert_eq!(article("array"), "an");
-        assert_eq!(article("null"), "a");
+    fn path_syntax_names_the_defect() {
+        for (body, want) in [
+            ("a..b", "empty segment in reference `${a..b}`"),
+            ("", "empty segment in reference `${}`"),
+            ("a[x]", "malformed index in reference `${a[x]}`"),
+        ] {
+            let error = body.parse::<crate::RefPath>().unwrap_err();
+            let syntax = Syntax::Path {
+                body: body.into(),
+                error,
+            };
+            assert_eq!(syntax.to_string(), want);
+        }
+    }
+
+    #[test]
+    fn a_cycle_reads_as_a_chain() {
+        let err = InterpError::Cycle(Cycle::new(vec![key("a"), key("b"), key("a")]));
+        assert_eq!(err.to_string(), "reference cycle: `a` -> `b` -> `a`");
     }
 }
