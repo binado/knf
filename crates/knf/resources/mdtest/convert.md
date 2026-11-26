@@ -127,18 +127,6 @@ $ knf --to toml -c a=1
 a = 1
 ```
 
-### Unmatched globs and missing files still allow `--to`
-
-```console
-$ knf missing.json -g '*.toml' --to toml -c a=1
-```
-
-`stdout`:
-
-```text
-a = 1
-```
-
 ## Lossy conversion
 
 ### TOML datetimes become strings in JSON

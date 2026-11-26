@@ -285,14 +285,15 @@ def test_the_knf_executable_comes_with_the_wheel(write):
     assert out.stdout.strip() == '{"a":1,"b":2}'
 
 
-def test_the_knf_executable_merges_and_lists_files(tmp_path):
+def test_the_knf_executable_merges_and_previews_inputs(tmp_path):
     knf = shutil.which("knf")
     assert knf is not None
     (tmp_path / "foo" / "bar").mkdir(parents=True)
     (tmp_path / "foo" / "base.toml").write_text("base = 1\nvalue = 1\n")
     (tmp_path / "foo" / "bar" / "target.toml").write_text("value = 2\n")
+    files = [os.path.join("foo", "base.toml"), os.path.join("foo", "bar", "target.toml")]
     out = subprocess.run(
-        [knf, "foo/base.toml", "foo/bar/target.toml", "--compact"],
+        [knf, *files, "--compact"],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -300,15 +301,17 @@ def test_the_knf_executable_merges_and_lists_files(tmp_path):
     )
     assert out.stdout == "base = 1\nvalue = 2\n"
     out = subprocess.run(
-        [knf, "foo/base.toml", "foo/bar/target.toml", "--list-files"],
+        [knf, *files, "-c", "value=3", "--dry-run"],
         cwd=tmp_path,
         capture_output=True,
         text=True,
         check=True,
     )
     assert out.stdout.splitlines() == [
-        os.path.join("foo", "base.toml"),
-        os.path.join("foo", "bar", "target.toml"),
+        "[dry run] Skipped merging configs in this order (lowest to highest precedence):",
+        f"1. {files[0]}",
+        f"2. {files[1]}",
+        "3. value=3",
     ]
 
 
@@ -347,44 +350,6 @@ def test_the_knf_executable_rejects_invalid_shallow_before_io(tmp_path, args):
     )
     assert out.returncode == 2
     assert "No such file" not in out.stderr
-
-
-@pytest.mark.parametrize(
-    ("flag", "pattern"),
-    [("--glob", "config/*.prod.toml"), ("--glob-filename", "*.prod.toml")],
-)
-def test_the_knf_executable_filters_inputs(tmp_path, flag, pattern):
-    knf = shutil.which("knf")
-    assert knf is not None
-    (tmp_path / "config").mkdir()
-    (tmp_path / "config" / "a.prod.toml").write_text("value = 1\n")
-    (tmp_path / "config" / "b.prod.toml").write_text("value = 2\n")
-    (tmp_path / "config" / "bad.json").write_text("invalid ignored JSON")
-    args = [
-        knf,
-        "config/b.prod.toml",
-        "config/bad.json",
-        "config/missing.json",
-        "config/a.prod.toml",
-        flag,
-        pattern,
-    ]
-    out = subprocess.run(
-        args + ["--compact"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert out.stdout == "value = 1\n"
-    out = subprocess.run(
-        args + ["--list-files"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert out.stdout.splitlines() == ["config/b.prod.toml", "config/a.prod.toml"]
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux accepts raw bytes in filenames")

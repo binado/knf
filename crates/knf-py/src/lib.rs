@@ -9,8 +9,7 @@ use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 #[path = "../../knf/src/main.rs"]
 mod cli_bin;
 
-use knf::fs::GlobTarget;
-use knf::glob::{GlobError, GlobPattern, KeyGlobError, KeyGlobPattern};
+use knf::glob::{KeyGlobError, KeyGlobPattern};
 use knf::{
     InterpError, InterpolationOptions, MergeOptions, Seg, Value, merge_configs, render_path,
 };
@@ -39,22 +38,6 @@ create_exception!(
     PyValueError,
     "A configuration reference cannot be resolved."
 );
-
-/// Filter candidates without filesystem access, preserving their order and duplicates.
-/// Matching precedes conversion to pathlib.Path, which can normalize `./`.
-#[pyfunction]
-#[pyo3(signature = (files, pattern, *, filename_only = false))]
-fn filter_paths(files: Vec<PathBuf>, pattern: &str, filename_only: bool) -> PyResult<Vec<PathBuf>> {
-    let pattern: GlobPattern = pattern
-        .parse()
-        .map_err(|err: GlobError| PyValueError::new_err(err.to_string()))?;
-    let target = if filename_only {
-        GlobTarget::Filename
-    } else {
-        GlobTarget::Path
-    };
-    Ok(knf::fs::filter_paths(&files, &pattern, target))
-}
 
 /// Load and merge homogeneous JSON or TOML files into one `dict`.
 ///
@@ -259,8 +242,6 @@ fn _knf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load, m)?)?;
     m.add_function(wrap_pyfunction!(deep_merge, m)?)?;
     m.add_function(wrap_pyfunction!(writer::dumps, m)?)?;
-    m.add_function(wrap_pyfunction!(writer::dumps_toml, m)?)?;
-    m.add_function(wrap_pyfunction!(filter_paths, m)?)?;
     m.add_function(wrap_pyfunction!(cli, m)?)?;
     m.add("ParseError", m.py().get_type::<ParseError>())?;
     m.add(

@@ -44,15 +44,16 @@ format, and output defaults to the input format. There is no stdin input.
 
 ## CLI
 
-**`-g/--glob`, `-G/--glob-filename`**: keep only inputs whose full path (or
-filename) matches the pattern.
+**`--dry-run`**: print a numbered list of files and inline assignments from
+lowest to highest precedence without reading or merging configs.
 
-```bash
-knf config/**/*.toml -g 'config/**/prod.toml'
-knf config/**/*.toml -G '*.prod.toml'
+```console
+$ knf base.toml prod.toml -c server.port=8080 --dry-run
+[dry run] Skipped merging configs in this order (lowest to highest precedence):
+1. base.toml
+2. prod.toml
+3. server.port=8080
 ```
-
-**`-l/--list-files`**: print the (filtered) input list without reading files.
 
 **`-c KEY.PATH=VALUE`**: inline config applied after all files. The value is
 parsed in the format of the input files or context and falls back to a string.
@@ -149,7 +150,6 @@ knf foo.toml bar.toml -i --with config.toml
 ```
 
 Context uses the same format as inputs.
-Filtering and `--list-files` apply only to merge inputs.
 
 **`--to json|toml`** (`yaml` with the `yaml` feature): convert the final document after merging and
 interpolation. Required when there are no input or context files. YAML is
@@ -172,7 +172,7 @@ A lossy conversion warns on stderr. Add **`--strict`** to reject it.
 The child inherits standard streams and returns its exit status. Its
 `KNF_CONFIG_PATH` environment variable points to a private temporary JSON or
 TOML file that is removed when the command finishes; `--to` selects its format.
-Cannot be combined with `--list-files` or `--to yaml`.
+Cannot be combined with `--dry-run` or `--to yaml`.
 
 ```bash
 knf base.toml pilot.toml -c seed=42 --exec -- python fit.py --replicate 2
@@ -181,15 +181,12 @@ knf base.toml pilot.toml -c seed=42 --exec -- python fit.py --replicate 2
 ## Python API
 
 ```python
-from knf import deep_merge, dump, dumps, filter_paths, load
+from knf import deep_merge, dump, dumps, load
 
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
 config = load(["foo.toml", "bar.toml"], interpolate=True, context="config.toml")
 pilot = deep_merge(config, {"solver": {"steps": 10}})
-
-files = filter_paths(candidates, "{defaults,prod}.toml", filename_only=True)
-config = load(files)
 
 text = dumps(config, format="toml")
 dump(config, "merged.toml")
@@ -213,7 +210,6 @@ seed = knf.config()["seed"]
 stream. It infers the format from `.json`, `.toml`, `.yaml`, or `.yml` and
 requires `format` for a stream. JSON and TOML support `pretty=False` for compact
 output. YAML also accepts `nan` and `inf` and requires `pretty=True`.
-See the `dumps_toml` and `dump_toml` docs for TOML types and limits.
 
 `deep_merge(base, exp, overrides)` applies the same pipeline to dicts, left to
 right. `deep_merge()` returns `{}`. `deep_merge(cfg, overrides)` is the

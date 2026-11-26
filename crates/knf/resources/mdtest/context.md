@@ -54,7 +54,7 @@ url = "https://inline/api"
 port = 5432
 ```
 
-## Context is independent of filtering and merge options
+## Context is independent of merge options
 
 `foo/base.json`:
 
@@ -75,7 +75,7 @@ port = 5432
 ```
 
 ```console
-$ knf foo/base.json foo/bar/target.json -G '{base,target}.json' --shallow db -i --with config.json --compact
+$ knf foo/base.json foo/bar/target.json --shallow db -i --with config.json --compact
 ```
 
 `stdout`:
@@ -134,24 +134,31 @@ $ knf -i --with dated.toml -c 'copy=${day}'
 copy = 1979-05-27
 ```
 
-## List files skips context IO and format checks
+## Dry run skips context I/O and format checks
 
 ### With input files
 
 ```console
-$ knf a.json -i --with missing.toml --list-files
+$ knf a.json -i --with missing.toml --dry-run
 ```
 
 `stdout`:
 
 ```text
-a.json
+[dry run] Skipped merging configs in this order (lowest to highest precedence):
+1. a.json
 ```
 
 ### Without input files
 
 ```console
-$ knf -i --with missing.toml --list-files
+$ knf -i --with missing.toml --dry-run
+```
+
+`stdout`:
+
+```text
+[dry run] Skipped merging configs in this order (lowest to highest precedence):
 ```
 
 ## Argument errors are usage errors before IO
