@@ -98,6 +98,60 @@ fn load<'py>(
     value_to_py(py, merged, &mut Vec::new())
 }
 
+/// Merge in-memory objects left to right into one `dict`.
+///
+/// `configs` merge left to right. No configs yields an empty dict. `shallow`
+/// is a key-path glob whose matches replace wholesale. With `interpolate`,
+/// references bind to the final document and a whole-string reference merges
+/// as the value it names. `context` is one object used only for interpolation,
+/// with output-first lookup; it requires `interpolate=True`. `format` selects
+/// how whole-string environment values are parsed (`json` or `toml`).
+///
+/// Don't pass an already-interpolated config with `interpolate=True`: escaped
+/// or environment-supplied `${...}` text would be resolved again.
+#[pyfunction]
+#[pyo3(signature = (*configs, interpolate = false, shallow = None, context = None, format = "json"))]
+fn deep_merge<'py>(
+    py: Python<'py>,
+    configs: Vec<Bound<'py, PyDict>>,
+    interpolate: bool,
+    shallow: Option<&str>,
+    context: Option<Bound<'py, PyDict>>,
+    format: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    if context.is_some() && !interpolate {
+        return Err(PyValueError::new_err("context requires interpolate=True"));
+    }
+    let shallow: Option<KeyGlobPattern> = shallow
+        .map(str::parse)
+        .transpose()
+        .map_err(|err: KeyGlobError| PyValueError::new_err(err.to_string()))?;
+    let format = match format {
+        "json" => InputFormat::Json,
+        "toml" => InputFormat::Toml,
+        _ => return Err(PyValueError::new_err("format must be 'json' or 'toml'")),
+    };
+    let opts = MergeOptions { shallow };
+    let values = configs
+        .iter()
+        .enumerate()
+        .map(|(index, config)| from_py::dict_to_value(config, Some(&format!("configs[{index}]"))))
+        .collect::<PyResult<Vec<_>>>()?;
+    let context = context
+        .as_ref()
+        .map(|context| from_py::dict_to_value(context, Some("context")))
+        .transpose()?;
+    let merged = py
+        .detach(move || {
+            let parse_inline = |text| format.parse_inline(text);
+            let interpolation = interpolate
+                .then(|| InterpolationOptions::new(&parse_inline).with_context(context.as_ref()));
+            merge_layers(values, &opts, interpolation)
+        })
+        .map_err(|err| InterpolationError::new_err(err.to_string()))?;
+    value_to_py(py, merged, &mut Vec::new())
+}
+
 enum Failure {
     Load(LoadError),
     Interpolate(InterpError),
@@ -190,6 +244,7 @@ fn cli(py: Python<'_>) -> PyResult<()> {
 #[pymodule]
 fn _knf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load, m)?)?;
+    m.add_function(wrap_pyfunction!(deep_merge, m)?)?;
     m.add_function(wrap_pyfunction!(writer::dumps, m)?)?;
     m.add_function(wrap_pyfunction!(writer::dumps_toml, m)?)?;
     m.add_function(wrap_pyfunction!(filter_paths, m)?)?;

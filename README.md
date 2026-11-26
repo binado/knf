@@ -186,6 +186,7 @@ from knf import deep_merge, dump, dumps, filter_paths, load
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
 config = load(["foo.toml", "bar.toml"], interpolate=True, context="config.toml")
+pilot = deep_merge(config, {"solver": {"steps": 10}})
 
 files = filter_paths(candidates, "{defaults,prod}.toml", filename_only=True)
 config = load(files)
@@ -214,12 +215,22 @@ requires `format` for a stream. JSON and TOML support `pretty=False` for compact
 output. YAML also accepts `nan` and `inf` and requires `pretty=True`.
 See the `dumps_toml` and `dump_toml` docs for TOML types and limits.
 
-`deep_merge(cfg, overrides)` returns a new dict: dicts merge recursively;
-lists, scalars and `None` replace. It does not re-run interpolation.
+`deep_merge(base, exp, overrides)` applies the same pipeline to dicts, left to
+right. `deep_merge()` returns `{}`. `deep_merge(cfg, overrides)` is the
+two-dict form and does not re-run interpolation unless `interpolate=True`.
+`context` is one dict and requires `interpolate=True`. `format` (`"json"` by
+default, or `"toml"`) parses whole-string `${env:NAME}` values the way files
+of that format do. The result is a new tree.
+
+Don't pass an already-interpolated config with `interpolate=True`: escaped or
+environment-supplied `${...}` text would be resolved again.
 
 ```python
 cfg = load(["base.toml"], interpolate=True)
 pilot = deep_merge(cfg, {"solver": {"steps": 10}})
+
+base = load(["base.toml"])  # references stay unresolved
+pilot = deep_merge(base, {"port": "${env:PORT}"}, interpolate=True, format="toml")
 ```
 
 ## License

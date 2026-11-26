@@ -30,7 +30,7 @@ pub(super) fn dumps(data: &Bound<'_, PyDict>, format: &str, pretty: bool) -> PyR
     };
     output
         .emit(
-            &dict_to_value(data)?,
+            &dict_to_value(data, None)?,
             Policy::Strict,
             Layout::pretty(pretty),
         )

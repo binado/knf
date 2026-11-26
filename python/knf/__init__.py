@@ -12,9 +12,10 @@ The same Rust pipeline the ``knf`` command line runs, called natively::
     >>> config["server"]["port"] = 8080
 
 ``filter_paths`` selects from a list of paths without filesystem access and
-returns ``pathlib.Path`` objects that can be passed directly to ``load``. ``deep_merge`` applies in-memory
-overrides. ``dumps`` and ``dump`` serialize a dict as JSON, TOML, or YAML. Under
-``knf --exec``, ``config()`` returns the resolved configuration.
+returns ``pathlib.Path`` objects that can be passed directly to ``load``.
+``deep_merge`` runs that pipeline on dicts. ``dumps`` and ``dump`` serialize a
+dict as JSON, TOML, or YAML. Under ``knf --exec``, ``config()`` returns the
+resolved configuration.
 """
 
 import os as _os
@@ -23,6 +24,7 @@ from typing import Any
 from ._knf import (
     InterpolationError,
     ParseError,
+    deep_merge,
     dumps,
     dumps_toml,
     filter_paths,
@@ -50,21 +52,6 @@ def dump(data, target, *, format=None, pretty=True):
         if format is None:
             raise ValueError("format is required for a text stream")
         target.write(dumps(data, format=format, pretty=pretty))
-
-
-def deep_merge(cfg, overrides):
-    """Return a new dict with overrides applied recursively to dict pairs.
-
-    Other values replace wholesale, including lists and None. Values outside a
-    recursive merge are shared with the inputs. Interpolation happens in load().
-    """
-    merged = cfg.copy()
-    for key, value in overrides.items():
-        original = cfg.get(key)
-        if isinstance(original, dict) and isinstance(value, dict):
-            value = deep_merge(original, value)
-        merged[key] = value
-    return merged
 
 
 def dump_toml(data, fp, *, pretty=True):

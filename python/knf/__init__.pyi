@@ -38,10 +38,48 @@ def config() -> dict[str, Any]:
     Raises RuntimeError outside --exec or if the snapshot cannot be loaded.
     """
 
-def deep_merge(cfg: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
-    """Return a new dict by merging dict pairs and replacing other values.
+def deep_merge(
+    *configs: dict[str, Any],
+    interpolate: bool = False,
+    shallow: Optional[str] = None,
+    context: Optional[dict[str, Any]] = None,
+    format: Literal["json", "toml"] = "json",
+) -> dict[str, Any]:
+    """Merge in-memory dicts with the same pipeline as ``load``.
 
-    Values outside a recursive merge are shared with the inputs, not copied.
+    ``configs`` merge left to right. ``deep_merge()`` returns ``{}``.
+    ``deep_merge(cfg, overrides)`` is the two-dict form. ``shallow`` is a
+    key-path glob whose matches replace wholesale (``"*"``, ``"foo"``,
+    ``"foo.*"``). ``interpolate=True`` resolves ``${key.path}`` and
+    ``${env:NAME}`` against the final document; a whole-string reference
+    merges as the value it names. ``context`` is one dict used only for
+    interpolation and requires ``interpolate=True``. Complete paths prefer
+    the merged document, then context, including references inside context.
+    Unused context references are not resolved. ``format`` selects how
+    whole-string environment values are parsed (``"json"`` by default, or
+    ``"toml"``), matching ``load`` of files in that format.
+
+    Each config, and ``context``, must be a dict. Values inside them may be
+    ``None``, bool, str, float, integers from ``-2**63`` through
+    ``2**64 - 1``, list, tuple, dict with string keys, and datetime, date, or
+    time. Tuples become lists. The result is a new tree.
+
+    Don't pass an already-interpolated config with ``interpolate=True``:
+    escaped or environment-supplied ``${...}`` text would be resolved again.
+
+    Raises:
+        TypeError: A config or context is not a dict, a key is not a string,
+            or a value has an unsupported type.
+        InterpolationError: A reference is invalid, unresolved, or cyclic.
+        ValueError: Invalid glob or format, context without interpolation,
+            an integer outside the 64-bit range, a self-referencing container,
+            nesting beyond 128 containers, a time with a tzinfo, a datetime
+            whose offset isn't whole minutes or whose ``utcoffset()`` is
+            ``None``, an otherwise invalid datetime, or a TOML environment
+            datetime that Python can't represent.
+
+    Errors converting a value inside an input name the input (``configs[i]``,
+    zero-based, or ``context``) and the key path.
     """
 
 def dumps_toml(data: dict[str, Any], *, pretty: bool = True) -> str:
