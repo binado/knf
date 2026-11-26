@@ -22,7 +22,7 @@ cargo add knf-core knf-convert         # Rust libraries
 ```
 
 Rust: `knf_convert::load_configs`, then `knf::merge_configs`, then
-`OutputFormat::emit`; see the [example](crates/knf-convert/examples/toml_to_json.rs).
+`Emit::emit`; see the [example](crates/knf-convert/examples/toml_to_json.rs).
 
 ## Usage
 

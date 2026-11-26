@@ -24,24 +24,30 @@ impl GlobPattern {
     }
 }
 
+/// The part of a path [`filter_paths`] matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlobTarget {
+    /// The whole supplied spelling.
+    Path,
+    /// The filename, ignoring directory components.
+    Filename,
+}
+
 /// Filter existing candidates without I/O, preserving spelling, order and duplicates.
 ///
 /// Matching uses native encoded bytes, so `?` matches one byte. An empty
-/// selection is allowed. Set `filename_only` to ignore directory components.
+/// selection is allowed.
 pub fn filter_paths<P: AsRef<Path>>(
     files: &[P],
     pattern: &GlobPattern,
-    filename_only: bool,
+    target: GlobTarget,
 ) -> Vec<PathBuf> {
     files
         .iter()
         .map(AsRef::as_ref)
-        .filter(|path| {
-            if filename_only {
-                pattern.matches_filename(path)
-            } else {
-                pattern.matches_path(path)
-            }
+        .filter(|path| match target {
+            GlobTarget::Path => pattern.matches_path(path),
+            GlobTarget::Filename => pattern.matches_filename(path),
         })
         .map(Path::to_path_buf)
         .collect()

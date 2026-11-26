@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use knf::{InterpolationOptions, MergeOptions, Value};
-use knf_convert::{Configs, InputFormat, Layout, LoadOptions, OutputFormat, Policy, Role};
+use knf_convert::{Configs, Emit, InputFormat, Layout, LoadOptions, Policy, Role};
 use tempfile::TempDir;
 
 macro_rules! json {
@@ -325,8 +325,8 @@ fn native_toml_preserves_special_values_and_precision() {
         merged.as_object().unwrap()["date"],
         merged.as_object().unwrap()["copy"]
     );
-    let emitted = OutputFormat::Toml
-        .emit(&merged, Policy::Strict, Layout::Pretty)
+    let emitted = Emit::Toml(Layout::Pretty)
+        .emit(&merged, Policy::Strict)
         .unwrap()
         .value;
     assert!(emitted.contains(".123456789Z"));

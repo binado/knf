@@ -1,5 +1,5 @@
 use knf::Value;
-use knf_convert::{InputFormat, Layout, OutputFormat, Policy};
+use knf_convert::{Emit, InputFormat, Layout, Policy};
 
 #[test]
 fn json_round_trip_preserves_order_integer_limits_null_and_negative_zero() {
@@ -13,8 +13,8 @@ fn json_round_trip_preserves_order_integer_limits_null_and_negative_zero() {
     let object = value.as_object().unwrap();
     assert_eq!(object["positive"], Value::Integer(i64::MAX));
     assert_eq!(object["large"], Value::unsigned(u64::MAX));
-    let emitted = OutputFormat::Json
-        .emit(&value, Policy::Strict, Layout::Compact)
+    let emitted = Emit::Json(Layout::Compact)
+        .emit(&value, Policy::Strict)
         .unwrap();
     assert!(!emitted.lossy);
     let native: serde_json::Value = serde_json::from_str(&emitted.value).unwrap();
@@ -49,8 +49,8 @@ fn toml_round_trip_preserves_order_datetime_precision_and_float_kinds() {
     ";
     let source: toml::Table = toml::from_str(text).unwrap();
     let value = InputFormat::Toml.parse_document(text).unwrap();
-    let emitted = OutputFormat::Toml
-        .emit(&value, Policy::Strict, Layout::Compact)
+    let emitted = Emit::Toml(Layout::Compact)
+        .emit(&value, Policy::Strict)
         .unwrap();
     assert!(!emitted.lossy);
     let native: toml::Table = toml::from_str(&emitted.value).unwrap();
@@ -90,9 +90,7 @@ fn yaml_keeps_null_unsigned_and_nonfinite_values_in_one_document() {
         ]
         .into(),
     );
-    let out = OutputFormat::Yaml
-        .emit(&value, Policy::Strict, Layout::Pretty)
-        .unwrap();
+    let out = Emit::Yaml.emit(&value, Policy::Strict).unwrap();
     assert!(!out.lossy);
     assert_eq!(
         out.value,
@@ -101,9 +99,7 @@ fn yaml_keeps_null_unsigned_and_nonfinite_values_in_one_document() {
     let date = knf_convert::InputFormat::Toml
         .parse_document("[nested]\nday = 1979-05-27")
         .unwrap();
-    let error = OutputFormat::Yaml
-        .emit(&date, Policy::Strict, Layout::Pretty)
-        .unwrap_err();
+    let error = Emit::Yaml.emit(&date, Policy::Strict).unwrap_err();
     let knf_convert::EmitError::Conversion(error) = error else {
         panic!("{error}")
     };
@@ -111,10 +107,5 @@ fn yaml_keeps_null_unsigned_and_nonfinite_values_in_one_document() {
         error.path(),
         [knf::Seg::Key("nested".into()), knf::Seg::Key("day".into())]
     );
-    assert!(
-        OutputFormat::Yaml
-            .emit(&date, Policy::Lossy, Layout::Pretty)
-            .unwrap()
-            .lossy
-    );
+    assert!(Emit::Yaml.emit(&date, Policy::Lossy).unwrap().lossy);
 }

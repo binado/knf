@@ -86,7 +86,7 @@ impl Limit {
     }
 }
 
-/// Why [`OutputFormat::emit`] failed.
+/// Why [`Emit::emit`] failed.
 #[derive(Debug, thiserror::Error)]
 pub enum EmitError {
     /// A value cannot be converted under the requested policy.
@@ -160,27 +160,69 @@ impl From<InputFormat> for OutputFormat {
     }
 }
 
-impl OutputFormat {
+/// An output format together with a layout it supports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Emit {
+    Json(Layout),
+    Toml(Layout),
+    /// YAML output is always indented.
+    #[cfg(feature = "yaml")]
+    Yaml,
+}
+
+/// YAML was asked for with [`Layout::Compact`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("YAML output has no compact layout")]
+pub struct CompactYaml;
+
+impl Emit {
+    /// `format` in `layout`, if it has that layout.
+    pub fn new(format: OutputFormat, layout: Layout) -> Result<Self, CompactYaml> {
+        match format {
+            OutputFormat::Json => Ok(Self::Json(layout)),
+            OutputFormat::Toml => Ok(Self::Toml(layout)),
+            #[cfg(feature = "yaml")]
+            OutputFormat::Yaml => match layout {
+                Layout::Pretty => Ok(Self::Yaml),
+                Layout::Compact => Err(CompactYaml),
+            },
+        }
+    }
+
+    /// The format of an input, which has every layout.
+    pub fn matching(input: InputFormat, layout: Layout) -> Self {
+        match input {
+            InputFormat::Json => Self::Json(layout),
+            InputFormat::Toml => Self::Toml(layout),
+        }
+    }
+
+    /// The format written, in either layout.
+    pub fn format(self) -> OutputFormat {
+        match self {
+            Self::Json(_) => OutputFormat::Json,
+            Self::Toml(_) => OutputFormat::Toml,
+            #[cfg(feature = "yaml")]
+            Self::Yaml => OutputFormat::Yaml,
+        }
+    }
+
     /// Encode a value with a trailing newline, reporting any lossy mappings.
     ///
     /// With [`Policy::Lossy`], JSON and YAML stringify datetimes. JSON also
     /// stringifies non-finite floats. TOML omits null fields and converts
     /// oversized unsigned integers to floats. A null array entry or root
     /// cannot be emitted as TOML under either policy.
-    pub fn emit(
-        self,
-        value: &Value,
-        policy: Policy,
-        layout: Layout,
-    ) -> Result<Converted<String>, EmitError> {
+    pub fn emit(self, value: &Value, policy: Policy) -> Result<Converted<String>, EmitError> {
         fn boxed(
             error: impl std::error::Error + Send + Sync + 'static,
         ) -> Box<dyn std::error::Error + Send + Sync> {
             Box::new(error)
         }
-        let pretty = layout == Layout::Pretty;
+        let format = self.format();
         let emitter = Emitter {
-            format: self,
+            format,
             policy,
             lossy: Cell::new(false),
             error: Cell::new(None),
@@ -191,28 +233,17 @@ impl OutputFormat {
             parent: None,
         };
         let written = match self {
-            Self::Json => if pretty {
-                serde_json::to_string_pretty(&root)
-            } else {
-                serde_json::to_string(&root)
-            }
-            .map_err(boxed),
-            Self::Toml => if pretty {
-                toml::to_string_pretty(&root)
-            } else {
-                toml::to_string(&root)
-            }
-            .map_err(boxed),
+            Self::Json(Layout::Pretty) => serde_json::to_string_pretty(&root).map_err(boxed),
+            Self::Json(Layout::Compact) => serde_json::to_string(&root).map_err(boxed),
+            Self::Toml(Layout::Pretty) => toml::to_string_pretty(&root).map_err(boxed),
+            Self::Toml(Layout::Compact) => toml::to_string(&root).map_err(boxed),
             #[cfg(feature = "yaml")]
             Self::Yaml => serde_saphyr::to_string(&root).map_err(boxed),
         };
         if let Some(error) = emitter.error.take() {
             return Err(error.into());
         }
-        let mut text = written.map_err(|source| EmitError::Serialize {
-            format: self,
-            source,
-        })?;
+        let mut text = written.map_err(|source| EmitError::Serialize { format, source })?;
         if !text.ends_with('\n') {
             text.push('\n');
         }
@@ -221,7 +252,9 @@ impl OutputFormat {
             lossy: emitter.lossy.get(),
         })
     }
+}
 
+impl OutputFormat {
     fn name(self) -> &'static str {
         match self {
             Self::Json => "JSON",
@@ -341,7 +374,7 @@ impl Serialize for Fallback<'_> {
     }
 }
 
-/// State shared by one [`OutputFormat::emit`] call.
+/// State shared by one [`Emit::emit`] call.
 struct Emitter {
     format: OutputFormat,
     policy: Policy,
@@ -469,7 +502,9 @@ mod tests {
         value: Value,
         policy: Policy,
     ) -> Result<Converted<String>, EmitError> {
-        format.emit(&value, policy, Layout::Compact)
+        Emit::new(format, Layout::Compact)
+            .expect("these tests use formats with a compact layout")
+            .emit(&value, policy)
     }
 
     fn json_out(out: &Converted<String>) -> Json {

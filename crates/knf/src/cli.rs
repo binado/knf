@@ -4,7 +4,9 @@ use std::{ffi::OsString, path::PathBuf};
 
 use clap::{CommandFactory, Parser, error::ErrorKind};
 use knf::PathLeaf;
-use knf::glob::KeyGlobPattern;
+use knf::fs::GlobTarget;
+use knf::glob::{GlobPattern, KeyGlobPattern};
+use knf_convert::{Emit, InputFormat, Layout};
 
 // `super`, not `crate`: `knf-py` includes `main.rs` as a module.
 use super::explain::name_the_inline_config_flag;
@@ -29,49 +31,25 @@ impl From<OutputFormat> for knf_convert::OutputFormat {
     }
 }
 
-impl From<knf_convert::InputFormat> for OutputFormat {
-    fn from(format: knf_convert::InputFormat) -> Self {
-        match format {
-            knf_convert::InputFormat::Json => Self::Json,
-            knf_convert::InputFormat::Toml => Self::Toml,
-        }
-    }
-}
-
-impl From<OutputFormat> for knf_convert::InputFormat {
-    fn from(format: OutputFormat) -> Self {
-        match format {
-            OutputFormat::Toml => Self::Toml,
-            _ => Self::Json,
-        }
-    }
-}
-
-/// Formats a configuration snapshot for `--exec` can be written in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecFormat {
-    Json,
-    Toml,
-}
-
-impl ExecFormat {
-    pub fn extension(self) -> &'static str {
+impl OutputFormat {
+    /// How inline values are parsed when there are no files to say. YAML is
+    /// output-only, so it takes JSON values.
+    pub fn inline_format(self) -> InputFormat {
         match self {
-            Self::Json => "json",
-            Self::Toml => "toml",
+            Self::Json => InputFormat::Json,
+            Self::Toml => InputFormat::Toml,
+            #[cfg(feature = "yaml")]
+            Self::Yaml => InputFormat::Json,
         }
     }
-}
 
-impl TryFrom<OutputFormat> for ExecFormat {
-    type Error = &'static str;
-
-    fn try_from(output: OutputFormat) -> Result<Self, Self::Error> {
-        match output {
-            OutputFormat::Json => Ok(Self::Json),
-            OutputFormat::Toml => Ok(Self::Toml),
+    /// The format of an `--exec` snapshot, if one can be written in it.
+    fn snapshot_format(self) -> Option<InputFormat> {
+        match self {
+            Self::Json => Some(InputFormat::Json),
+            Self::Toml => Some(InputFormat::Toml),
             #[cfg(feature = "yaml")]
-            OutputFormat::Yaml => Err("--to yaml cannot be combined with --exec"),
+            Self::Yaml => None,
         }
     }
 }
@@ -137,7 +115,7 @@ Keep only inputs whose whole path matches a case-sensitive glob. Supports *,
 
   knf config/**/*.toml -g 'config/**/prod.toml'"
     )]
-    pub glob: Option<knf::glob::GlobPattern>,
+    glob: Option<GlobPattern>,
 
     /// Filter inputs by a case-sensitive glob matching just the filename
     #[arg(
@@ -150,7 +128,7 @@ Like --glob, but match only the filename.
 
   knf services/api/*.toml -G '{defaults,prod}.toml'"
     )]
-    pub glob_filename: Option<knf::glob::GlobPattern>,
+    glob_filename: Option<GlobPattern>,
 
     /// Print the file list in merge order without reading contents
     #[arg(short = 'l', long)]
@@ -245,14 +223,37 @@ Cannot be combined with --list-files.
 
   knf base.toml -c seed=42 --exec -- python fit.py --replicate 2"
     )]
-    pub exec: bool,
+    exec: bool,
+}
+
+/// A command line whose options have been checked against each other.
+pub struct Invocation {
+    pub cli: Cli,
+    /// `--glob` or `--glob-filename`.
+    pub filter: Option<(GlobPattern, GlobTarget)>,
+    /// The output `--to` asks for; without it, output follows the inputs.
+    pub to: Option<Emit>,
+    pub exec: Option<Exec>,
+}
+
+/// The `--exec` child.
+pub struct Exec {
+    pub program: OsString,
+    pub args: Vec<OsString>,
+    /// The snapshot format `--to` asks for; without it, that of the inputs.
+    pub format: Option<InputFormat>,
+}
+
+fn usage_error(kind: ErrorKind, message: &str) -> ! {
+    Cli::command().error(kind, message).exit()
 }
 
 impl Cli {
     /// Splits the child command (everything after the first `--`) off argv when
     /// `--exec` precedes that `--`, otherwise leaves argv for clap. Exits with a
-    /// usage error if `--exec` has no command.
-    pub fn parse_command(args: impl IntoIterator<Item = OsString>) -> (Self, Vec<OsString>) {
+    /// usage error on options that cannot be combined, or if `--exec` has no
+    /// command.
+    pub fn parse_command(args: impl IntoIterator<Item = OsString>) -> Invocation {
         let mut args: Vec<_> = args.into_iter().collect();
         let delimiter = args.iter().skip(1).position(|arg| arg == "--");
         let end = delimiter.map_or(args.len(), |index| index + 1);
@@ -264,38 +265,66 @@ impl Cli {
             } else {
                 Vec::new()
             };
-        let cli = Self::parse_from(args);
-        #[cfg(feature = "yaml")]
-        if cli.to == Some(OutputFormat::Yaml) && cli.compact {
-            Self::command()
-                .error(
+        let mut cli = Self::parse_from(args);
+
+        let layout = Layout::pretty(!cli.compact);
+        let to = cli.to.map(|to| {
+            Emit::new(to.into(), layout).unwrap_or_else(|_| {
+                usage_error(
                     ErrorKind::ArgumentConflict,
                     "--to yaml cannot be combined with --compact",
                 )
-                .exit();
-        }
-        if let (true, Some(to)) = (cli.exec, cli.to)
-            && let Err(message) = ExecFormat::try_from(to)
-        {
-            Self::command()
-                .error(ErrorKind::ArgumentConflict, message)
-                .exit();
-        }
-        if cli.exec && command.is_empty() {
-            Self::command()
-                .error(
+            })
+        });
+        let exec = cli.exec.then(|| {
+            let format = cli.to.map(|to| {
+                to.snapshot_format().unwrap_or_else(|| {
+                    usage_error(
+                        ErrorKind::ArgumentConflict,
+                        "--to yaml cannot be combined with --exec",
+                    )
+                })
+            });
+            let mut command = command.into_iter();
+            let Some(program) = command.next() else {
+                usage_error(
                     ErrorKind::MissingRequiredArgument,
                     "--exec requires -- followed by a command",
                 )
-                .exit();
+            };
+            Exec {
+                program,
+                args: command.collect(),
+                format,
+            }
+        });
+        // clap rejects the two globs together.
+        let path = cli.glob.take().map(|glob| (glob, GlobTarget::Path));
+        let filter = path.or_else(|| {
+            let glob = cli.glob_filename.take();
+            glob.map(|glob| (glob, GlobTarget::Filename))
+        });
+
+        Invocation {
+            cli,
+            filter,
+            to,
+            exec,
         }
-        (cli, command)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_values_follow_the_output_format_where_it_can_be_read() {
+        assert_eq!(OutputFormat::Json.inline_format(), InputFormat::Json);
+        assert_eq!(OutputFormat::Toml.inline_format(), InputFormat::Toml);
+        #[cfg(feature = "yaml")]
+        assert_eq!(OutputFormat::Yaml.inline_format(), InputFormat::Json);
+    }
 
     #[test]
     fn shallow_accepts_one_required_glob() {

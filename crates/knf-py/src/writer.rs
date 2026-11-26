@@ -1,4 +1,4 @@
-use knf_convert::{EmitError, Layout, OutputFormat, Policy, Unrepresentable};
+use knf_convert::{Emit, EmitError, Layout, OutputFormat, Policy, Unrepresentable};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -13,12 +13,7 @@ pub(super) fn dumps(data: &Bound<'_, PyDict>, format: &str, pretty: bool) -> PyR
         "json" => OutputFormat::Json,
         "toml" => OutputFormat::Toml,
         #[cfg(feature = "yaml")]
-        "yaml" => {
-            if !pretty {
-                return Err(PyValueError::new_err("format='yaml' requires pretty=True"));
-            }
-            OutputFormat::Yaml
-        }
+        "yaml" => OutputFormat::Yaml,
         _ => {
             let message = if cfg!(feature = "yaml") {
                 "format must be 'json', 'toml', or 'yaml'"
@@ -28,12 +23,10 @@ pub(super) fn dumps(data: &Bound<'_, PyDict>, format: &str, pretty: bool) -> PyR
             return Err(PyValueError::new_err(message));
         }
     };
-    output
-        .emit(
-            &dict_to_value(data, None)?,
-            Policy::Strict,
-            Layout::pretty(pretty),
-        )
+    // Only YAML lacks a layout.
+    let emit = Emit::new(output, Layout::pretty(pretty))
+        .map_err(|_| PyValueError::new_err("format='yaml' requires pretty=True"))?;
+    emit.emit(&dict_to_value(data, None)?, Policy::Strict)
         .map(|result| result.value)
         .map_err(|err| match err {
             EmitError::Conversion(error) if error.category() == Unrepresentable::Type => {

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use knf::fs::{GlobError, GlobPattern, filter_paths};
+use knf::fs::{GlobError, GlobPattern, GlobTarget, filter_paths};
 
 #[test]
 fn filtering_keeps_spelling_order_duplicates_and_nonexistent_candidates() {
@@ -14,20 +14,20 @@ fn filtering_keeps_spelling_order_duplicates_and_nonexistent_candidates() {
         "-",
     ];
     let pattern = "foo/*.toml".parse::<GlobPattern>().unwrap();
-    let selected = filter_paths(&files, &pattern, false);
+    let selected = filter_paths(&files, &pattern, GlobTarget::Path);
     assert_eq!(
         selected,
         files[1..4].iter().map(PathBuf::from).collect::<Vec<_>>()
     );
     let pattern = "{prod.toml,-}".parse::<GlobPattern>().unwrap();
-    let selected = filter_paths(&files, &pattern, true);
+    let selected = filter_paths(&files, &pattern, GlobTarget::Filename);
     assert_eq!(
         selected,
         [files[0], files[2], files[3], files[4]].map(PathBuf::from)
     );
     assert_eq!(selected[0].as_os_str(), files[0]);
-    assert!(filter_paths(&files, &"missing".parse().unwrap(), false).is_empty());
-    assert!(filter_paths::<PathBuf>(&[], &pattern, true).is_empty());
+    assert!(filter_paths(&files, &"missing".parse().unwrap(), GlobTarget::Path).is_empty());
+    assert!(filter_paths::<PathBuf>(&[], &pattern, GlobTarget::Filename).is_empty());
 }
 
 #[test]
@@ -39,7 +39,7 @@ fn patterns_cover_case_negation_classes_braces_and_native_bytes() {
         ("!{defaults,prod}.toml", vec!["Prod.toml", "dev.toml"]),
     ] {
         assert_eq!(
-            filter_paths(&files, &pattern.parse().unwrap(), true),
+            filter_paths(&files, &pattern.parse().unwrap(), GlobTarget::Filename),
             expected.iter().map(PathBuf::from).collect::<Vec<_>>()
         );
     }
@@ -70,7 +70,11 @@ fn non_utf8_candidates_are_matched_without_replacement_characters() {
     use std::os::unix::ffi::OsStringExt;
     let input = PathBuf::from(std::ffi::OsString::from_vec(b"target-\xff.json".to_vec()));
     assert_eq!(
-        filter_paths(&[&input], &"target-?.json".parse().unwrap(), true),
+        filter_paths(
+            &[&input],
+            &"target-?.json".parse().unwrap(),
+            GlobTarget::Filename
+        ),
         [input]
     );
 }
@@ -79,6 +83,6 @@ fn non_utf8_candidates_are_matched_without_replacement_characters() {
 #[test]
 fn windows_separators_are_normalized_only_for_matching() {
     let input = PathBuf::from(r"foo\prod.toml");
-    let selected = filter_paths(&[&input], &"foo/*.toml".parse().unwrap(), false);
+    let selected = filter_paths(&[&input], &"foo/*.toml".parse().unwrap(), GlobTarget::Path);
     assert_eq!(selected[0].as_os_str(), input.as_os_str());
 }
