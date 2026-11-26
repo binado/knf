@@ -15,6 +15,15 @@ impl fmt::Display for InputFormat {
     }
 }
 
+/// What a path was supplied as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// A config to merge.
+    Input,
+    /// The interpolation context.
+    Context,
+}
+
 /// Why input paths could not be turned into configs.
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
@@ -22,25 +31,43 @@ pub enum LoadError {
     #[error("no input files to infer a format from")]
     NoInputs,
     /// Inferred input formats differ.
-    #[error("inputs mix JSON and TOML formats; configs must use one format")]
-    MixedFormats,
-    /// A positional named a directory.
+    #[error(
+        "`{}` is {} but `{}` is {}; configs must use one format",
+        conflict.display(),
+        conflict_format.name(),
+        first.display(),
+        first_format.name()
+    )]
+    MixedFormats {
+        /// The first path, which set the expected format.
+        first: PathBuf,
+        first_format: InputFormat,
+        /// The first path whose format differs.
+        conflict: PathBuf,
+        conflict_format: InputFormat,
+        /// The role of `conflict`. Inputs are checked before the context.
+        role: Role,
+    },
+    /// A path named a directory.
     #[error("`{}` is a directory; knf takes files as configs", path.display())]
     Directory {
         /// The directory that was named.
         path: PathBuf,
+        role: Role,
     },
-    /// A positional's extension is neither `json` nor `toml`.
+    /// A path's extension is neither `json` nor `toml`.
     #[error("cannot infer a format from `{}`", path.display())]
     UnknownExtension {
         /// The file whose extension said nothing.
         path: PathBuf,
+        role: Role,
     },
     /// A file could not be read or parsed.
     #[error("loading `{}`", path.display())]
     File {
         /// The file that failed.
         path: PathBuf,
+        role: Role,
         source: ReadError,
     },
 }
@@ -83,29 +110,51 @@ pub struct Configs {
 
 /// Resolve a single format from file extensions, without reading any contents.
 ///
-/// Directory inputs are rejected before inference. No inputs resolve to
-/// `fallback`, or fail with [`LoadError::NoInputs`].
+/// `files` are checked in order, then `context`; the first bad path fails.
+/// Directories are rejected before inference. With no paths at all, the format
+/// is `fallback`, or the call fails with [`LoadError::NoInputs`].
 pub fn resolve_format<P: AsRef<Path>>(
-    paths: impl IntoIterator<Item = P>,
+    files: impl IntoIterator<Item = P>,
+    context: Option<&Path>,
     fallback: Option<InputFormat>,
 ) -> Result<InputFormat, LoadError> {
-    let mut selected = None;
-    for path in paths {
-        let path = path.as_ref();
+    let mut first: Option<(InputFormat, PathBuf)> = None;
+    let mut check = |path: &Path, role| {
         if path.is_dir() {
             return Err(LoadError::Directory {
                 path: path.to_path_buf(),
+                role,
             });
         }
         let format = InputFormat::from_path(path).ok_or_else(|| LoadError::UnknownExtension {
             path: path.to_path_buf(),
+            role,
         })?;
-        if selected.is_some_and(|previous| previous != format) {
-            return Err(LoadError::MixedFormats);
+        match &first {
+            None => first = Some((format, path.to_path_buf())),
+            Some((first_format, first_path)) if *first_format != format => {
+                return Err(LoadError::MixedFormats {
+                    first: first_path.clone(),
+                    first_format: *first_format,
+                    conflict: path.to_path_buf(),
+                    conflict_format: format,
+                    role,
+                });
+            }
+            Some(_) => {}
         }
-        selected = Some(format);
+        Ok(())
+    };
+    for file in files {
+        check(file.as_ref(), Role::Input)?;
     }
-    selected.or(fallback).ok_or(LoadError::NoInputs)
+    if let Some(path) = context {
+        check(path, Role::Context)?;
+    }
+    first
+        .map(|(format, _)| format)
+        .or(fallback)
+        .ok_or(LoadError::NoInputs)
 }
 
 /// What [`load_configs`] reads besides the configs themselves.
@@ -123,11 +172,11 @@ pub fn load_configs<P: AsRef<Path>>(
     options: LoadOptions,
 ) -> Result<Configs, LoadError> {
     let LoadOptions { context, fallback } = options;
-    let paths = files.iter().map(AsRef::as_ref).chain(context);
-    let format = resolve_format(paths, fallback)?;
-    let load = |path: &Path| {
+    let format = resolve_format(files.iter().map(AsRef::as_ref), context, fallback)?;
+    let load = |path: &Path, role| {
         format.load(path).map_err(|source| LoadError::File {
             path: path.to_path_buf(),
+            role,
             source,
         })
     };
@@ -135,9 +184,9 @@ pub fn load_configs<P: AsRef<Path>>(
         format,
         values: files
             .iter()
-            .map(|path| load(path.as_ref()))
+            .map(|path| load(path.as_ref(), Role::Input))
             .collect::<Result<_, _>>()?,
-        context: context.map(load).transpose()?,
+        context: context.map(|path| load(path, Role::Context)).transpose()?,
     })
 }
 
@@ -159,6 +208,13 @@ impl InputFormat {
         match self {
             Self::Json => "json",
             Self::Toml => "toml",
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Json => "JSON",
+            Self::Toml => "TOML",
         }
     }
 

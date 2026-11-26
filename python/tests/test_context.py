@@ -78,7 +78,7 @@ def test_context_rejects_non_filepath_arguments(context):
 
 
 def test_context_mixed_formats_fail_before_reads(tmp_path):
-    with pytest.raises(ValueError, match="inputs mix JSON and TOML"):
+    with pytest.raises(ValueError, match="configs must use one format"):
         load([tmp_path / "missing.json"], interpolate=True, context=tmp_path / "missing.toml")
 
 

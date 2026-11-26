@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use knf::Value;
-use knf_convert::{InputFormat, LoadError, ReadError, resolve_format};
+use knf_convert::{InputFormat, LoadError, ReadError, Role, resolve_format};
 use tempfile::TempDir;
 
 fn string(text: &str) -> Value {
@@ -137,24 +137,34 @@ fn load_reports_read_and_parse_failures() {
 fn resolve_format_checks_extensions_before_reading() {
     let none: [&str; 0] = [];
     assert!(matches!(
-        resolve_format(none, None),
+        resolve_format(none, None, None),
         Err(LoadError::NoInputs)
     ));
     assert_eq!(
-        resolve_format(none, Some(InputFormat::Json)).unwrap(),
+        resolve_format(none, None, Some(InputFormat::Json)).unwrap(),
         InputFormat::Json
     );
     assert_eq!(
-        resolve_format(["a.toml", "b.TOML"], Some(InputFormat::Json)).unwrap(),
+        resolve_format(["a.toml", "b.TOML"], None, Some(InputFormat::Json)).unwrap(),
         InputFormat::Toml
     );
+    let context = Some(std::path::Path::new("ctx.toml"));
+    // The inputs clash first, so the context is not to blame.
     assert!(matches!(
-        resolve_format(["a.json", "b.toml"], None),
-        Err(LoadError::MixedFormats)
+        resolve_format(["a.json", "b.toml"], context, None),
+        Err(LoadError::MixedFormats { first, conflict, role: Role::Input, .. })
+            if first == std::path::Path::new("a.json") && conflict == std::path::Path::new("b.toml")
     ));
     assert!(matches!(
-        resolve_format(["a.yaml"], None),
-        Err(LoadError::UnknownExtension { path }) if path == std::path::Path::new("a.yaml")
+        resolve_format(["a.json"], context, None),
+        Err(LoadError::MixedFormats {
+            role: Role::Context,
+            ..
+        })
+    ));
+    assert!(matches!(
+        resolve_format(["a.yaml"], None, None),
+        Err(LoadError::UnknownExtension { path, .. }) if path == std::path::Path::new("a.yaml")
     ));
 }
 

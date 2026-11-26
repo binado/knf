@@ -3,30 +3,29 @@
 use std::fmt;
 use std::str::FromStr;
 
-use crate::{PathError, RefPath, Seg, Value};
+use crate::{KeyPath, PathError, Value};
 
-/// A leaf value addressed by a parsed path: `server.port=8080`.
+/// A leaf value addressed by a parsed key path: `server.port=8080`.
 ///
 /// [`FromStr`] for `PathLeaf<String>` keeps the RHS raw for format-specific parsing.
-/// Bracket steps parse, but conversion to a config rejects them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PathLeaf<V> {
-    path: RefPath,
+    path: KeyPath,
     leaf: V,
 }
 
 impl<V> PathLeaf<V> {
-    /// Build from path segments and a leaf. Rejects an empty path or any empty segment.
+    /// Build from keys and a leaf. Rejects an empty path or any empty segment.
     pub fn new(path: Vec<String>, leaf: V) -> Result<Self, PathError> {
         Ok(Self {
-            path: RefPath::from_keys(path)?,
+            path: KeyPath::from_keys(path)?,
             leaf,
         })
     }
 
-    /// The path as steps; may include index steps.
-    pub fn path(&self) -> &[Seg] {
-        self.path.segs()
+    /// Where the leaf goes.
+    pub fn path(&self) -> &KeyPath {
+        &self.path
     }
 
     /// The RHS value, not yet wrapped in nested objects.
@@ -51,13 +50,6 @@ impl<V> PathLeaf<V> {
     }
 }
 
-impl PathLeaf<String> {
-    /// Check that the path contains keys only.
-    pub fn validate_keys(&self) -> Result<(), PathError> {
-        self.path.clone().try_into_keys().map(|_| ())
-    }
-}
-
 impl FromStr for PathLeaf<String> {
     type Err = PathError;
 
@@ -79,15 +71,13 @@ impl fmt::Display for PathLeaf<String> {
     }
 }
 
-impl TryFrom<PathLeaf<Value>> for Value {
-    type Error = PathError;
-
-    /// Expands to a nested object. Fails on index steps.
-    fn try_from(path_leaf: PathLeaf<Value>) -> Result<Self, Self::Error> {
-        let keys = path_leaf.path.try_into_keys()?;
-        Ok(keys.into_iter().rev().fold(path_leaf.leaf, |value, key| {
+impl From<PathLeaf<Value>> for Value {
+    /// Expands to a nested object.
+    fn from(path_leaf: PathLeaf<Value>) -> Self {
+        let keys = path_leaf.path.into_keys();
+        keys.into_iter().rev().fold(path_leaf.leaf, |value, key| {
             Value::Object([(key, value)].into())
-        }))
+        })
     }
 }
 
@@ -143,16 +133,19 @@ mod tests {
     #[test]
     fn raw_fromstr_keeps_the_rhs_unparsed() {
         let path_leaf: PathLeaf<String> = "port=8080".parse().unwrap();
-        assert_eq!(path_leaf.path(), [Seg::Key("port".into())]);
+        assert_eq!(path_leaf.path().keys(), ["port"]);
         assert_eq!(path_leaf.leaf(), "8080");
         assert_eq!(path_leaf.to_string(), "port=8080");
     }
 
     #[test]
-    fn path_leaf_accepts_brackets_its_writers_reject() {
-        let parsed: PathLeaf<String> = "a[0]=1".parse().unwrap();
-        assert_eq!(parsed.path(), [Seg::Key("a".into()), Seg::Index(0)]);
-        assert_eq!(parsed.to_string(), "a[0]=1");
+    fn path_leaf_rejects_index_steps() {
+        assert_eq!(
+            "a[0]=1".parse::<PathLeaf<String>>().unwrap_err(),
+            PathError::IndexInKeyPath {
+                path: "a[0]".into()
+            }
+        );
     }
 
     #[test]
@@ -160,7 +153,7 @@ mod tests {
         let path_leaf = PathLeaf::new(vec!["a".into()], "xy".to_string())
             .unwrap()
             .map_leaf(|s| s.len());
-        assert_eq!(path_leaf.path(), [Seg::Key("a".into())]);
+        assert_eq!(path_leaf.path().keys(), ["a"]);
         assert_eq!(*path_leaf.leaf(), 2);
     }
 }

@@ -50,10 +50,15 @@ pub enum Seg {
 }
 
 /// Renders a path for display: `servers.primary.host`, `tags[0]`.
+///
+/// A key that is empty or contains `.`, `[`, `]`, `"`, whitespace or a control
+/// character is written as a JSON string in brackets: `[""].x`, `a["b.c"]`.
+/// That form is for display only; it is not reference syntax.
 pub fn render_path(path: &[Seg]) -> String {
     let mut out = String::new();
     for seg in path {
         match seg {
+            Seg::Key(k) if needs_quotes(k) => push_quoted(&mut out, k),
             Seg::Key(k) => {
                 if !out.is_empty() {
                     out.push('.');
@@ -66,9 +71,33 @@ pub fn render_path(path: &[Seg]) -> String {
     out
 }
 
+fn needs_quotes(key: &str) -> bool {
+    key.is_empty()
+        || key.contains(|c: char| {
+            matches!(c, '.' | '[' | ']' | '"') || c.is_whitespace() || c.is_control()
+        })
+}
+
+/// Appends `["key"]`, escaping `key` as a JSON string.
+fn push_quoted(out: &mut String, key: &str) {
+    out.push_str("[\"");
+    for c in key.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push_str("\"]");
+}
+
 /// A non-empty parsed path: dotted keys plus bracket indices, `a.b[2].c`.
 ///
-/// Keys containing `.`, `[` or `]` are not addressable.
+/// Parsed text cannot name a key containing `.`, `[` or `]`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RefPath {
     path: Vec<Seg>,
@@ -76,15 +105,10 @@ pub struct RefPath {
 
 impl RefPath {
     /// Build from key strings. Rejects an empty path or any empty segment.
+    ///
+    /// Any other key is accepted, including ones parsed text cannot name.
     pub fn from_keys(keys: Vec<String>) -> Result<Self, RefPathError> {
-        if keys.is_empty() {
-            return Err(RefPathError::EmptyPath);
-        }
-        if keys.iter().any(|k| k.is_empty()) {
-            return Err(RefPathError::EmptySegment {
-                path: keys.join("."),
-            });
-        }
+        check_keys(&keys)?;
         Ok(Self {
             path: keys.into_iter().map(Seg::Key).collect(),
         })
@@ -98,23 +122,6 @@ impl RefPath {
     /// The segments as steps, zero-copy.
     pub fn into_segs(self) -> Vec<Seg> {
         self.path
-    }
-
-    /// The keys, or an error if any step is an index.
-    pub fn try_into_keys(self) -> Result<Vec<String>, PathError> {
-        if self.path.iter().any(|seg| matches!(seg, Seg::Index(_))) {
-            return Err(PathError::IndexInKeyPath {
-                path: render_path(&self.path),
-            });
-        }
-        Ok(self
-            .path
-            .into_iter()
-            .map(|seg| match seg {
-                Seg::Key(key) => key,
-                Seg::Index(_) => unreachable!("index steps were rejected above"),
-            })
-            .collect())
     }
 }
 
@@ -181,6 +188,18 @@ impl FromStr for RefPath {
     }
 }
 
+fn check_keys(keys: &[String]) -> Result<(), RefPathError> {
+    if keys.is_empty() {
+        return Err(RefPathError::EmptyPath);
+    }
+    if keys.iter().any(|k| k.is_empty()) {
+        return Err(RefPathError::EmptySegment {
+            path: keys.join("."),
+        });
+    }
+    Ok(())
+}
+
 /// The longest run from `from` containing none of `.[]`.
 fn take_key(body: &str, from: usize) -> (String, usize) {
     let mut end = from;
@@ -193,6 +212,54 @@ fn take_key(body: &str, from: usize) -> (String, usize) {
 impl fmt::Display for RefPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&render_path(&self.path))
+    }
+}
+
+/// A non-empty path of object keys, with no indices: what a writer such as `-c`
+/// can address.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct KeyPath(Vec<String>);
+
+impl KeyPath {
+    /// Build from key strings, as [`RefPath::from_keys`] does.
+    pub fn from_keys(keys: Vec<String>) -> Result<Self, PathError> {
+        check_keys(&keys)?;
+        Ok(Self(keys))
+    }
+
+    /// The keys, outermost first.
+    pub fn keys(&self) -> &[String] {
+        &self.0
+    }
+
+    /// The keys, zero-copy.
+    pub fn into_keys(self) -> Vec<String> {
+        self.0
+    }
+}
+
+impl FromStr for KeyPath {
+    type Err = PathError;
+
+    /// The [`RefPath`] grammar, rejecting index steps.
+    fn from_str(body: &str) -> Result<Self, Self::Err> {
+        let parsed: RefPath = body.parse()?;
+        let keys = parsed.segs().iter().map(|seg| match seg {
+            Seg::Key(key) => Some(key.clone()),
+            Seg::Index(_) => None,
+        });
+        keys.collect::<Option<_>>()
+            .map(Self)
+            .ok_or_else(|| PathError::IndexInKeyPath {
+                path: parsed.to_string(),
+            })
+    }
+}
+
+impl fmt::Display for KeyPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let segs: Vec<Seg> = self.0.iter().cloned().map(Seg::Key).collect();
+        f.write_str(&render_path(&segs))
     }
 }
 
@@ -293,35 +360,49 @@ mod tests {
     }
 
     #[test]
-    fn try_into_keys_passes_all_key_paths_whole() {
-        let parsed: RefPath = "db.plugins".parse().unwrap();
-        assert_eq!(parsed.try_into_keys().unwrap(), ["db", "plugins"]);
+    fn render_path_quotes_keys_that_would_read_as_other_paths() {
+        let cases: &[(&[Seg], &str)] = &[
+            (&[seg(""), seg("x")], r#"[""].x"#),
+            (&[seg("a"), seg("b.c")], r#"a["b.c"]"#),
+            (&[seg("a[0]")], r#"["a[0]"]"#),
+            (&[seg("b]"), Seg::Index(1)], r#"["b]"][1]"#),
+            (&[seg("my key"), seg("v")], r#"["my key"].v"#),
+            (&[seg("say \"hi\"\\")], r#"["say \"hi\"\\"]"#),
+            (&[seg("a\n\t\r\u{1}")], r#"["a\n\t\r\u0001"]"#),
+            (&[seg("a:b-c_d=e$"), seg("é☃")], "a:b-c_d=e$.é☃"),
+        ];
+        for (path, want) in cases {
+            assert_eq!(render_path(path), *want);
+        }
     }
 
     #[test]
-    fn try_into_keys_rejects_index_steps_with_the_full_path() {
-        for (indexed, want) in [("a[0]", "a[0]"), ("a.b[2].c", "a.b[2].c")] {
-            let err = indexed
-                .parse::<RefPath>()
-                .unwrap()
-                .try_into_keys()
-                .unwrap_err();
-            assert_eq!(err, PathError::IndexInKeyPath { path: want.into() });
+    fn key_path_parses_all_key_paths_whole() {
+        let parsed: KeyPath = "db.plugins".parse().unwrap();
+        assert_eq!(parsed.keys(), ["db", "plugins"]);
+        assert_eq!(parsed.to_string(), "db.plugins");
+    }
+
+    #[test]
+    fn key_path_rejects_index_steps_with_the_full_path() {
+        for indexed in ["a[0]", "a.b[2].c"] {
+            let err = indexed.parse::<KeyPath>().unwrap_err();
+            assert_eq!(
+                err,
+                PathError::IndexInKeyPath {
+                    path: indexed.into()
+                }
+            );
         }
-        let err = "a[0]"
-            .parse::<RefPath>()
-            .unwrap()
-            .try_into_keys()
-            .unwrap_err();
         assert_eq!(
-            err.to_string(),
+            "a[0]".parse::<KeyPath>().unwrap_err().to_string(),
             "`a[0]` contains an array index; merge paths take keys only"
         );
     }
 
     #[test]
     fn equals_is_an_ordinary_key_character() {
-        let parsed: RefPath = "a=b".parse().unwrap();
-        assert_eq!(parsed.try_into_keys().unwrap(), ["a=b"]);
+        let parsed: KeyPath = "a=b".parse().unwrap();
+        assert_eq!(parsed.keys(), ["a=b"]);
     }
 }

@@ -216,7 +216,7 @@ $ knf missing.json -i --with missing.toml
 `stderr`:
 
 ```text
-error: inputs mix JSON and TOML formats; configs must use one format
+error: `missing.toml` is TOML but `missing.json` is JSON; configs must use one format
 help: inputs and the --with file must share one format
 ```
 
@@ -343,7 +343,7 @@ $ knf a.toml -i --with b.json
 `stderr`:
 
 ```text
-error: inputs mix JSON and TOML formats; configs must use one format
+error: `b.json` is JSON but `a.toml` is TOML; configs must use one format
 help: inputs and the --with file must share one format
 ```
 

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use knf::{InterpolationOptions, MergeOptions, Value};
-use knf_convert::{Configs, InputFormat, Layout, LoadOptions, OutputFormat, Policy};
+use knf_convert::{Configs, InputFormat, Layout, LoadOptions, OutputFormat, Policy, Role};
 use tempfile::TempDir;
 
 macro_rules! json {
@@ -141,7 +141,7 @@ fn load_errors_are_typed_and_flag_free() {
         .expect_err("an extensionless path cannot be typed");
     assert!(matches!(
         &load,
-        knf_convert::LoadError::UnknownExtension { path } if *path == config
+        knf_convert::LoadError::UnknownExtension { path, role: Role::Input } if *path == config
     ));
     assert!(
         !load.to_string().contains("--"),
@@ -193,7 +193,9 @@ fn file_errors_name_the_failing_path() {
         },
     )
     .unwrap_err();
-    assert!(matches!(&err, knf_convert::LoadError::File { path, .. } if *path == missing));
+    assert!(
+        matches!(&err, knf_convert::LoadError::File { path, role: Role::Context, .. } if *path == missing)
+    );
 }
 
 #[test]
@@ -219,7 +221,13 @@ fn context_loads_apart_from_the_configs() {
         },
     )
     .unwrap_err();
-    assert!(matches!(err, knf_convert::LoadError::MixedFormats));
+    assert!(matches!(
+        err,
+        knf_convert::LoadError::MixedFormats {
+            role: Role::Context,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -263,8 +271,10 @@ fn merge_does_not_interpolate() {
 fn mixed_formats_are_rejected_before_contents_are_read() {
     let paths = ["missing.json", "missing.toml"];
     let load = knf_convert::load_configs(&paths, LoadOptions::default()).unwrap_err();
-    assert!(matches!(load, knf_convert::LoadError::MixedFormats));
-    assert!(!load.to_string().contains("-f"));
+    assert_eq!(
+        load.to_string(),
+        "`missing.toml` is TOML but `missing.json` is JSON; configs must use one format"
+    );
     assert!(!load.to_string().ends_with('\n'));
 }
 
@@ -300,8 +310,7 @@ fn native_toml_preserves_special_values_and_precision() {
         .parse::<knf::PathLeaf<String>>()
         .unwrap()
         .map_leaf(|text| InputFormat::Toml.parse_inline(text))
-        .try_into()
-        .unwrap();
+        .into();
     knf::merge_into(&mut merged, overlay, &MergeOptions::default());
     let merged = knf::interpolate(
         merged,

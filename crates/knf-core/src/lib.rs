@@ -18,6 +18,6 @@ pub use interp::{
 #[allow(deprecated)]
 pub use merge::merge_layers;
 pub use merge::{MergeOptions, merge, merge_configs, merge_into};
-pub use path::{PathError, RefPath, RefPathError, Seg, render_path};
+pub use path::{KeyPath, PathError, RefPath, RefPathError, Seg, render_path};
 pub use toml_datetime::Datetime;
 pub use value::{Unsigned, Value, ValueKind};
