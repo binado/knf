@@ -77,7 +77,7 @@ error: no input files to infer a format from
 help: pass --to json or --to toml
 ```
 
-### Inline layers alone need `--to`
+### Inline configs alone need `--to`
 
 ```console
 $ knf -c a=1
@@ -115,7 +115,7 @@ $ knf --to toml
 
 ```
 
-### Inline layers convert without input files
+### Inline configs convert without input files
 
 ```console
 $ knf --to toml -c a=1
@@ -428,7 +428,7 @@ name = "svc"
 date = 1979-05-27T07:32:00Z
 ```
 
-### Datetimes survive an inline layer
+### Datetimes survive an inline config
 
 `f.toml`:
 
@@ -449,7 +449,7 @@ date = 1979-05-27T07:32:00Z
 extra = 1
 ```
 
-### A null set layer overwritten before TOML output
+### A null inline config overwritten before TOML output
 
 `f.toml`:
 

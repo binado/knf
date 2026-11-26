@@ -1,4 +1,4 @@
-//! `key.path=value` inline layers.
+//! `key.path=value` inline configs.
 
 use std::fmt;
 use std::str::FromStr;
@@ -8,7 +8,7 @@ use crate::{PathError, RefPath, Seg, Value};
 /// A leaf value addressed by a parsed path: `server.port=8080`.
 ///
 /// [`FromStr`] for `PathLeaf<String>` keeps the RHS raw for format-specific parsing.
-/// Bracket steps parse, but conversion to a layer rejects them.
+/// Bracket steps parse, but conversion to a config rejects them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PathLeaf<V> {
     path: RefPath,

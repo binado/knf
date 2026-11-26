@@ -7,17 +7,17 @@ use knf_convert::InputFormat;
 struct Case {
     name: &'static str,
     /// JSON literals, merged left to right.
-    layers: &'static [&'static str],
+    configs: &'static [&'static str],
     /// A full key-path glob selecting replacement values.
     shallow: Option<&'static str>,
     /// A JSON literal the merge must equal.
     expect: &'static str,
 }
 
-const fn ok(name: &'static str, layers: &'static [&'static str], doc: &'static str) -> Case {
+const fn ok(name: &'static str, configs: &'static [&'static str], doc: &'static str) -> Case {
     Case {
         name,
-        layers,
+        configs,
         shallow: None,
         expect: doc,
     }
@@ -25,12 +25,12 @@ const fn ok(name: &'static str, layers: &'static [&'static str], doc: &'static s
 
 const fn shallow(
     name: &'static str,
-    layers: &'static [&'static str],
+    configs: &'static [&'static str],
     expect: &'static str,
 ) -> Case {
     Case {
         name,
-        layers,
+        configs,
         shallow: Some("*"),
         expect,
     }
@@ -39,12 +39,12 @@ const fn shallow(
 const fn shallow_at(
     name: &'static str,
     at: &'static str,
-    layers: &'static [&'static str],
+    configs: &'static [&'static str],
     expect: &'static str,
 ) -> Case {
     Case {
         name,
-        layers,
+        configs,
         shallow: Some(at),
         expect,
     }
@@ -59,8 +59,8 @@ fn options(case: &Case) -> MergeOptions {
 #[rustfmt::skip]
 const CASES: &[Case] = &[
     // --- the semantics table ------------------------------------------------
-    ok("no layers is an empty object", &[], "{}"),
-    ok("one layer is a no-op", &[r#"{"a":1,"b":{"c":[1,2]}}"#], r#"{"a":1,"b":{"c":[1,2]}}"#),
+    ok("no configs is an empty object", &[], "{}"),
+    ok("one config is a no-op", &[r#"{"a":1,"b":{"c":[1,2]}}"#], r#"{"a":1,"b":{"c":[1,2]}}"#),
     ok("object + object recurses per key", &[r#"{"a":{"x":1}}"#, r#"{"a":{"y":2}}"#], r#"{"a":{"x":1,"y":2}}"#),
     ok("disjoint keys union", &[r#"{"a":1}"#, r#"{"b":2}"#], r#"{"a":1,"b":2}"#),
     ok("scalar + scalar is last-wins", &[r#"{"a":1}"#, r#"{"a":2}"#], r#"{"a":2}"#),
@@ -77,12 +77,12 @@ const CASES: &[Case] = &[
     ok("null overwrites a scalar", &[r#"{"a":1}"#, r#"{"a":null}"#], r#"{"a":null}"#),
     ok("null overwrites an object", &[r#"{"a":{"b":1}}"#, r#"{"a":null}"#], r#"{"a":null}"#),
     ok("a value overwrites null", &[r#"{"a":null}"#, r#"{"a":1}"#], r#"{"a":1}"#),
-    ok("null survives a single layer", &[r#"{"a":null}"#], r#"{"a":null}"#),
+    ok("null survives a single config", &[r#"{"a":null}"#], r#"{"a":null}"#),
 
     // --- merge is not associative -------------------------------------------
     ok("left fold, not right", &[r#"{"a":{"b":1}}"#, r#"{"a":5}"#, r#"{"a":{"c":2}}"#], r#"{"a":{"c":2}}"#),
     // Right-grouping would give {"a":{"b":1,"c":2}}.
-    ok("three-layer deep merge", &[r#"{"a":{"b":1}}"#, r#"{"a":{"c":2}}"#, r#"{"a":{"b":9}}"#], r#"{"a":{"b":9,"c":2}}"#),
+    ok("three-config deep merge", &[r#"{"a":{"b":1}}"#, r#"{"a":{"c":2}}"#, r#"{"a":{"b":9}}"#], r#"{"a":{"b":9,"c":2}}"#),
 
     // --- nesting depth ------------------------------------------------------
     ok("deep recursion", &[r#"{"a":{"b":{"c":{"d":1}}}}"#, r#"{"a":{"b":{"c":{"e":2}}}}"#], r#"{"a":{"b":{"c":{"d":1,"e":2}}}}"#),
@@ -95,8 +95,8 @@ const CASES: &[Case] = &[
     shallow("shallow keeps untouched top-level keys", &[r#"{"a":{"x":1},"b":1}"#, r#"{"a":{"y":2}}"#], r#"{"a":{"y":2},"b":1}"#),
     shallow("shallow still inserts new keys", &[r#"{"a":1}"#, r#"{"b":{"c":2}}"#], r#"{"a":1,"b":{"c":2}}"#),
     shallow("shallow replaces arrays too", &[r#"{"a":[1,2]}"#, r#"{"a":[3]}"#], r#"{"a":[3]}"#),
-    shallow("shallow one layer is a no-op", &[r#"{"a":{"b":[1]}}"#], r#"{"a":{"b":[1]}}"#),
-    shallow("shallow across three layers", &[r#"{"a":{"x":1}}"#, r#"{"a":5}"#, r#"{"a":{"y":2}}"#], r#"{"a":{"y":2}}"#),
+    shallow("shallow one config is a no-op", &[r#"{"a":{"b":[1]}}"#], r#"{"a":{"b":[1]}}"#),
+    shallow("shallow across three configs", &[r#"{"a":{"x":1}}"#, r#"{"a":5}"#, r#"{"a":{"y":2}}"#], r#"{"a":{"y":2}}"#),
 
 
     // --- selectors replace matching values; `foo.*` is shallow inside foo --
@@ -128,8 +128,8 @@ const CASES: &[Case] = &[
 #[test]
 fn table() {
     for case in CASES {
-        let layers = case.layers.iter().map(|s| ir(s));
-        let got = merge(layers, &options(case));
+        let configs = case.configs.iter().map(|s| ir(s));
+        let got = merge(configs, &options(case));
         assert_eq!(got, ir(case.expect), "case `{}`", case.name);
     }
 }
@@ -139,8 +139,8 @@ fn merge_into_matches_merge() {
     for case in CASES {
         let opts = options(case);
         let mut acc = Value::Object(Default::default());
-        for layer in case.layers {
-            knf::merge_into(&mut acc, ir(layer), &opts);
+        for config in case.configs {
+            knf::merge_into(&mut acc, ir(config), &opts);
         }
         assert_eq!(acc, ir(case.expect), "case `{}`", case.name);
     }

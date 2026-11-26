@@ -21,7 +21,7 @@ cargo install knf-cli --features yaml  # with `--to yaml` (Rust 1.89+)
 cargo add knf-core knf-convert         # Rust libraries
 ```
 
-Rust: `knf_convert::load_layers`, then `knf::merge_layers`, then
+Rust: `knf_convert::load_configs`, then `knf::merge_configs`, then
 `OutputFormat::emit`; see the [example](crates/knf-convert/examples/toml_to_json.rs).
 
 ## Usage
@@ -32,7 +32,7 @@ knf defaults.json overrides.json -c server.port=8080
 knf -c server.port=8080 --to toml
 ```
 
-Layers merge left to right. A file's extension (`.json` or `.toml`) selects its
+Configs merge left to right. A file's extension (`.json` or `.toml`) selects its
 format, and output defaults to the input format. There is no stdin input.
 
 | Case | Behaviour |
@@ -54,7 +54,7 @@ knf config/**/*.toml -G '*.prod.toml'
 
 **`-l/--list-files`**: print the (filtered) input list without reading files.
 
-**`-c KEY.PATH=VALUE`**: inline layer applied after all files. The value is
+**`-c KEY.PATH=VALUE`**: inline config applied after all files. The value is
 parsed in the format of the input files or context and falls back to a string.
 With neither, `--to` selects the inline format (`yaml` parses as JSON).
 
@@ -134,10 +134,10 @@ a = 4
 d = 1
 ```
 
-A later layer changing `bar.d` changes `foo.b.d` too. `--shallow 'foo.b'`
+A later config changing `bar.d` changes `foo.b.d` too. `--shallow 'foo.b'`
 replaces instead. A value that is replaced is never resolved, but a reference
 whose type decides a merge must resolve. To inherit and override, reference
-the base in one layer (`bar = "${foo}"`) and write the overrides in a later one.
+the base in one config (`bar = "${foo}"`) and write the overrides in a later one.
 
 **`--with FILE`**: use one context file for interpolation without merging it
 into output; requires `-i`. Each complete reference path prefers the merged

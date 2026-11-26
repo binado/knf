@@ -34,7 +34,7 @@ plugins = ["metrics"]
 host = "prod"
 ```
 
-### A single layer is the identity
+### A single config is the identity
 
 ```console
 $ knf base.toml --shallow=*
@@ -50,7 +50,7 @@ host = "local"
 port = 5432
 ```
 
-### Set layers are shallow too
+### Inline configs are shallow too
 
 ```console
 $ knf base.toml --shallow=* -c db.host=x
@@ -160,7 +160,7 @@ min = 1
 max = 9
 ```
 
-### Glob, set layers and interpolation compose
+### Glob, inline configs and interpolation compose
 
 ```console
 $ knf base.toml --shallow 'db.*' -c 'db.pool={max=9}' -c 'copy=${db.pool}' --interpolate

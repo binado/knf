@@ -1,4 +1,4 @@
-//! `knf <files...>`: merge layers left to right and print one document.
+//! `knf <files...>`: merge configs left to right and print one document.
 
 mod cli;
 mod explain;
@@ -10,11 +10,11 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
-use knf::{InterpolationOptions, MergeOptions, merge_layers};
-use knf_convert::{Layers, Layout, LoadOptions, Policy, load_layers};
+use knf::{InterpolationOptions, MergeOptions, merge_configs};
+use knf_convert::{Configs, Layout, LoadOptions, Policy, load_configs};
 
 use cli::{Cli, ExecFormat, OutputFormat};
-use explain::{explain_load, name_the_inline_layer_flag};
+use explain::{explain_load, name_the_inline_config_flag};
 
 /// Set while an `--exec` child runs, so Ctrl-C is left to the child.
 static CHILD_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -59,7 +59,7 @@ where
 fn run(cli: Cli, command: &[OsString]) -> anyhow::Result<i32> {
     // Validate -c paths before any file I/O.
     for leaf in &cli.set {
-        leaf.validate_keys().map_err(name_the_inline_layer_flag)?;
+        leaf.validate_keys().map_err(name_the_inline_config_flag)?;
     }
     let opts = MergeOptions {
         shallow: cli.shallow.clone(),
@@ -96,11 +96,11 @@ fn run_pipeline(
     files: &[PathBuf],
     opts: &MergeOptions,
 ) -> anyhow::Result<(String, OutputFormat)> {
-    let Layers {
+    let Configs {
         format,
         mut values,
         context,
-    } = load_layers(
+    } = load_configs(
         files,
         LoadOptions {
             context: cli.with.as_deref(),
@@ -114,13 +114,13 @@ fn run_pipeline(
             leaf.clone()
                 .map_leaf(parse_inline)
                 .try_into()
-                .map_err(name_the_inline_layer_flag)?,
+                .map_err(name_the_inline_config_flag)?,
         );
     }
     let interpolation = cli
         .interpolate
         .then(|| InterpolationOptions::new(&parse_inline).with_context(context.as_ref()));
-    let merged = merge_layers(values, opts, interpolation)
+    let merged = merge_configs(values, opts, interpolation)
         .map_err(|err| explain::explain_interp(err, context.is_some()))?;
     let output = cli.to.unwrap_or_else(|| format.into());
     let target = knf_convert::OutputFormat::from(output);

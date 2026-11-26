@@ -1,4 +1,4 @@
-//! `${key.path}` and `${env:VAR}` resolution over ordered configuration layers.
+//! `${key.path}` and `${env:VAR}` resolution over ordered configs.
 //!
 //! A whole-string reference (`"${p}"`) takes the referent's value and type; an
 //! embedded one (`"x/${p}"`) stringifies, and containers are an error there.
@@ -7,7 +7,7 @@
 //! A reference body is itself interpolated first, so `${a.${b}}` reads the
 //! path `a` followed by whatever `b` holds; inner values must be scalars.
 //!
-//! Layers fold as expressions, so a whole-string reference merges exactly as
+//! Configs fold as expressions, so a whole-string reference merges exactly as
 //! the value it names would. References bind to the final document.
 
 mod error;
@@ -62,7 +62,7 @@ impl<'a> InterpolationOptions<'a> {
     }
 }
 
-/// Left-folds `layers` like [`merge`](crate::merge), then resolves references
+/// Left-folds `configs` like [`merge`](crate::merge), then resolves references
 /// against the result, looking up each complete path in it first, then in
 /// `context`. Only the merged document is returned.
 ///
@@ -75,7 +75,7 @@ impl<'a> InterpolationOptions<'a> {
 /// terminal. Invalid directives and reference problems are reported together;
 /// cycles are reported alone.
 pub fn merge_with_interpolation(
-    layers: impl IntoIterator<Item = Value>,
+    configs: impl IntoIterator<Item = Value>,
     merge_options: &MergeOptions,
     options: &InterpolationOptions,
 ) -> Result<Value, InterpError> {
@@ -96,9 +96,9 @@ pub fn merge_with_interpolation(
         problems: Vec::new(),
     };
     let mut doc = resolver.add(Expr::Object(Object::new()), Vec::new());
-    for layer in layers {
-        let layer = resolver.build(layer, Vec::new());
-        doc = resolver.combine(doc, layer, Vec::new());
+    for config in configs {
+        let config = resolver.build(config, Vec::new());
+        doc = resolver.combine(doc, config, Vec::new());
     }
     resolver.doc = doc;
     resolver.context = options

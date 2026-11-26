@@ -44,14 +44,14 @@ fn arb_doc() -> impl Strategy<Value = Value> {
 
 proptest! {
     #[test]
-    fn layers_without_references_fold_like_plain_merge(
-        layers in prop::collection::vec(arb_doc(), 0..4),
+    fn configs_without_references_fold_like_plain_merge(
+        configs in prop::collection::vec(arb_doc(), 0..4),
         shallow in prop::option::of(prop::sample::select(vec!["a", "a.b", "a.*", "*", "{a,b}.c"])),
     ) {
         let selector: Option<knf::glob::KeyGlobPattern> = shallow.map(|pattern| pattern.parse().unwrap());
         let opts = MergeOptions { shallow: selector };
-        let expected = merge(layers.clone(), &opts);
-        let out = merge_with_interpolation(layers, &opts, &options(None)).unwrap();
+        let expected = merge(configs.clone(), &opts);
+        let out = merge_with_interpolation(configs, &opts, &options(None)).unwrap();
         prop_assert_eq!(out, expected);
     }
 
@@ -65,13 +65,13 @@ proptest! {
         let wrap = |value| Value::Object([("derived".to_owned(), value)].into_iter().collect());
         let opts = MergeOptions { shallow: shallow.map(|pattern| pattern.parse().unwrap()) };
         let expected = merge_with_interpolation([wrap(left.clone()), wrap(right.clone())], &opts, &options(None)).unwrap();
-        let (referent, layers) = if reference_right {
+        let (referent, configs) = if reference_right {
             (right, [wrap(left), wrap(Value::String("${referent}".into()))])
         } else {
             (left, [wrap(Value::String("${referent}".into())), wrap(right)])
         };
         let context = Value::Object([("referent".to_owned(), referent)].into_iter().collect());
-        let out = merge_with_interpolation(layers, &opts, &options(Some(&context))).unwrap();
+        let out = merge_with_interpolation(configs, &opts, &options(Some(&context))).unwrap();
         prop_assert_eq!(out, expected);
     }
 

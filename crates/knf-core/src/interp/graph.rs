@@ -1,4 +1,4 @@
-//! Layers as an expression graph. A merge whose operands may be references is
+//! Configs as an expression graph. A merge whose operands may be references is
 //! decided on demand, against the final document.
 
 use std::rc::Rc;
@@ -20,7 +20,7 @@ pub(super) type Object = IndexMap<String, Id>;
 pub(super) type Fields = Rc<Object>;
 
 pub(super) enum Expr {
-    /// A non-container layer value; strings are scanned on demand.
+    /// A non-container config value; strings are scanned on demand.
     Value(Value),
     /// An environment value: never scanned, and its children stay terminal.
     Terminal(Value),
@@ -71,7 +71,7 @@ impl Resolver<'_> {
         self.nodes.len() - 1
     }
 
-    /// Converts a layer value into nodes.
+    /// Converts a config value into nodes.
     pub(super) fn build(&mut self, value: Value, path: Vec<Seg>) -> Id {
         let expr = match value {
             Value::Array(items) => Expr::Array(

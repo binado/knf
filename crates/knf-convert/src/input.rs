@@ -15,17 +15,17 @@ impl fmt::Display for InputFormat {
     }
 }
 
-/// Why input paths could not be turned into layers.
+/// Why input paths could not be turned into configs.
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
     /// There are no inputs and no fallback format.
     #[error("no input files to infer a format from")]
     NoInputs,
     /// Inferred input formats differ.
-    #[error("inputs mix JSON and TOML formats; layers must use one format")]
+    #[error("inputs mix JSON and TOML formats; configs must use one format")]
     MixedFormats,
     /// A positional named a directory.
-    #[error("`{}` is a directory; knf takes files as layers", path.display())]
+    #[error("`{}` is a directory; knf takes files as configs", path.display())]
     Directory {
         /// The directory that was named.
         path: PathBuf,
@@ -75,7 +75,7 @@ pub enum ParseError {
 
 /// Parsed documents in input order, plus the interpolation context.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Layers {
+pub struct Configs {
     pub format: InputFormat,
     pub values: Vec<Value>,
     pub context: Option<Value>,
@@ -108,17 +108,20 @@ pub fn resolve_format<P: AsRef<Path>>(
     selected.or(fallback).ok_or(LoadError::NoInputs)
 }
 
-/// What [`load_layers`] reads besides the layers themselves.
+/// What [`load_configs`] reads besides the configs themselves.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LoadOptions<'a> {
-    /// Interpolation context file, read in the same format as the layers.
+    /// Interpolation context file, read in the same format as the configs.
     pub context: Option<&'a Path>,
     /// The format when there are no inputs at all.
     pub fallback: Option<InputFormat>,
 }
 
 /// Infer one format for `files` and `options.context`, then read them in order.
-pub fn load_layers<P: AsRef<Path>>(files: &[P], options: LoadOptions) -> Result<Layers, LoadError> {
+pub fn load_configs<P: AsRef<Path>>(
+    files: &[P],
+    options: LoadOptions,
+) -> Result<Configs, LoadError> {
     let LoadOptions { context, fallback } = options;
     let paths = files.iter().map(AsRef::as_ref).chain(context);
     let format = resolve_format(paths, fallback)?;
@@ -128,7 +131,7 @@ pub fn load_layers<P: AsRef<Path>>(files: &[P], options: LoadOptions) -> Result<
             source,
         })
     };
-    Ok(Layers {
+    Ok(Configs {
         format,
         values: files
             .iter()
