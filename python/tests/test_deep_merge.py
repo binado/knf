@@ -170,6 +170,14 @@ def test_missing_file_raises_like_open(write, tmp_path):
     assert str(info.value) == f"[Errno {errno.ENOENT}] {os.strerror(errno.ENOENT)}: {str(missing)!r}"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="filenames are bytes only on Unix")
+def test_load_missing_non_utf8_filename_keeps_its_bytes() -> None:
+    raw = b"/\xff.json"
+    with pytest.raises(FileNotFoundError) as info:
+        load([os.fsdecode(raw)])
+    assert os.fsencode(info.value.filename) == raw
+
+
 def test_directory_raises_is_a_directory_error(tmp_path):
     with pytest.raises(IsADirectoryError) as info:
         load([tmp_path])
@@ -403,7 +411,7 @@ def test_a_bare_str_is_not_a_list_of_files(write):
 
 @pytest.mark.parametrize("interpolate", [False, True])
 def test_mixed_formats_fail_before_reading_contents(tmp_path, interpolate):
-    with pytest.raises(ValueError, match="inputs mix JSON and TOML") as info:
+    with pytest.raises(ValueError, match="configs must use one format") as info:
         load([tmp_path / "missing.json", tmp_path / "missing.toml"], interpolate=interpolate)
     assert not isinstance(info.value, ParseError)
 

@@ -107,7 +107,10 @@ fn yaml_keeps_null_unsigned_and_nonfinite_values_in_one_document() {
     let knf_convert::EmitError::Conversion(error) = error else {
         panic!("{error}")
     };
-    assert_eq!(error.path(), "nested.day");
+    assert_eq!(
+        error.path(),
+        [knf::Seg::Key("nested".into()), knf::Seg::Key("day".into())]
+    );
     assert!(
         OutputFormat::Yaml
             .emit(&date, Policy::Lossy, Layout::Pretty)

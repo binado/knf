@@ -6,6 +6,9 @@ use clap::{CommandFactory, Parser, error::ErrorKind};
 use knf::PathLeaf;
 use knf::glob::KeyGlobPattern;
 
+// `super`, not `crate`: `knf-py` includes `main.rs` as a module.
+use super::explain::name_the_inline_config_flag;
+
 /// Formats accepted by `--to`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum OutputFormat {
@@ -98,6 +101,10 @@ prints a warning on stderr; use --strict to reject it and name the key.
     )
 }
 
+fn parse_inline_config(expr: &str) -> Result<PathLeaf<String>, String> {
+    expr.parse().map_err(name_the_inline_config_flag)
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "knf",
@@ -153,6 +160,7 @@ Like --glob, but match only the filename.
     #[arg(
         short = 'c',
         value_name = "KEY.PATH=VALUE",
+        value_parser = parse_inline_config,
         long_help = "\
 Inline config applied after all files; repeatable. The value is parsed in the
 format of the input files or context, falling back to a string. With neither,

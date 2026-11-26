@@ -452,13 +452,15 @@ For more information, try '--help'.
 
 ```console
 $ knf missing.toml -G none -c 'a[0]=1'
-? 1
+? 2
 ```
 
 `stderr`:
 
 ```text
-error: `a[0]` contains an array index; merge paths take keys only
+error: invalid value 'a[0]=1' for '-c <KEY.PATH=VALUE>': `a[0]` contains an array index; merge paths take keys only
 help: -c takes KEY.PATH=VALUE; an index like servers[0] can be read
       by a ${...} reference but never written — put the value in a file instead
+
+For more information, try '--help'.
 ```

@@ -525,3 +525,24 @@ null = "null"
 raw = "x:1979-05-27"
 terminal = "${missing}"
 ```
+
+## An empty key is quoted in a conversion error
+
+The top-level `x` is not the null one.
+
+`input.json`:
+
+```json
+{"":{"x":null},"x":42}
+```
+
+```console
+$ knf input.json --to toml --strict
+? 1
+```
+
+`stderr`:
+
+```text
+error: [""].x: TOML cannot represent null object fields
+```

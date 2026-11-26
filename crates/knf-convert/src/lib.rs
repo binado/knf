@@ -9,7 +9,7 @@
 
 mod input;
 pub use input::{
-    Configs, InputFormat, LoadError, LoadOptions, ParseError, ReadError, load_configs,
+    Configs, InputFormat, LoadError, LoadOptions, ParseError, ReadError, Role, load_configs,
     resolve_format,
 };
 use knf::{Seg, Value, render_path};
@@ -20,16 +20,16 @@ use toml::Value as Toml;
 
 /// A value that cannot be converted under the requested policy.
 #[derive(Debug, thiserror::Error)]
-#[error("{path}: {reason}")]
+#[error("{}: {reason}", located(path))]
 pub struct ConversionError {
-    path: String,
+    path: Vec<Seg>,
     category: Unrepresentable,
     reason: &'static str,
 }
 
 impl ConversionError {
-    /// Key path of the offending value, or `<root>`.
-    pub fn path(&self) -> &str {
+    /// Where the offending value is; empty for the root.
+    pub fn path(&self) -> &[Seg] {
         &self.path
     }
 
@@ -41,6 +41,15 @@ impl ConversionError {
     /// Why the value cannot be converted.
     pub fn reason(&self) -> &str {
         self.reason
+    }
+}
+
+/// The path as written in messages.
+fn located(path: &[Seg]) -> String {
+    if path.is_empty() {
+        "<root>".into()
+    } else {
+        render_path(path)
     }
 }
 
@@ -364,7 +373,7 @@ impl<'n, 'a> Node<'n, 'a> {
         }
     }
 
-    fn path(&self) -> String {
+    fn path(&self) -> Vec<Seg> {
         let mut segments = Vec::new();
         let mut node = self;
         while let Some((parent, step)) = node.parent {
@@ -374,11 +383,8 @@ impl<'n, 'a> Node<'n, 'a> {
             });
             node = parent;
         }
-        if segments.is_empty() {
-            return "<root>".into();
-        }
         segments.reverse();
-        render_path(&segments)
+        segments
     }
 
     /// Record the conversion failure and abort serialization.
@@ -618,7 +624,7 @@ mod tests {
         let EmitError::Conversion(error) = error else {
             panic!("{error}")
         };
-        assert_eq!(error.path(), "a[0]");
+        assert_eq!(error.path(), [Seg::Key("a".into()), Seg::Index(0)]);
         assert_eq!(error.category(), Unrepresentable::Type);
         assert_eq!(error.reason(), "TOML cannot represent null");
     }

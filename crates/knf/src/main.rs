@@ -14,7 +14,7 @@ use knf::{InterpolationOptions, MergeOptions, merge_configs};
 use knf_convert::{Configs, Layout, LoadOptions, Policy, load_configs};
 
 use cli::{Cli, ExecFormat, OutputFormat};
-use explain::{explain_load, name_the_inline_config_flag};
+use explain::explain_load;
 
 /// Set while an `--exec` child runs, so Ctrl-C is left to the child.
 static CHILD_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -57,10 +57,6 @@ where
 }
 
 fn run(cli: Cli, command: &[OsString]) -> anyhow::Result<i32> {
-    // Validate -c paths before any file I/O.
-    for leaf in &cli.set {
-        leaf.validate_keys().map_err(name_the_inline_config_flag)?;
-    }
     let opts = MergeOptions {
         shallow: cli.shallow.clone(),
     };
@@ -107,15 +103,10 @@ fn run_pipeline(
             fallback: cli.to.map(Into::into),
         },
     )
-    .map_err(|err| explain_load(err, cli.with.as_deref()))?;
+    .map_err(explain_load)?;
     let parse_inline = |text| format.parse_inline(text);
     for leaf in &cli.set {
-        values.push(
-            leaf.clone()
-                .map_leaf(parse_inline)
-                .try_into()
-                .map_err(name_the_inline_config_flag)?,
-        );
+        values.push(leaf.clone().map_leaf(parse_inline).into());
     }
     let interpolation = cli
         .interpolate

@@ -163,13 +163,16 @@ enum Failure {
 /// `OSError` subclass, `ValueError`, or [`ParseError`].
 fn load_error(py: Python<'_>, err: LoadError) -> PyErr {
     match &err {
-        LoadError::Directory { path } => os_error::<PyIsADirectoryError>(py, "EISDIR", path, &err),
-        LoadError::NoInputs | LoadError::MixedFormats | LoadError::UnknownExtension { .. } => {
-            PyValueError::new_err(err.to_string())
+        LoadError::Directory { path, .. } => {
+            os_error::<PyIsADirectoryError>(py, "EISDIR", path, &err)
         }
+        LoadError::NoInputs
+        | LoadError::MixedFormats { .. }
+        | LoadError::UnknownExtension { .. } => PyValueError::new_err(err.to_string()),
         LoadError::File {
             path,
             source: ReadError::Io(source),
+            ..
         } => match source.kind() {
             io::ErrorKind::NotFound => os_error::<PyFileNotFoundError>(py, "ENOENT", path, &err),
             io::ErrorKind::PermissionDenied => {
@@ -210,7 +213,9 @@ fn os_error<E: PyTypeInfo>(
     let build = || -> PyResult<PyErr> {
         let errno = py.import("errno")?.getattr(errno_name)?;
         let strerror = py.import("os")?.call_method1("strerror", (&errno,))?;
-        let filename = path.to_string_lossy().into_owned();
+        // An `OsString` becomes a `str` as `os.fsdecode` would, keeping bytes
+        // that are not UTF-8.
+        let filename = path.as_os_str().to_owned();
         Ok(PyErr::new::<E, _>((
             errno.unbind(),
             strerror.unbind(),

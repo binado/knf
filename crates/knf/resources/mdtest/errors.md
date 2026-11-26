@@ -231,7 +231,7 @@ $ knf a.json b.toml
 `stderr`:
 
 ```text
-error: inputs mix JSON and TOML formats; configs must use one format
+error: `b.toml` is TOML but `a.json` is JSON; configs must use one format
 help: merge JSON and TOML configs separately
 ```
 
@@ -245,7 +245,7 @@ $ knf a.json b.toml --interpolate
 `stderr`:
 
 ```text
-error: inputs mix JSON and TOML formats; configs must use one format
+error: `b.toml` is TOML but `a.json` is JSON; configs must use one format
 help: merge JSON and TOML configs separately
 ```
 
@@ -253,15 +253,17 @@ help: merge JSON and TOML configs separately
 
 ```console
 $ knf missing.toml -c 'servers[0]=1'
-? 1
+? 2
 ```
 
 `stderr`:
 
 ```text
-error: `servers[0]` contains an array index; merge paths take keys only
+error: invalid value 'servers[0]=1' for '-c <KEY.PATH=VALUE>': `servers[0]` contains an array index; merge paths take keys only
 help: -c takes KEY.PATH=VALUE; an index like servers[0] can be read
       by a ${...} reference but never written — put the value in a file instead
+
+For more information, try '--help'.
 ```
 
 ## Paths without a known extension
@@ -298,4 +300,58 @@ $ knf -
 ```text
 error: cannot infer a format from `-`
 help: name the file with a .json or .toml extension
+```
+
+## The failing path's role picks the help
+
+`a.toml`:
+
+```toml
+a = 1
+```
+
+`b.json`:
+
+```json
+{}
+```
+
+`ctx.toml`:
+
+```toml
+c = 1
+```
+
+`somedir/d.toml`:
+
+```toml
+d = 1
+```
+
+### Inputs that clash are not blamed on --with
+
+```console
+$ knf a.toml b.json -i --with ctx.toml
+? 1
+```
+
+`stderr`:
+
+```text
+error: `b.json` is JSON but `a.toml` is TOML; configs must use one format
+help: merge JSON and TOML configs separately
+```
+
+### A directory given twice is reported as an input
+
+```console
+$ knf somedir -i --with somedir
+? 1
+```
+
+`stderr`:
+
+```text
+error: `somedir` is a directory; knf takes files as configs
+help: `knf somedir/*.toml` merges its files
 ```
