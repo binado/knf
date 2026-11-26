@@ -1,6 +1,6 @@
 # YAML output
 
-## JSON layers merge and interpolate in insertion order
+## JSON configs merge and interpolate in insertion order
 
 `base.json`:
 
@@ -39,7 +39,7 @@ strings:
 a: true
 ```
 
-## TOML layers merge and interpolate before conversion
+## TOML configs merge and interpolate before conversion
 
 `base.toml`:
 
@@ -236,7 +236,7 @@ For more information, try '--help'.
 port: 443
 ```
 
-### YAML layers are rejected
+### YAML configs are rejected
 
 ```console
 $ knf config.yaml --to yaml

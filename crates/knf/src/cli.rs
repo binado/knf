@@ -114,7 +114,7 @@ Objects merge recursively; arrays, scalars and null replace wholesale.
   knf base.toml -c seed=42 --exec -- python fit.py --replicate 2"
 )]
 pub struct Cli {
-    /// Files to merge as layers; the extension selects JSON or TOML
+    /// Files to merge, left to right; the extension selects JSON or TOML
     #[arg(value_name = "FILE")]
     pub files: Vec<PathBuf>,
 
@@ -149,12 +149,12 @@ Like --glob, but match only the filename.
     #[arg(short = 'l', long)]
     pub list_files: bool,
 
-    /// Inline terminal layer, applied after all files
+    /// Inline config, applied after all files
     #[arg(
         short = 'c',
         value_name = "KEY.PATH=VALUE",
         long_help = "\
-Inline layer applied after all files; repeatable. The value is parsed in the
+Inline config applied after all files; repeatable. The value is parsed in the
 format of the input files or context, falling back to a string. With neither,
 --to selects the inline format.
 
@@ -198,7 +198,7 @@ Resolve ${key.path} and ${env:VAR} references in the merged document.
 A whole-string reference keeps the value's type; an embedded one becomes text.
 $$ is a literal $. References bind to the final document, and a whole-string
 reference merges exactly as the value it names: an object referent merges with
-an object from another layer. --shallow forces replacement.
+an object from another config. --shallow forces replacement.
 
   data_dir = \"${root}/data\"
   port     = \"${env:PORT}\""

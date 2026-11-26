@@ -30,7 +30,7 @@ pub struct MergeOptions {
 }
 
 impl MergeOptions {
-    /// Top-level keys only: a later layer's value replaces the earlier one whole.
+    /// Top-level keys only: a later config's value replaces the earlier one whole.
     pub fn shallow_root() -> Self {
         Self {
             shallow: Some("*".parse().expect("valid root selector")),
@@ -47,37 +47,37 @@ pub fn merge_into(base: &mut Value, over: Value, opts: &MergeOptions) {
     merge_at(base, over, opts, &mut path);
 }
 
-/// Left-folds layers into one document, starting from an empty object.
+/// Left-folds configs into one document, starting from an empty object.
 ///
-/// Merging is not associative (a scalar layer shadows earlier objects):
+/// Merging is not associative (a scalar config shadows earlier objects):
 ///
 /// ```text
 /// {a:{b:1}} * {a:5} * {a:{c:2}}
 ///   left-assoc  -> {a:{c:2}}
 ///   right-assoc -> {a:{b:1,c:2}}
 /// ```
-pub fn merge(layers: impl IntoIterator<Item = Value>, opts: &MergeOptions) -> Value {
+pub fn merge(configs: impl IntoIterator<Item = Value>, opts: &MergeOptions) -> Value {
     let mut acc = Value::Object(Default::default());
     let mut path = Vec::new();
-    for layer in layers {
-        merge_at(&mut acc, layer, opts, &mut path);
-        debug_assert!(path.is_empty(), "breadcrumb leaked between layers");
+    for config in configs {
+        merge_at(&mut acc, config, opts, &mut path);
+        debug_assert!(path.is_empty(), "breadcrumb leaked between configs");
     }
     acc
 }
 
-/// Left-folds layers into one document, resolving references when
+/// Left-folds configs into one document, resolving references when
 /// `interpolation` is given.
 ///
 /// `None` is [`merge`] and cannot fail; `Some` is [`merge_with_interpolation`].
-pub fn merge_layers(
-    layers: impl IntoIterator<Item = Value>,
+pub fn merge_configs(
+    configs: impl IntoIterator<Item = Value>,
     merge_options: &MergeOptions,
     interpolation: Option<InterpolationOptions>,
 ) -> Result<Value, InterpError> {
     match interpolation {
-        Some(options) => merge_with_interpolation(layers, merge_options, &options),
-        None => Ok(merge(layers, merge_options)),
+        Some(options) => merge_with_interpolation(configs, merge_options, &options),
+        None => Ok(merge(configs, merge_options)),
     }
 }
 
@@ -106,6 +106,15 @@ fn merge_at(base: &mut Value, over: Value, opts: &MergeOptions, path: &mut Vec<S
     }
 }
 
+#[deprecated(note = "use merge_configs")]
+pub fn merge_layers(
+    configs: impl IntoIterator<Item = Value>,
+    merge_options: &MergeOptions,
+    interpolation: Option<InterpolationOptions>,
+) -> Result<Value, InterpError> {
+    merge_configs(configs, merge_options, interpolation)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,20 +128,20 @@ mod tests {
         )
     }
 
-    fn layers() -> [Value; 2] {
+    fn configs() -> [Value; 2] {
         [object(&[("a", "1")]), object(&[("b", "${a}")])]
     }
 
     #[test]
-    fn merge_layers_resolves_references_only_with_interpolation() {
+    fn merge_configs_resolves_references_only_with_interpolation() {
         let opts = MergeOptions::default();
         assert_eq!(
-            merge_layers(layers(), &opts, None).unwrap(),
+            merge_configs(configs(), &opts, None).unwrap(),
             object(&[("a", "1"), ("b", "${a}")])
         );
         let interpolation = InterpolationOptions::new(&Value::String);
         assert_eq!(
-            merge_layers(layers(), &opts, Some(interpolation)).unwrap(),
+            merge_configs(configs(), &opts, Some(interpolation)).unwrap(),
             object(&[("a", "1"), ("b", "1")])
         );
     }

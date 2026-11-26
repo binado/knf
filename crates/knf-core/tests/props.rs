@@ -13,7 +13,7 @@ fn arb_value() -> impl Strategy<Value = Value> {
         "[a-z]{0,3}".prop_map(Value::String),
         Just(Value::Datetime("1979-05-27T07:32:00Z".parse().unwrap())),
     ];
-    // Small key alphabet so layers collide often.
+    // Small key alphabet so configs collide often.
     leaf.prop_recursive(4, 24, 3, |inner| {
         prop_oneof![
             prop::collection::vec(inner.clone(), 0..3).prop_map(Value::Array),
@@ -62,7 +62,7 @@ fn without(doc: &Value, key: &str) -> Value {
 
 proptest! {
     #[test]
-    fn merging_a_layer_with_itself_is_a_no_op(a in arb_doc()) {
+    fn merging_a_config_with_itself_is_a_no_op(a in arb_doc()) {
         prop_assert_eq!(merged(a.clone(), a.clone()), a);
     }
 
@@ -73,7 +73,7 @@ proptest! {
     }
 
     #[test]
-    fn a_single_layer_is_identity_under_shallow(a in arb_doc()) {
+    fn a_single_config_is_identity_under_shallow(a in arb_doc()) {
         let got = merge([a.clone()], &MergeOptions::shallow_root());
         prop_assert_eq!(got, a);
     }

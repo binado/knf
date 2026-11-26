@@ -234,18 +234,18 @@ macro_rules! common_tests {
 
         // --- reference-aware merging ----------------------------------------------
 
-        fn fold(layers: Vec<Value>) -> Result<Value, InterpError> {
-            fold_with(layers, None, None, &StubEnv::default())
+        fn fold(configs: Vec<Value>) -> Result<Value, InterpError> {
+            fold_with(configs, None, None, &StubEnv::default())
         }
 
         fn fold_with(
-            layers: Vec<Value>,
+            configs: Vec<Value>,
             context: Option<&Value>,
             shallow: Option<&str>,
             env: &dyn Env,
         ) -> Result<Value, InterpError> {
             merge_with_interpolation(
-                layers,
+                configs,
                 &MergeOptions {
                     shallow: shallow.map(|pattern| pattern.parse().unwrap()),
                 },
@@ -359,7 +359,7 @@ macro_rules! common_tests {
 
         #[test]
         fn shallow_destinations_replace_without_resolving_the_earlier_value() {
-            let layers = vec![
+            let configs = vec![
                 obj(vec![
                     (
                         "bar",
@@ -373,13 +373,13 @@ macro_rules! common_tests {
                     ("gone", obj(vec![])),
                 ]),
             ];
-            let deep = fold_with(layers.clone(), None, Some("gone"), &StubEnv::default()).unwrap();
+            let deep = fold_with(configs.clone(), None, Some("gone"), &StubEnv::default()).unwrap();
             assert_eq!(
                 deep.as_object().unwrap()["foo"],
                 obj(vec![("db", obj(vec![("host", s("h")), ("port", n(2))]))])
             );
             for glob in ["foo.db", "{foo.db,gone}", "*"] {
-                let out = fold_with(layers.clone(), None, Some(glob), &StubEnv::default());
+                let out = fold_with(configs.clone(), None, Some(glob), &StubEnv::default());
                 let out = match out {
                     Ok(out) => out,
                     Err(err) => {
@@ -426,7 +426,7 @@ macro_rules! common_tests {
 
         #[test]
         fn a_merged_reference_that_expands_into_itself_is_a_cycle() {
-            for layers in [
+            for configs in [
                 vec![
                     obj(vec![("foo", obj(vec![("x", n(1))]))]),
                     obj(vec![
@@ -439,7 +439,7 @@ macro_rules! common_tests {
                     obj(vec![("a", s("${b}")), ("b", s("${a}"))]),
                 ],
             ] {
-                assert!(matches!(fold(layers), Err(InterpError::Cycle(_))));
+                assert!(matches!(fold(configs), Err(InterpError::Cycle(_))));
             }
         }
 
@@ -491,7 +491,7 @@ macro_rules! common_tests {
         }
 
         #[test]
-        fn context_referents_merge_with_later_layers() {
+        fn context_referents_merge_with_later_configs() {
             let context = obj(vec![("shared", obj(vec![("a", n(1)), ("b", n(1))]))]);
             let out = fold_with(
                 vec![

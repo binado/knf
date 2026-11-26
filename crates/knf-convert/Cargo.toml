@@ -1,6 +1,6 @@
 [package]
 name = "knf-convert"
-description = "Load JSON and TOML configuration layers and emit resolved values"
+description = "Load JSON and TOML configs and emit resolved values"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

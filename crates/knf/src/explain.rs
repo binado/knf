@@ -10,7 +10,7 @@ use knf_convert::LoadError;
 ///
 /// `context` is the `--with` path when one was supplied. Mixed formats then
 /// share one format with that file, and a directory at that path is not a
-/// merge layer.
+/// config to merge.
 pub fn explain_load(err: LoadError, context: Option<&Path>) -> anyhow::Error {
     match &err {
         LoadError::NoInputs => anyhow!("{err}\nhelp: pass --to json or --to toml"),
@@ -21,13 +21,13 @@ pub fn explain_load(err: LoadError, context: Option<&Path>) -> anyhow::Error {
             anyhow!("{err}\nhelp: inputs and the --with file must share one format")
         }
         LoadError::MixedFormats => {
-            anyhow!("{err}\nhelp: merge JSON layers and TOML layers separately")
+            anyhow!("{err}\nhelp: merge JSON and TOML configs separately")
         }
         LoadError::Directory { path } if context.is_some_and(|ctx| ctx == path) => {
             anyhow!("{err}\nhelp: --with takes one file")
         }
         LoadError::Directory { path } => anyhow!(
-            "{err}\nhelp: `knf {}/*.toml` merges its files as layers",
+            "{err}\nhelp: `knf {}/*.toml` merges its files",
             path.display()
         ),
         LoadError::File { .. } => err.into(),
@@ -35,7 +35,7 @@ pub fn explain_load(err: LoadError, context: Option<&Path>) -> anyhow::Error {
 }
 
 /// Adds `-c` help to path errors.
-pub fn name_the_inline_layer_flag(err: PathError) -> anyhow::Error {
+pub fn name_the_inline_config_flag(err: PathError) -> anyhow::Error {
     match err {
         PathError::IndexInKeyPath { .. } => anyhow!(
             "{err}\nhelp: -c takes KEY.PATH=VALUE; an index like servers[0] can be read\n      \

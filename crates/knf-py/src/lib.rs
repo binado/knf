@@ -10,8 +10,10 @@ use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 mod cli_bin;
 
 use knf::glob::{GlobError, GlobPattern, KeyGlobError, KeyGlobPattern};
-use knf::{InterpError, InterpolationOptions, MergeOptions, Seg, Value, merge_layers, render_path};
-use knf_convert::{InputFormat, Layers, LoadError, LoadOptions, ReadError, load_layers};
+use knf::{
+    InterpError, InterpolationOptions, MergeOptions, Seg, Value, merge_configs, render_path,
+};
+use knf_convert::{Configs, InputFormat, LoadError, LoadOptions, ReadError, load_configs};
 use pyo3::PyTypeInfo;
 use pyo3::create_exception;
 use pyo3::exceptions::{
@@ -74,11 +76,11 @@ fn load<'py>(
     let opts = MergeOptions { shallow };
     let merged = py
         .detach(move || {
-            let Layers {
+            let Configs {
                 format,
                 values,
                 context,
-            } = load_layers(
+            } = load_configs(
                 &files,
                 LoadOptions {
                     context: context.as_deref(),
@@ -89,7 +91,7 @@ fn load<'py>(
             let parse_inline = |text| format.parse_inline(text);
             let interpolation = interpolate
                 .then(|| InterpolationOptions::new(&parse_inline).with_context(context.as_ref()));
-            merge_layers(values, &opts, interpolation).map_err(Failure::Interpolate)
+            merge_configs(values, &opts, interpolation).map_err(Failure::Interpolate)
         })
         .map_err(|failure| match failure {
             Failure::Load(err) => load_error(py, err),
@@ -146,7 +148,7 @@ fn deep_merge<'py>(
             let parse_inline = |text| format.parse_inline(text);
             let interpolation = interpolate
                 .then(|| InterpolationOptions::new(&parse_inline).with_context(context.as_ref()));
-            merge_layers(values, &opts, interpolation)
+            merge_configs(values, &opts, interpolation)
         })
         .map_err(|err| InterpolationError::new_err(err.to_string()))?;
     value_to_py(py, merged, &mut Vec::new())

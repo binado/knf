@@ -1,6 +1,6 @@
 # Merge
 
-## A single layer is a no-op
+## A single config is a no-op
 
 `a.json`:
 
@@ -78,7 +78,7 @@ $ knf a.json --compact
 {"id":10000000000000000001,"max":18446744073709551615}
 ```
 
-## Homogeneous layers
+## Homogeneous configs
 
 `base.toml`:
 
@@ -174,7 +174,7 @@ $ knf -c a.b=1 --to json --compact
 {"a":{"b":1}}
 ```
 
-## A reference layer inherits and a later layer overrides
+## A reference config inherits and a later config overrides
 
 ### JSON
 

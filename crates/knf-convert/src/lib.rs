@@ -1,4 +1,4 @@
-//! Load ordered configuration layers and emit resolved [`Value`]s.
+//! Load ordered configs and emit resolved [`Value`]s.
 //!
 //! # Example
 //!
@@ -9,7 +9,8 @@
 
 mod input;
 pub use input::{
-    InputFormat, Layers, LoadError, LoadOptions, ParseError, ReadError, load_layers, resolve_format,
+    Configs, InputFormat, LoadError, LoadOptions, ParseError, ReadError, load_configs,
+    resolve_format,
 };
 use knf::{Seg, Value, render_path};
 use serde::ser::{self, Serialize, SerializeMap, SerializeSeq, Serializer};

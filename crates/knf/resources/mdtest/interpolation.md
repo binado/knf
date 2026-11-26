@@ -157,7 +157,7 @@ $ knf base.json prod.json --interpolate --compact
 {"host":"prod","url":"http://prod/"}
 ```
 
-## Set layers interpolate too
+## Inline configs interpolate too
 
 `f.json`:
 
@@ -220,7 +220,7 @@ a = 4
 d = 9
 ```
 
-### Interpolated from the layers given
+### Interpolated from the configs given
 
 ```console
 $ knf base.toml over.toml -i
@@ -238,7 +238,7 @@ a = 4
 d = 1
 ```
 
-### A later layer updates the referent
+### A later config updates the referent
 
 ```console
 $ knf base.toml over.toml late.toml -i

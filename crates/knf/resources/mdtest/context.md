@@ -26,7 +26,7 @@ url = 'https://${host}/api'
 port = 5432
 ```
 
-### Layers override the context
+### Configs override the context
 
 ```console
 $ knf foo.toml bar.toml -i --with config.toml
@@ -216,7 +216,7 @@ $ knf missing.json -i --with missing.toml
 `stderr`:
 
 ```text
-error: inputs mix JSON and TOML formats; layers must use one format
+error: inputs mix JSON and TOML formats; configs must use one format
 help: inputs and the --with file must share one format
 ```
 
@@ -305,7 +305,7 @@ $ knf a.json -i --with config
 `stderr`:
 
 ```text
-error: `config` is a directory; knf takes files as layers
+error: `config` is a directory; knf takes files as configs
 help: --with takes one file
 ```
 
@@ -343,7 +343,7 @@ $ knf a.toml -i --with b.json
 `stderr`:
 
 ```text
-error: inputs mix JSON and TOML formats; layers must use one format
+error: inputs mix JSON and TOML formats; configs must use one format
 help: inputs and the --with file must share one format
 ```
 

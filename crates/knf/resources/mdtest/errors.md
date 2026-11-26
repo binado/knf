@@ -189,11 +189,11 @@ $ knf config
 `stderr`:
 
 ```text
-error: `config` is a directory; knf takes files as layers
-help: `knf config/*.toml` merges its files as layers
+error: `config` is a directory; knf takes files as configs
+help: `knf config/*.toml` merges its files
 ```
 
-### The layer hint is kept with --with
+### The directory hint is kept with --with
 
 ```console
 $ knf config -i --with context.toml
@@ -203,8 +203,8 @@ $ knf config -i --with context.toml
 `stderr`:
 
 ```text
-error: `config` is a directory; knf takes files as layers
-help: `knf config/*.toml` merges its files as layers
+error: `config` is a directory; knf takes files as configs
+help: `knf config/*.toml` merges its files
 ```
 
 ## Mixed input formats
@@ -221,7 +221,7 @@ help: `knf config/*.toml` merges its files as layers
 b = 1
 ```
 
-### Layers must use one format
+### Configs must use one format
 
 ```console
 $ knf a.json b.toml
@@ -231,8 +231,8 @@ $ knf a.json b.toml
 `stderr`:
 
 ```text
-error: inputs mix JSON and TOML formats; layers must use one format
-help: merge JSON layers and TOML layers separately
+error: inputs mix JSON and TOML formats; configs must use one format
+help: merge JSON and TOML configs separately
 ```
 
 ### The format error precedes interpolation errors
@@ -245,8 +245,8 @@ $ knf a.json b.toml --interpolate
 `stderr`:
 
 ```text
-error: inputs mix JSON and TOML formats; layers must use one format
-help: merge JSON layers and TOML layers separately
+error: inputs mix JSON and TOML formats; configs must use one format
+help: merge JSON and TOML configs separately
 ```
 
 ## A -c array index is rejected before file IO
