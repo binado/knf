@@ -1,7 +1,6 @@
 //! Ordered configuration values, layered merging, and reference resolution.
 
 mod env;
-pub mod fs;
 pub mod glob;
 mod inline;
 mod interp;

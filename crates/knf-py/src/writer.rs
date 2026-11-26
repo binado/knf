@@ -6,6 +6,10 @@ use pyo3::types::PyDict;
 use crate::from_py::dict_to_value;
 
 /// Serialize a dict as JSON, TOML, or YAML with a trailing newline.
+///
+/// TOML supports strings, booleans, signed 64-bit integers, floats, lists,
+/// tuples, dicts with string keys, and datetime, date, and time objects.
+/// Datetime offsets must be whole minutes and times must have no tzinfo.
 #[pyfunction]
 #[pyo3(signature = (data, *, format, pretty = true))]
 pub(super) fn dumps(data: &Bound<'_, PyDict>, format: &str, pretty: bool) -> PyResult<String> {
@@ -34,11 +38,4 @@ pub(super) fn dumps(data: &Bound<'_, PyDict>, format: &str, pretty: bool) -> PyR
             }
             err => PyValueError::new_err(crate::one_line(&err)),
         })
-}
-
-/// Serialize a dict as TOML; see `__init__.pyi` for supported types and errors.
-#[pyfunction]
-#[pyo3(signature = (data, *, pretty = true))]
-pub(super) fn dumps_toml(data: &Bound<'_, PyDict>, pretty: bool) -> PyResult<String> {
-    dumps(data, "toml", pretty)
 }

@@ -4,8 +4,7 @@ use std::{ffi::OsString, path::PathBuf};
 
 use clap::{CommandFactory, Parser, error::ErrorKind};
 use knf::PathLeaf;
-use knf::fs::GlobTarget;
-use knf::glob::{GlobPattern, KeyGlobPattern};
+use knf::glob::KeyGlobPattern;
 use knf_convert::{Emit, InputFormat, Layout};
 
 // `super`, not `crate`: `knf-py` includes `main.rs` as a module.
@@ -79,8 +78,18 @@ prints a warning on stderr; use --strict to reject it and name the key.
     )
 }
 
-fn parse_inline_config(expr: &str) -> Result<PathLeaf<String>, String> {
-    expr.parse().map_err(name_the_inline_config_flag)
+#[derive(Debug, Clone)]
+pub struct InlineConfig {
+    pub original: String,
+    pub leaf: PathLeaf<String>,
+}
+
+fn parse_inline_config(expr: &str) -> Result<InlineConfig, String> {
+    let leaf = expr.parse().map_err(name_the_inline_config_flag)?;
+    Ok(InlineConfig {
+        original: expr.to_owned(),
+        leaf,
+    })
 }
 
 #[derive(Parser, Debug)]
@@ -103,36 +112,9 @@ pub struct Cli {
     #[arg(value_name = "FILE")]
     pub files: Vec<PathBuf>,
 
-    /// Filter inputs by a case-sensitive glob matching the whole path
-    #[arg(
-        short = 'g',
-        long,
-        value_name = "PATTERN",
-        conflicts_with = "glob_filename",
-        long_help = "\
-Keep only inputs whose whole path matches a case-sensitive glob. Supports *,
-**, ?, [...], {a,b} and leading ! negation.
-
-  knf config/**/*.toml -g 'config/**/prod.toml'"
-    )]
-    glob: Option<GlobPattern>,
-
-    /// Filter inputs by a case-sensitive glob matching just the filename
-    #[arg(
-        short = 'G',
-        long,
-        value_name = "PATTERN",
-        conflicts_with = "glob",
-        long_help = "\
-Like --glob, but match only the filename.
-
-  knf services/api/*.toml -G '{defaults,prod}.toml'"
-    )]
-    glob_filename: Option<GlobPattern>,
-
-    /// Print the file list in merge order without reading contents
-    #[arg(short = 'l', long)]
-    pub list_files: bool,
+    /// List merge inputs from lowest to highest precedence without reading files
+    #[arg(long)]
+    pub dry_run: bool,
 
     /// Inline config, applied after all files
     #[arg(
@@ -146,7 +128,7 @@ format of the input files or context, falling back to a string. With neither,
 
   -c port=8080  -c name=foo  -c version='\"1.0\"'"
     )]
-    pub set: Vec<PathLeaf<String>>,
+    pub set: Vec<InlineConfig>,
 
     /// Replace values whose full key paths match one glob
     #[arg(
@@ -213,13 +195,13 @@ containers keep their own children. The context uses the same format as inputs.
     /// Run a command after -- with the merged file in KNF_CONFIG_PATH
     #[arg(
         long,
-        conflicts_with = "list_files",
+        conflicts_with = "dry_run",
         long_help = "\
 Run the command and arguments after --. KNF_CONFIG_PATH points to a private
 temporary JSON or TOML file containing the merged configuration. The file is
 removed when the command finishes. The command inherits standard streams and
 its exit status is returned. With --to, the file is in the converted format.
-Cannot be combined with --list-files.
+Cannot be combined with --dry-run.
 
   knf base.toml -c seed=42 --exec -- python fit.py --replicate 2"
     )]
@@ -229,8 +211,6 @@ Cannot be combined with --list-files.
 /// A command line whose options have been checked against each other.
 pub struct Invocation {
     pub cli: Cli,
-    /// `--glob` or `--glob-filename`.
-    pub filter: Option<(GlobPattern, GlobTarget)>,
     /// The output `--to` asks for; without it, output follows the inputs.
     pub to: Option<Emit>,
     pub exec: Option<Exec>,
@@ -265,7 +245,7 @@ impl Cli {
             } else {
                 Vec::new()
             };
-        let mut cli = Self::parse_from(args);
+        let cli = Self::parse_from(args);
 
         let layout = Layout::pretty(!cli.compact);
         let to = cli.to.map(|to| {
@@ -298,19 +278,7 @@ impl Cli {
                 format,
             }
         });
-        // clap rejects the two globs together.
-        let path = cli.glob.take().map(|glob| (glob, GlobTarget::Path));
-        let filter = path.or_else(|| {
-            let glob = cli.glob_filename.take();
-            glob.map(|glob| (glob, GlobTarget::Filename))
-        });
-
-        Invocation {
-            cli,
-            filter,
-            to,
-            exec,
-        }
+        Invocation { cli, to, exec }
     }
 }
 

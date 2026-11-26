@@ -54,7 +54,7 @@ fn exec_requires_delimiter_and_command() {
     for args in [
         &["--exec", "some-command"][..],
         &["--exec", "--"][..],
-        &["--list-files", "--exec", "--", "some-command"][..],
+        &["--dry-run", "--exec", "--", "some-command"][..],
     ] {
         knf(&dir).args(args).assert().code(2);
     }
@@ -263,53 +263,6 @@ fn exec_does_not_launch_after_merge_error() {
         .assert()
         .code(1);
     assert!(!dir.path().join("launched").exists());
-}
-
-// --- glob filters --------------------------------------------------------
-
-#[cfg(windows)]
-#[test]
-fn glob_normalizes_windows_separators_only_for_matching() {
-    let dir = tree(&[]);
-    assert_eq!(
-        run(
-            &dir,
-            &[
-                r".\config\prod.toml",
-                "-g",
-                "./config/*.toml",
-                "--list-files"
-            ]
-        ),
-        ".\\config\\prod.toml\n"
-    );
-    assert_eq!(
-        run(
-            &dir,
-            &[r"config\prod.toml", "-G", "prod.toml", "--list-files"]
-        ),
-        "config\\prod.toml\n"
-    );
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn glob_preserves_non_utf8_filenames_and_matches_native_bytes() {
-    use std::os::unix::ffi::OsStringExt;
-    let dir = tree(&[]);
-    let path = std::path::Path::new("config")
-        .join(std::ffi::OsString::from_vec(b"prod-\xff.json".to_vec()));
-    std::fs::create_dir(dir.path().join("config")).unwrap();
-    std::fs::write(dir.path().join(&path), r#"{"value":1}"#).unwrap();
-    for (flag, pattern) in [("-g", "config/prod-?.json"), ("-G", "prod-?.json")] {
-        let out = knf(&dir)
-            .arg(&path)
-            .args([flag, pattern, "--compact"])
-            .output()
-            .unwrap();
-        assert!(out.status.success());
-        assert_eq!(out.stdout, b"{\"value\":1}\n");
-    }
 }
 
 // --- typed inline values -------------------------------------------------

@@ -6,7 +6,7 @@ import tomllib
 
 import pytest
 
-from knf import dump, dump_toml, dumps, dumps_toml, load
+from knf import dump, dumps, load
 
 
 def parse(text: str) -> dict:
@@ -36,28 +36,28 @@ def test_roundtrip(pretty, tmp_path):
         "nested": {"a.b": [1, "two", False]},
         "tables": [{"x": 1}, {"x": 2}],
     }
-    text = dumps_toml(data, pretty=pretty)
+    text = dumps(data, format="toml", pretty=pretty)
     assert text.endswith("\n")
     assert parse(text) == data
     path = tmp_path / "out.toml"
     with path.open("w", encoding="utf-8") as fp:
-        assert dump_toml(data, fp, pretty=pretty) is None
+        assert dump(data, fp, format="toml", pretty=pretty) is None
     assert load([path]) == data
 
 
 def test_insertion_order_with_tables_after_scalars():
     data = {"z": 1, "t": {"q": 1, "b": {"y": 1}, "a": 2}, "a": 2}
-    result = parse(dumps_toml(data))
+    result = parse(dumps(data, format="toml"))
     assert list(result) == ["z", "a", "t"]
     assert list(result["t"]) == ["q", "a", "b"]
 
 
 def test_special_values():
-    result = parse(dumps_toml({"tuple": (1, 2), "inf": math.inf, "nan": math.nan}))
+    result = parse(dumps({"tuple": (1, 2), "inf": math.inf, "nan": math.nan}, format="toml"))
     assert result["tuple"] == [1, 2]
     assert result["inf"] == math.inf
     assert math.isnan(result["nan"])
-    assert parse(dumps_toml({})) == {}
+    assert parse(dumps({}, format="toml")) == {}
 
 
 @pytest.mark.parametrize("value, error", [
@@ -70,38 +70,38 @@ def test_special_values():
 ])
 def test_invalid_values_include_path(value, error):
     with pytest.raises(error, match=r"nested.*items.*\[0\]"):
-        dumps_toml({"nested": {"items": [value]}})
+        dumps({"nested": {"items": [value]}}, format="toml")
 
 
 def test_invalid_keys_and_root():
     with pytest.raises(TypeError, match="keys must be strings"):
-        dumps_toml({"nested": {1: "x"}})
+        dumps({"nested": {1: "x"}}, format="toml")
     with pytest.raises(TypeError):
-        dumps_toml([])
+        dumps([], format="toml")
 
 
 def test_cycles_depth_and_shared_values():
     cycle = []
     cycle.append(cycle)
     with pytest.raises(ValueError, match="circular reference"):
-        dumps_toml({"cycle": cycle})
+        dumps({"cycle": cycle}, format="toml")
     deep = {}
     for _ in range(128):
         deep = {"child": deep}
     with pytest.raises(ValueError, match="nesting exceeds"):
-        dumps_toml(deep)
+        dumps(deep, format="toml")
     shared = {"x": 1}
-    assert parse(dumps_toml({"a": shared, "b": shared})) == {"a": shared, "b": shared}
+    assert parse(dumps({"a": shared, "b": shared}, format="toml")) == {"a": shared, "b": shared}
 
 
 def test_dump_serializes_before_writing_and_propagates_io_errors():
     fp = StringIO("unchanged")
     with pytest.raises(TypeError):
-        dump_toml({"bad": None}, fp)
+        dump({"bad": None}, fp, format="toml")
     assert fp.getvalue() == "unchanged"
     fp.close()
     with pytest.raises(ValueError, match="closed file"):
-        dump_toml({"x": 1}, fp)
+        dump({"x": 1}, fp, format="toml")
 
 
 @pytest.mark.parametrize(
@@ -178,7 +178,7 @@ def test_dump_requires_a_known_format(tmp_path):
 
 def test_dumps_toml_datetime_with_unknown_offset_names_tzinfo():
     with pytest.raises(ValueError, match=r"utcoffset\(\) is None.*`when`"):
-        dumps_toml({"when": datetime(2026, 1, 1, tzinfo=NoOffset())})
+        dumps({"when": datetime(2026, 1, 1, tzinfo=NoOffset())}, format="toml")
 
 
 @pytest.mark.parametrize("format", ["json", "toml"])

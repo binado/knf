@@ -5,7 +5,7 @@ mod explain;
 
 use std::ffi::OsString;
 use std::io::Write;
-use std::path::{PathBuf, absolute};
+use std::path::absolute;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -57,31 +57,29 @@ where
 }
 
 fn run(invocation: Invocation) -> anyhow::Result<i32> {
-    let Invocation {
-        cli,
-        filter,
-        to,
-        exec,
-    } = invocation;
-    let opts = MergeOptions {
-        shallow: cli.shallow.clone(),
-    };
+    let Invocation { cli, to, exec } = invocation;
+    if cli.dry_run {
+        use std::fmt::Write;
 
-    let mut files = cli.files.clone();
-    if let Some((pattern, target)) = &filter {
-        files = knf::fs::filter_paths(&files, pattern, *target);
-    }
-    if cli.list_files {
-        let mut text = String::new();
-        for path in &files {
-            use std::fmt::Write;
-            writeln!(text, "{}", path.display()).expect("writing to a String cannot fail");
+        let mut text = String::from(
+            "[dry run] Skipped merging configs in this order (lowest to highest precedence):\n",
+        );
+        let files = cli.files.iter().map(|path| path.to_string_lossy());
+        let assignments = cli
+            .set
+            .iter()
+            .map(|assignment| assignment.original.as_str().into());
+        for (index, source) in files.chain(assignments).enumerate() {
+            writeln!(text, "{}. {source}", index + 1).expect("writing to a String cannot fail");
         }
         write_stdout(&text)?;
         return Ok(0);
     }
 
-    let (text, inputs) = run_pipeline(&cli, to, &files, &opts)?;
+    let opts = MergeOptions {
+        shallow: cli.shallow.clone(),
+    };
+    let (text, inputs) = run_pipeline(&cli, to, &opts)?;
     if let Some(exec) = exec {
         let format = exec.format.unwrap_or(inputs);
         run_child(&exec, &text, format)
@@ -95,7 +93,6 @@ fn run(invocation: Invocation) -> anyhow::Result<i32> {
 fn run_pipeline(
     cli: &Cli,
     to: Option<Emit>,
-    files: &[PathBuf],
     opts: &MergeOptions,
 ) -> anyhow::Result<(String, InputFormat)> {
     let Configs {
@@ -103,7 +100,7 @@ fn run_pipeline(
         mut values,
         context,
     } = load_configs(
-        files,
+        &cli.files,
         LoadOptions {
             context: cli.with.as_deref(),
             fallback: cli.to.map(OutputFormat::inline_format),
@@ -111,8 +108,8 @@ fn run_pipeline(
     )
     .map_err(explain_load)?;
     let parse_inline = |text| format.parse_inline(text);
-    for leaf in &cli.set {
-        values.push(leaf.clone().map_leaf(parse_inline).into());
+    for assignment in &cli.set {
+        values.push(assignment.leaf.clone().map_leaf(parse_inline).into());
     }
     let interpolation = cli
         .interpolate

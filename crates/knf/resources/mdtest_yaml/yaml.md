@@ -302,14 +302,15 @@ big: 18446744073709551615
 f: 1.5
 ```
 
-## List files ignores the output format
+## Dry run ignores the output format
 
 ```console
-$ knf tricky.json -l --to yaml
+$ knf tricky.json --dry-run --to yaml
 ```
 
 `stdout`:
 
 ```text
-tricky.json
+[dry run] Skipped merging configs in this order (lowest to highest precedence):
+1. tricky.json
 ```

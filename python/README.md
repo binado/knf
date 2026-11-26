@@ -8,16 +8,13 @@ pip install pyknf  # the `knf` module and the `knf` executable
 ```
 
 ```python
-from knf import deep_merge, dump, dumps, filter_paths, load
+from knf import deep_merge, dump, dumps, load
 
 config = load(["base.toml", "prod.toml"])
 config = load(["base.toml", "prod.toml"], interpolate=True, shallow="db.*")
 config = load(["foo.toml", "bar.toml"], interpolate=True, context="config.toml")
 pilot = deep_merge(config, {"solver": {"steps": 10}})
 pilot = deep_merge(load(["base.toml"]), {"solver": {"steps": 10}}, interpolate=True)
-
-files = filter_paths(candidates, "{defaults,prod}.toml", filename_only=True)
-config = load(files)
 
 text = dumps(config, format="toml")
 dump(config, "merged.toml")
@@ -41,11 +38,10 @@ dump(config, "merged.toml")
   including context dependencies. Only referenced context values resolve.
 - `shallow="PATTERN"` replaces matching key paths wholesale (`"*"`, `"db"`,
   `"db.*"`).
-- `filter_paths` filters a list of paths by glob without I/O.
 - `dumps` returns JSON, TOML, or YAML text. `dump` infers the format from
   `.json`, `.toml`, `.yaml`, or `.yml` and requires an explicit format for text
   streams. YAML accepts the JSON types plus `nan` and `inf`, and requires
-  `pretty=True`. See `dumps_toml` docs for TOML limits.
+  `pretty=True`.
 - Errors: `knf.ParseError` and `knf.InterpolationError` (both `ValueError`s),
   `ValueError` for bad arguments, and `OSError` subclasses for I/O failures.
 - TOML datetimes become `datetime`, `date` or `time` objects.
